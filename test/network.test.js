@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import https from 'node:https';
 import tls from 'node:tls';
 import net from 'node:net';
 import { Readable } from 'node:stream';
@@ -22,6 +23,35 @@ const resolver = { resolve4: async () => ['93.184.216.34'], resolve6: async () =
 const v4 = (...octets) => octets.join('.');
 async function listen(server) { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return server.address().port; }
 const close = server => new Promise(resolve => server.close(resolve));
+async function withHostProxyPollution(run) {
+    const originalHttp = http.globalAgent;
+    const originalHttps = https.globalAgent;
+    const names = ['all_proxy', 'no_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'];
+    const environment = new Map(names.map(name => [name, process.env[name]]));
+    let inheritedRequests = 0;
+    const blocked = Agent => {
+        // agent:false constructs a new instance of globalAgent.constructor,
+        // so the sentinel must also poison newly constructed instances.
+        class HostAgent extends Agent {
+            addRequest() { inheritedRequests++; throw new Error('host global Agent used'); }
+        }
+        return new HostAgent();
+    };
+    try {
+        http.globalAgent = blocked(http.Agent);
+        https.globalAgent = blocked(https.Agent);
+        for (const name of names) process.env[name] = 'http://proxy.invalid:9';
+        await run();
+        assert.equal(inheritedRequests, 0, 'no request inherits a host global Agent');
+    } finally {
+        http.globalAgent = originalHttp;
+        https.globalAgent = originalHttps;
+        for (const [name, value] of environment) {
+            if (value === undefined) delete process.env[name];
+            else process.env[name] = value;
+        }
+    }
+}
 function fakeResponse(statusCode, headers = {}, body = gif) {
     const response = Readable.from([body]);
     response.statusCode = statusCode;
@@ -74,7 +104,9 @@ test('image bytes, media validation, redirect checks, limits and slots apply to 
 
 test('HTTP proxy receives approved IP absolute-form while Host keeps original identity; failed proxy never goes direct', async t => {
     const seen = [];
+    let proxyAvailable = true;
     const proxy = http.createServer((req, res) => {
+        if (!proxyAvailable) { req.socket.destroy(); return; }
         seen.push({ url: req.url, host: req.headers.host, authorization: req.headers.authorization });
         if (req.url.endsWith('/jump')) { res.writeHead(302, { Location: `http://${v4(10,0,0,1)}/private` }); res.end(); return; }
         res.writeHead(200, { 'Content-Type': 'image/gif', 'Content-Length': String(gif.length) }); res.end(gif);
@@ -82,14 +114,22 @@ test('HTTP proxy receives approved IP absolute-form while Host keeps original id
     const port = await listen(proxy); t.after(() => close(proxy));
     const network = createNetwork(config({ transport: 'http-proxy', proxyUrl: `http://127.0.0.1:${port}`,
         allowHttp: true }), { resolver });
-    const result = await network.fetchImage('http://example.test/photo.gif', 'alice');
-    assert.equal(result.mime, 'image/gif');
-    assert.deepEqual(seen, [{ url: 'http://93.184.216.34:80/photo.gif', host: 'example.test', authorization: undefined }]);
-    await assert.rejects(network.fetchImage('http://example.test/jump', 'bob'), { code: 'TARGET_NOT_ALLOWED' });
-    assert.equal(seen.length, 2, 'proxy does not receive the forbidden redirect destination');
-    await close(proxy);
-    await assert.rejects(network.fetchImage('http://example.test/photo.gif', 'alice'), { code: 'TRANSPORT_UNAVAILABLE' });
-    assert.equal(network.definition.health().state, 'degraded');
+    await withHostProxyPollution(async () => {
+        const result = await network.fetchImage('http://example.test/photo.gif', 'alice');
+        assert.equal(result.mime, 'image/gif');
+        assert.deepEqual(seen, [{ url: 'http://93.184.216.34:80/photo.gif', host: 'example.test', authorization: undefined }]);
+        await assert.rejects(network.fetchImage('http://example.test/jump', 'bob'), { code: 'TARGET_NOT_ALLOWED' });
+        assert.equal(seen.length, 2, 'proxy does not receive the forbidden redirect destination');
+        proxyAvailable = false;
+        await assert.rejects(network.fetchImage('http://example.test/photo.gif', 'charlie'), { code: 'TRANSPORT_UNAVAILABLE' });
+        assert.equal(network.definition.health().state, 'degraded');
+        proxyAvailable = true;
+        assert.equal((await network.fetchImage('http://example.test/photo.gif', 'charlie')).mime, 'image/gif');
+        assert.equal(network.definition.health().state, 'ready');
+        await close(proxy);
+        await assert.rejects(network.fetchImage('http://example.test/photo.gif', 'alice'), { code: 'TRANSPORT_UNAVAILABLE' });
+        assert.equal(network.definition.health().state, 'degraded');
+    });
 });
 
 test('HTTPS CONNECT pins the validated IP and preserves hostname SNI and certificate verification', async t => {
@@ -116,12 +156,42 @@ test('HTTPS CONNECT pins the validated IP and preserves hostname SNI and certifi
     const proxyPort = await listen(proxy); t.after(() => close(proxy));
     const target = await approveDestination('https://example.test/x', config().policy.network, null, resolver);
     const policy = config({ transport: 'http-proxy', proxyUrl: `http://127.0.0.1:${proxyPort}` }).policy.network;
-    const valid = await openApproved(target, policy, new AbortController().signal, { ca: cert });
-    valid.close();
-    assert.equal(observed.connect, '93.184.216.34:443');
-    assert.equal(observed.sni, 'example.test');
-    assert.equal(observed.host, 'example.test');
-    await assert.rejects(openApproved(target, policy, new AbortController().signal), /self-signed|certificate/i);
+    await withHostProxyPollution(async () => {
+        const valid = await openApproved(target, policy, new AbortController().signal, { ca: cert });
+        valid.close();
+        assert.equal(observed.connect, '93.184.216.34:443');
+        assert.equal(observed.sni, 'example.test');
+        assert.equal(observed.host, 'example.test');
+        await assert.rejects(openApproved(target, policy, new AbortController().signal), /self-signed|certificate/i);
+        await assert.rejects(openApproved(target, policy, new AbortController().signal,
+            { rejectUnauthorized: false }), /self-signed|certificate/i);
+        await assert.rejects(openApproved({ ...target, host: 'wrong.example.test' }, policy,
+            new AbortController().signal, { ca: cert }), /altname|hostname/i);
+        const directTarget = { ...target, addresses: [v4(127,0,0,1)], port: securePort };
+        // Transport-only fixture: production approval rejects this loopback address.
+        const direct = await openApproved(directTarget, config().policy.network,
+            new AbortController().signal, { ca: cert });
+        direct.close();
+        assert.equal(observed.sni, 'example.test');
+        assert.equal(observed.host, 'example.test');
+    });
+});
+
+test('direct HTTP owns its pinned socket despite host global Agents and proxy environment', async t => {
+    const origin = http.createServer((req, response) => {
+        assert.equal(req.headers.host, 'example.test');
+        response.end(gif);
+    });
+    const port = await listen(origin); t.after(() => close(origin));
+    const policy = config({ allowHttp: true }).policy.network;
+    const approved = await approveDestination('http://example.test/image.gif', policy, null, resolver);
+    // Transport-only fixture: production approval rejects this loopback address.
+    const target = { ...approved, addresses: [v4(127,0,0,1)], port };
+    await withHostProxyPollution(async () => {
+        const connection = await openApproved(target, policy, new AbortController().signal);
+        assert.equal(connection.response.statusCode, 200);
+        connection.close();
+    });
 });
 
 test('every redirect hop revalidates DNS, allowlist, port, downgrade, cycles and shared hop limit', async () => {
