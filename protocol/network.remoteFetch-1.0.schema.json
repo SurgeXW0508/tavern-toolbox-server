@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tavern Toolbox Network Remote Fetch 1.0 request",
+  "type": "object",
+  "required": ["url", "profile"],
+  "additionalProperties": false,
+  "properties": {
+    "url": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "profile": { "const": "image" }
+  },
+  "$comment": "POST /v1/network/fetch with X-TTB-Protocol: 1.0; success is binary image/jpeg,image/png,image/webp,image/gif with Cache-Control: no-store, X-Content-Type-Options: nosniff, Content-Length, X-TTB-Request-Id. Errors use the Protocol 1.0 JSON envelope."
+}

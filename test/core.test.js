@@ -16,6 +16,7 @@ function hostRouter() {
         stack,
         use(fn) { stack.push({ fn }); },
         get(path, fn) { stack.push({ method: 'GET', path, fn }); },
+        post(path, fn) { stack.push({ method: 'POST', path, fn }); },
     };
 }
 
@@ -25,6 +26,7 @@ async function host(core) {
     const server = http.createServer((req, res) => {
         req.path = new URL(req.url, 'http://localhost').pathname;
         req.get = name => req.headers[name.toLowerCase()];
+        req.session = { csrfToken: 'fixture-csrf-token' };
         req.user = req.headers['x-test-user'] ? {
             profile: { handle: req.headers['x-test-user'], enabled: true },
             directories: { root: `/srv/st/data/${req.headers['x-test-user']}` },
@@ -47,10 +49,10 @@ async function host(core) {
     return { server, url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise(resolve => server.close(resolve)) };
 }
 
-async function request(url, route = '/status', { user = 'alice', method = 'GET', protocol, headers = {} } = {}) {
+async function request(url, route = '/status', { user = 'alice', method = 'GET', protocol, headers = {}, body } = {}) {
     const result = await fetch(`${url}${route}`, { method, headers: {
         ...(user ? { 'x-test-user': user } : {}), ...(protocol ? { 'X-TTB-Protocol': protocol } : {}), ...headers,
-    } });
+    }, body });
     return { code: result.status, headers: result.headers, body: await result.json() };
 }
 
@@ -72,10 +74,11 @@ test('real HTTP discovery: exact product, read-only routes, version contract and
     const status = await request(app.url, '/v1/status', { protocol: '1.0' });
     assert.equal(status.code, 200);
     assert.deepEqual(status.body.meta.protocol, { major: 1, minor: 0 });
-    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status']);
-    assert.deepEqual(status.body.data.capabilities, fixture.status.data.capabilities);
+    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch']);
+    assert.deepEqual(status.body.data.capabilities[0], fixture.status.data.capabilities[0]);
     assert.deepEqual(status.body.data.effectivePolicy, fixture.status.data.effectivePolicy);
-    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core']);
+    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network']);
+    assert.equal(status.body.data.modules[1].state, 'disabled');
     assert.equal(status.body.data.core.state, 'ready');
     assert.equal(status.body.data.effectivePolicy.unsafeRequestsEnabled, false);
     assert.equal((await request(app.url, '/status', { method: 'POST' })).code, 405);
@@ -186,11 +189,30 @@ test('administrator policy validation and unsafe-operation gate fail closed', as
         schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] },
     }) } });
     const user = { profile: { handle: 'alice' }, directories: { root: '/srv/st/data/alice' } };
-    assert.equal(core.allowMutation({ user, headers: { origin: 'https://example.invalid', 'sec-fetch-site': 'same-origin' } }), true);
+    assert.equal(core.allowMutation({ user, session: { csrfToken: 'token' }, headers: { origin: 'https://example.invalid', 'sec-fetch-site': 'same-origin', 'x-csrf-token': 'token' } }), true);
     assert.equal(core.allowMutation({ user, headers: { origin: 'null' } }), false);
     assert.equal(core.allowMutation({ user, headers: { origin: 'https://example.invalid', 'sec-fetch-site': 'cross-site' } }), false);
     assert.equal(core.allowMutation({ user: null, headers: { origin: 'https://example.invalid' } }), false);
     await core.shutdown();
+});
+
+test('real HTTP POST enforces host user, session CSRF, trusted Origin, protocol and disabled module', async t => {
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config', read: async () => JSON.stringify({
+        schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] },
+        network: { enabled: false },
+    }) } });
+    const app = await host(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    const fetchOperation = (headers = {}, user = 'alice') => request(app.url, '/v1/network/fetch', {
+        method: 'POST', user, protocol: '1.0', body: JSON.stringify({ url: 'https://example.invalid/p.png', profile: 'image' }), headers: { 'content-type': 'application/json',
+            origin: 'https://example.invalid', 'sec-fetch-site': 'same-origin', 'x-csrf-token': 'fixture-csrf-token', ...headers },
+    });
+    assert.equal((await fetchOperation({}, null)).body.error.code, 'AUTH_REQUIRED');
+    assert.equal((await fetchOperation({ 'x-csrf-token': 'invalid' })).body.error.code, 'CSRF_REJECTED');
+    assert.equal((await fetchOperation({ origin: 'null' })).body.error.code, 'FORBIDDEN');
+    assert.equal((await fetchOperation({ origin: 'https://untrusted.invalid' })).body.error.code, 'FORBIDDEN');
+    assert.equal((await fetchOperation()).body.error.code, 'CAPABILITY_UNAVAILABLE');
+    assert.equal((await request(app.url, '/v1/status', { protocol: '1.0' })).body.data.core.state, 'ready');
 });
 
 test('explicitly invalid administrator config stays degraded and reports no secrets', async t => {

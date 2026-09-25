@@ -1,6 +1,6 @@
 # Tavern Toolbox Server
 
-Phase 1 Core for the optional Tavern Toolbox SillyTavern Server Plugin. No media, network fetching, storage database, or background jobs are installed in this release.
+Phase 2 development candidate: Phase 1 Core plus an optional safe remote image fetch Network Module. This branch has no Media persistence, database, role-card rewriting or background jobs.
 
 ## Install for official SillyTavern Web
 
@@ -14,11 +14,11 @@ Optional administrator configuration lives outside the plugin at `<SillyTavern d
 {"schemaVersion":1,"core":{"maxStatusResponseBytes":262144,"allowedOrigins":[]}}
 ```
 
-`allowedOrigins` is for a future unsafe-operation gate, not a CORS allowlist. It enables no mutation in Phase 1. Changes take effect on restart. `/status` and `/v1/status` are both authenticated, read-only and `Cache-Control: no-store`; the effective policy summary never returns the origin list or secrets.
+`allowedOrigins` is the deployment administrator’s exact trusted browser origin list for Network POST, not a CORS allowlist. A missing list disables unsafe operations. Host session CSRF protection must also be active. Changes take effect on restart. `/status` and `/v1/status` are both authenticated, read-only and `Cache-Control: no-store`; the effective policy summary never returns the origin list or secrets.
 
-SillyTavern's global JSON parser runs before plugin routers and currently accepts very large bodies. Phase 1 has only GET endpoints. Before later write/upload features, deploy an ingress request-body limit and verify it on the real NAS. Node >=20 is the packaging minimum; this phase uses only Node built-ins. Validate the actual NAS Node and ST version in the real installation.
+SillyTavern’s global JSON parser runs before plugin routers; deploy a small ingress request-body limit for the Network POST and verify it on the real NAS. The plugin checks its own unparsed request size, but a host parser may already have accepted a larger body. Node >=20 is the packaging minimum; this phase uses only Node built-ins. Validate the actual NAS Node and ST version in the real installation.
 
-Run `npm run check` for unit and HTTP-contract tests. For real-device review: confirm the Toolbox page in the official Web client displays Core status and only `core.status`, then disable/remove this plugin and confirm the existing Local workflows still work. Test the real TT client separately; mocked tests do not establish real device support. No media data is being backed up by this phase.
+Run `npm run check` for unit and HTTP-contract tests. For real-device review: confirm the Toolbox page in the official Web client displays Core plus the disabled Network capability by default, then disable/remove this plugin and confirm the existing Local workflows still work. Test the real TT client separately; mocked tests do not establish real device support. No media data is being backed up by this phase.
 
 ## Operator and review notes
 
@@ -32,3 +32,28 @@ The independent Protocol 1.0 fixture, shape, bounds and errors are documented in
 ## Privacy before publication
 
 See [`docs/PRIVACY-AND-SECURITY.md`](docs/PRIVACY-AND-SECURITY.md). Run `npm run audit:privacy` after every change and before pushing; inspect Git history and the GitHub public surfaces before releasing or changing repository visibility. Never commit real administrator configuration or NAS diagnostics.
+
+## Phase 2 Network administrator policy
+
+The default and existing Phase 1 config leave Network disabled. A deployment administrator can add a `network` object to the same persistent config file and restart SillyTavern. This public example uses only illustrative domains; put the real endpoint and allowed public image domains solely in the private deployment config:
+
+```json
+{
+  "schemaVersion": 1,
+  "core": { "allowedOrigins": ["https://example.com"] },
+  "network": {
+    "enabled": true,
+    "transport": "http-proxy",
+    "proxyUrl": "http://proxy.example.com:8080",
+    "destinationPolicy": "allowlist-only",
+    "allowlist": ["example.com", "*.example.com"],
+    "allowHttp": false
+  }
+}
+```
+
+`*.example.com` matches true subdomains only; add the apex separately. Proxy credentials may be in the private proxy URL and are never returned by status or logs. The supported transports are `direct` and explicit `http-proxy`; neither inherits SillyTavern's process-wide proxy agents. HTTP is off by default. Effective limits default to 16 MiB, three redirect hops, 5 s connect, 10 s first byte, 10 s idle, 30 s total, two requests per user, four globally and 30 per minute per user; administrator values may only reduce them. Configured proxy failure never falls back to direct. Invalid Network config leaves Core discovery available but Network unavailable.
+
+`POST /v1/network/fetch` requires authenticated SillyTavern user context, protocol header, exact trusted Origin and a valid session CSRF token. It accepts only `{ "url": "https://example.com/image.png", "profile": "image" }`. HTTPS and allowed public domains are checked before and after each redirect; complete A/AAAA answers must be public. Direct requests pin a validated address through DNS lookup; proxy requests send the approved IP in absolute-form HTTP or HTTPS CONNECT, preserving the original Host and verified TLS name. Mixed/private/Tailscale/metadata answers fail closed. Non-2xx upstream bodies, SVG, HTML and unsupported or oversized images are rejected. Success is a bounded, validated JPEG/PNG/WebP/GIF binary body with `no-store` and `nosniff`; failures use the Protocol 1.0 JSON error envelope.
+
+Network returns transient bytes for one user action. It does not save Media, return persistent proxy URLs, change Regex or rewrite character cards. Phase 3 can consume the validated result inside the server without routing bytes through the browser. Host session/CSRF behavior, Docker proxy routing, mobile preview and coexistence must be verified on the actual installation before accepting this candidate.

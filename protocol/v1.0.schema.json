@@ -3,6 +3,7 @@
   "title": "Tavern Toolbox Server Protocol 1.0 Core success envelopes",
   "$defs": {
     "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9.-]*$" },
+    "capabilityId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-zA-Z0-9.-]*$" },
     "version": { "type": "string", "minLength": 1, "maxLength": 64 },
     "state": { "enum": ["ready", "degraded", "unavailable", "disabled", "initializing", "stopping"] },
     "module": { "type": "object", "required": ["id", "version", "state", "reasonCode"], "properties": {
@@ -12,7 +13,7 @@
       "major": { "type": "integer", "minimum": 0 }, "minMinor": { "type": "integer", "minimum": 0 },
       "maxMinor": { "type": "integer", "minimum": 0 } }, "additionalProperties": true },
     "capability": { "type": "object", "required": ["id", "moduleId", "contract", "state", "reasonCode", "operations", "limits", "constraints"],
-      "properties": { "id": { "$ref": "#/$defs/id" }, "moduleId": { "$ref": "#/$defs/id" },
+      "properties": { "id": { "$ref": "#/$defs/capabilityId" }, "moduleId": { "$ref": "#/$defs/id" },
         "contract": { "$ref": "#/$defs/range" }, "state": { "$ref": "#/$defs/state" },
         "reasonCode": { "type": ["string", "null"], "maxLength": 64 },
         "operations": { "type": "array", "maxItems": 32, "items": { "type": "object", "required": ["id", "available", "reasonCode"],

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export function userContext(req, secret) {
     const handle = req.user?.profile?.handle;
@@ -24,7 +24,16 @@ export function mutationGate(req, allowedOrigins) {
     const origin = req.headers?.origin;
     if (!origin || origin === 'null' || !allowedOrigins.includes(origin)) return false;
     const site = req.headers?.['sec-fetch-site'];
-    return !site || site === 'same-origin';
+    const mode = req.headers?.['sec-fetch-mode'];
+    if (site && site !== 'same-origin') return false;
+    if (mode && !['cors', 'same-origin'].includes(mode)) return false;
+    // SillyTavern installs csrf-sync before plugin routers; check its session state as well.
+    // If the host disabled CSRF, /csrf-token returns "disabled" and no valid state exists.
+    const sessionToken = req.session?.csrfToken;
+    const supplied = req.headers?.['x-csrf-token'];
+    if (typeof sessionToken !== 'string' || sessionToken === 'disabled' || !sessionToken
+        || typeof supplied !== 'string' || supplied.length !== sessionToken.length) return false;
+    return timingSafeEqual(Buffer.from(sessionToken), Buffer.from(supplied));
 }
 
 export function setPrivateHeaders(res) {

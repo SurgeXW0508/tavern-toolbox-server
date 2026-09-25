@@ -1,4 +1,5 @@
 const ID = /^[a-z][a-z0-9.-]*$/;
+const CAPABILITY_ID = /^[a-z][a-zA-Z0-9.-]*$/;
 const STATES = new Set(['ready', 'degraded', 'unavailable', 'disabled', 'initializing', 'stopping']);
 function bounded(call, milliseconds) {
     let timer;
@@ -31,7 +32,7 @@ export class CapabilityRegistry {
         const owners = new Map();
         for (const [id, module] of this.#definitions) {
             for (const capability of module.capabilities) {
-                if (!capability || !ID.test(capability.id || '') || !capability.contract
+                if (!capability || !CAPABILITY_ID.test(capability.id || '') || !capability.contract
                     || capability.contract.major !== 1 || !Array.isArray(capability.operations)) {
                     this.#errors.set(id, 'INVALID_CAPABILITY');
                     continue;
@@ -77,7 +78,7 @@ export class CapabilityRegistry {
             }
             modules.push({ id, version: module.version, state, reasonCode });
             for (const capability of module.capabilities) {
-                if (!ID.test(capability?.id || '') || !capability?.contract || !Array.isArray(capability.operations)) continue;
+                if (!CAPABILITY_ID.test(capability?.id || '') || !capability?.contract || !Array.isArray(capability.operations)) continue;
                 const available = state === 'ready' || state === 'degraded';
                 capabilities.push({ id: capability.id, moduleId: id, contract: capability.contract,
                     state, reasonCode, operations: capability.operations.map(operation => ({
