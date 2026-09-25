@@ -9,6 +9,7 @@ import { CapabilityRegistry } from '../src/registry.js';
 import { loadPolicy, validatePolicy } from '../src/config.js';
 import { info } from '../index.js';
 import { userContext } from '../src/security.js';
+import { Readable } from 'node:stream';
 
 function hostRouter() {
     const stack = [];
@@ -213,6 +214,34 @@ test('real HTTP POST enforces host user, session CSRF, trusted Origin, protocol 
     assert.equal((await fetchOperation({ origin: 'https://untrusted.invalid' })).body.error.code, 'FORBIDDEN');
     assert.equal((await fetchOperation()).body.error.code, 'CAPABILITY_UNAVAILABLE');
     assert.equal((await request(app.url, '/v1/status', { protocol: '1.0' })).body.data.core.state, 'ready');
+});
+
+test('real HTTP POST returns verified binary and structured policy failures without leaking URL', async t => {
+    const gif = Buffer.from('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 'base64');
+    const logger = { info() {}, error() {} };
+    const core = await createCore({ logger, policyOptions: { configPath: '/fixture/config', read: async () => JSON.stringify({
+        schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] },
+        network: { enabled: true, transport: 'direct', destinationPolicy: 'allowlist-only', allowlist: ['example.invalid'] },
+    }) }, networkOptions: {
+        resolver: { resolve4: async () => ['93.184.216.34'], resolve6: async () => [] },
+        open: async () => { const response = Readable.from([gif]); response.statusCode = 200;
+            response.headers = { 'content-type': 'image/gif' }; return { response, close() { response.destroy(); } }; },
+    } });
+    const app = await host(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    const post = url => fetch(`${app.url}/v1/network/fetch`, { method: 'POST', headers: {
+        'x-test-user': 'alice', 'X-TTB-Protocol': '1.0', 'Content-Type': 'application/json',
+        Origin: 'https://example.invalid', 'X-CSRF-Token': 'fixture-csrf-token', 'Sec-Fetch-Site': 'same-origin',
+    }, body: JSON.stringify({ url, profile: 'image' }) });
+    const valid = await post('https://example.invalid/one.gif');
+    assert.equal(valid.status, 200);
+    assert.equal(valid.headers.get('content-type'), 'image/gif');
+    assert.equal(valid.headers.get('cache-control'), 'no-store');
+    assert.equal(valid.headers.get('x-content-type-options'), 'nosniff');
+    assert.deepEqual(Buffer.from(await valid.arrayBuffer()), gif);
+    const blocked = await post('https://other.invalid/private?token=fixture-secret');
+    assert.equal(blocked.status, 403);
+    assert.equal((await blocked.json()).error.code, 'TARGET_NOT_ALLOWED');
 });
 
 test('explicitly invalid administrator config stays degraded and reports no secrets', async t => {

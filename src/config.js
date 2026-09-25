@@ -39,6 +39,7 @@ function validateNetwork(value) {
         return wildcard ? `*.${host}` : host;
     });
     if (new Set(allowlist).size !== allowlist.length) throw new Error('INVALID_NETWORK_CONFIG');
+    if (value.destinationPolicy === 'allowlist-only' && !allowlist.length) throw new Error('INVALID_NETWORK_CONFIG');
     if (value.allowHttp !== undefined && typeof value.allowHttp !== 'boolean') throw new Error('INVALID_NETWORK_CONFIG');
     const limits = {};
     for (const [key, fallback] of Object.entries(NETWORK_DEFAULTS)) {
