@@ -1,0 +1,13 @@
+{
+  "name": "tavern-toolbox-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "audit:privacy": "node scripts/privacy-audit.mjs",
+    "check": "npm test && node --check index.js && node --check src/core.js && node --check src/registry.js && node --check src/config.js && node --check src/security.js"
+  }
+}

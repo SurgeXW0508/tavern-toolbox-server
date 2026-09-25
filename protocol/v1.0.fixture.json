@@ -1,0 +1,23 @@
+{
+  "bootstrap": {
+    "ok": true,
+    "data": { "product": "tavern-toolbox-server", "discoveryVersion": 1, "serverVersion": "0.1.0", "protocols": [{ "major": 1, "minMinor": 0, "maxMinor": 0 }], "coreState": "ready" },
+    "meta": { "requestId": "00000000-0000-4000-8000-000000000001", "serverTime": "2026-01-01T00:00:00.000Z" }
+  },
+  "status": {
+    "ok": true,
+    "data": {
+      "product": "tavern-toolbox-server", "serverVersion": "0.1.0",
+      "bootId": "00000000-0000-4000-8000-000000000002", "contextId": "0123456789abcdef0123456789abcdef",
+      "statusRevision": "0123456789abcdef", "policyRevision": "0123456789abcdef",
+      "observedAt": "2026-01-01T00:00:00.000Z",
+      "core": { "id": "core", "version": "0.1.0", "state": "ready", "reasonCode": null },
+      "modules": [{ "id": "core", "version": "0.1.0", "state": "ready", "reasonCode": null }],
+      "capabilities": [{ "id": "core.status", "moduleId": "core", "contract": { "major": 1, "minMinor": 0, "maxMinor": 0 },
+        "state": "ready", "reasonCode": null, "operations": [{ "id": "read", "available": true, "reasonCode": null }],
+        "limits": { "maxStatusResponseBytes": 262144 }, "constraints": {} }],
+      "effectivePolicy": { "source": "defaults", "maxStatusResponseBytes": 262144, "unsafeRequestsEnabled": false }
+    },
+    "meta": { "requestId": "00000000-0000-4000-8000-000000000003", "serverTime": "2026-01-01T00:00:00.000Z", "protocol": { "major": 1, "minor": 0 } }
+  }
+}

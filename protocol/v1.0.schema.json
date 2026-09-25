@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tavern Toolbox Server Protocol 1.0 Core success envelopes",
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9.-]*$" },
+    "version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "state": { "enum": ["ready", "degraded", "unavailable", "disabled", "initializing", "stopping"] },
+    "module": { "type": "object", "required": ["id", "version", "state", "reasonCode"], "properties": {
+      "id": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/version" }, "state": { "$ref": "#/$defs/state" },
+      "reasonCode": { "type": ["string", "null"], "maxLength": 64 } }, "additionalProperties": true },
+    "range": { "type": "object", "required": ["major", "minMinor", "maxMinor"], "properties": {
+      "major": { "type": "integer", "minimum": 0 }, "minMinor": { "type": "integer", "minimum": 0 },
+      "maxMinor": { "type": "integer", "minimum": 0 } }, "additionalProperties": true },
+    "capability": { "type": "object", "required": ["id", "moduleId", "contract", "state", "reasonCode", "operations", "limits", "constraints"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "moduleId": { "$ref": "#/$defs/id" },
+        "contract": { "$ref": "#/$defs/range" }, "state": { "$ref": "#/$defs/state" },
+        "reasonCode": { "type": ["string", "null"], "maxLength": 64 },
+        "operations": { "type": "array", "maxItems": 32, "items": { "type": "object", "required": ["id", "available", "reasonCode"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "available": { "type": "boolean" },
+            "reasonCode": { "type": ["string", "null"], "maxLength": 64 } }, "additionalProperties": true } },
+        "limits": { "type": "object" }, "constraints": { "type": "object" } }, "additionalProperties": true }
+  },
+  "type": "object", "required": ["bootstrap", "status"],
+  "properties": {
+    "bootstrap": { "type": "object", "required": ["ok", "data", "meta"], "properties": {
+      "ok": { "const": true }, "data": { "type": "object", "required": ["product", "discoveryVersion", "serverVersion", "protocols", "coreState"],
+        "properties": { "product": { "const": "tavern-toolbox-server" }, "discoveryVersion": { "const": 1 },
+          "serverVersion": { "$ref": "#/$defs/version" }, "protocols": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/range" } },
+          "coreState": { "enum": ["ready", "degraded", "unavailable"] } }, "additionalProperties": true },
+      "meta": { "type": "object", "required": ["requestId", "serverTime"], "additionalProperties": true } }, "additionalProperties": true },
+    "status": { "type": "object", "required": ["ok", "data", "meta"], "properties": {
+      "ok": { "const": true }, "data": { "type": "object", "required": ["product", "serverVersion", "bootId", "contextId", "statusRevision", "policyRevision", "observedAt", "core", "modules", "capabilities", "effectivePolicy"],
+        "properties": { "product": { "const": "tavern-toolbox-server" }, "serverVersion": { "$ref": "#/$defs/version" },
+          "bootId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "contextId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "statusRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "policyRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "observedAt": { "type": "string", "format": "date-time" }, "core": { "$ref": "#/$defs/module" },
+          "modules": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/module" } },
+          "capabilities": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/capability" } },
+          "effectivePolicy": { "type": "object" } }, "additionalProperties": true },
+      "meta": { "type": "object", "required": ["requestId", "serverTime", "protocol"],
+        "properties": { "protocol": { "type": "object", "required": ["major", "minor"],
+          "properties": { "major": { "const": 1 }, "minor": { "const": 0 } } } }, "additionalProperties": true } }, "additionalProperties": true }
+  }, "additionalProperties": false
+}
