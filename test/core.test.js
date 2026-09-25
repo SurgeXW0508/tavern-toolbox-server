@@ -244,6 +244,31 @@ test('real HTTP POST returns verified binary and structured policy failures with
     assert.equal((await blocked.json()).error.code, 'TARGET_NOT_ALLOWED');
 });
 
+test('real HTTP client disconnect aborts the outbound operation', async t => {
+    let started, outboundSignal;
+    const outboundStarted = new Promise(resolve => { started = resolve; });
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config', read: async () => JSON.stringify({
+        schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] },
+        network: { enabled: true, transport: 'direct', destinationPolicy: 'allowlist-only', allowlist: ['example.invalid'] },
+    }) }, networkOptions: {
+        resolver: { resolve4: async () => ['93.184.216.34'], resolve6: async () => [] },
+        open: async (_target, _policy, signal) => { outboundSignal = signal; started();
+            return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })); },
+    } });
+    const app = await host(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    const abort = new AbortController();
+    const pending = fetch(`${app.url}/v1/network/fetch`, { method: 'POST', signal: abort.signal, headers: {
+        'x-test-user': 'alice', 'X-TTB-Protocol': '1.0', 'Content-Type': 'application/json',
+        Origin: 'https://example.invalid', 'X-CSRF-Token': 'fixture-csrf-token',
+    }, body: JSON.stringify({ url: 'https://example.invalid/slow.gif', profile: 'image' }) });
+    await outboundStarted;
+    abort.abort();
+    await assert.rejects(pending, { name: 'AbortError' });
+    for (let i = 0; i < 40 && !outboundSignal.aborted; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(outboundSignal.aborted, true);
+});
+
 test('explicitly invalid administrator config stays degraded and reports no secrets', async t => {
     const core = await createCore({ logger: quiet, policyOptions: { configPath: '/explicit/file', read: async () => '{bad' } });
     const app = await host(core);
