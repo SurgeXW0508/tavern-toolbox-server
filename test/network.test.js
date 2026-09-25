@@ -76,6 +76,7 @@ test('HTTP proxy receives approved IP absolute-form while Host keeps original id
     const seen = [];
     const proxy = http.createServer((req, res) => {
         seen.push({ url: req.url, host: req.headers.host, authorization: req.headers.authorization });
+        if (req.url.endsWith('/jump')) { res.writeHead(302, { Location: `http://${v4(10,0,0,1)}/private` }); res.end(); return; }
         res.writeHead(200, { 'Content-Type': 'image/gif', 'Content-Length': String(gif.length) }); res.end(gif);
     });
     const port = await listen(proxy); t.after(() => close(proxy));
@@ -84,6 +85,8 @@ test('HTTP proxy receives approved IP absolute-form while Host keeps original id
     const result = await network.fetchImage('http://example.test/photo.gif', 'alice');
     assert.equal(result.mime, 'image/gif');
     assert.deepEqual(seen, [{ url: 'http://93.184.216.34:80/photo.gif', host: 'example.test', authorization: undefined }]);
+    await assert.rejects(network.fetchImage('http://example.test/jump', 'bob'), { code: 'TARGET_NOT_ALLOWED' });
+    assert.equal(seen.length, 2, 'proxy does not receive the forbidden redirect destination');
     await close(proxy);
     await assert.rejects(network.fetchImage('http://example.test/photo.gif', 'alice'), { code: 'TRANSPORT_UNAVAILABLE' });
     assert.equal(network.definition.health().state, 'degraded');
@@ -119,4 +122,91 @@ test('HTTPS CONNECT pins the validated IP and preserves hostname SNI and certifi
     assert.equal(observed.sni, 'example.test');
     assert.equal(observed.host, 'example.test');
     await assert.rejects(openApproved(target, policy, new AbortController().signal), /self-signed|certificate/i);
+});
+
+test('every redirect hop revalidates DNS, allowlist, port, downgrade, cycles and shared hop limit', async () => {
+    const policy = config({ allowlist: ['example.test', '*.example.test'], allowHttp: true }).policy;
+    let dnsCalls = 0, opened = 0;
+    const changing = { resolve4: async () => (++dnsCalls > 1 ? [v4(10,0,0,1)] : ['93.184.216.34']), resolve6: async () => [] };
+    const redirect = location => { const response = Readable.from([]); response.statusCode = 302;
+        response.headers = { location }; opened++; return { response, close() { response.destroy(); } }; };
+    const rebinding = createNetwork({ policy }, { resolver: changing, open: async () => redirect('/next') });
+    await assert.rejects(rebinding.fetchImage('https://example.test/first', 'alice'), { code: 'DNS_UNSAFE' });
+    assert.equal(opened, 1);
+    for (const location of ['https://outside.test/x', 'https://sub.example.test:444/x',
+        'http://example.test/x', 'https://example.test/x#fragment', 'https://example.test/first']) {
+        const network = createNetwork({ policy }, { resolver, open: async () => redirect(location) });
+        await assert.rejects(network.fetchImage('https://example.test/first', 'alice'),
+            { code: location.endsWith('/first') || location.includes('#') ? 'REDIRECT_REJECTED' : 'TARGET_NOT_ALLOWED' });
+    }
+    const visited = [];
+    const allowed = createNetwork({ policy }, { resolver, open: async target => {
+        visited.push(target.host + target.url.pathname);
+        return target.url.pathname === '/done' ? fakeResponse(200, { 'content-type': 'image/gif' })
+            : redirect('https://sub.example.test/done');
+    } });
+    assert.equal((await allowed.fetchImage('https://example.test/first', 'alice')).redirects, 1);
+    assert.deepEqual(visited, ['example.test/first', 'sub.example.test/done']);
+    let number = 0;
+    const endless = createNetwork({ policy }, { resolver, open: async () => redirect(`/hop${++number}`) });
+    await assert.rejects(endless.fetchImage('https://example.test/first', 'alice'), { code: 'TOO_MANY_REDIRECTS' });
+    assert.equal(number, 4);
+});
+
+test('response profile checks signatures, upstream status, encoding, length, idle and stream budget', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 1, 2, 0xff, 0xd9]);
+    const png = Buffer.alloc(25); Buffer.from('89504e470d0a1a0a', 'hex').copy(png); png.write('IHDR', 12);
+    const webp = Buffer.alloc(20); webp.write('RIFF'); webp.writeUInt32LE(12, 4); webp.write('WEBP', 8); webp.write('VP8 ', 12);
+    for (const [type, body] of [['image/jpeg', jpeg], ['image/png', png], ['image/webp', webp], ['image/gif', gif]]) {
+        const network = createNetwork(config(), { resolver, open: async () => fakeResponse(200, { 'content-type': type }, body) });
+        assert.equal((await network.fetchImage('https://example.test/x', 'alice')).mime, type);
+    }
+    for (const status of [403, 404, 429, 500]) {
+        const network = createNetwork(config(), { resolver, open: async () => fakeResponse(status, {}, Buffer.from('<html>')) });
+        await assert.rejects(network.fetchImage('https://example.test/x', 'alice'), { code: 'REMOTE_UNAVAILABLE' });
+    }
+    for (const [headers, body, expected] of [
+        [{ 'content-type': 'image/png' }, Buffer.from('<html>'), 'VALIDATION_FAILED'],
+        [{ 'content-type': 'image/svg+xml' }, Buffer.from('<svg></svg>'), 'VALIDATION_FAILED'],
+        [{ 'content-type': 'image/png' }, gif, 'UNSUPPORTED_MEDIA_TYPE'],
+        [{ 'content-type': 'image/gif', 'content-encoding': 'gzip' }, gif, 'UNSUPPORTED_MEDIA_TYPE'],
+        [{ 'content-type': 'image/gif', 'content-length': String(17 * 1024 * 1024) }, gif, 'REMOTE_RESOURCE_TOO_LARGE'],
+        [{ 'content-type': 'image/gif' }, Buffer.alloc(0), 'VALIDATION_FAILED'],
+    ]) {
+        const network = createNetwork(config(), { resolver, open: async () => fakeResponse(200, headers, body) });
+        await assert.rejects(network.fetchImage('https://example.test/x', 'alice'), { code: expected });
+    }
+    const slow = createNetwork(config({ idleTimeoutMs: 5 }), { resolver, open: async () => {
+        const response = Readable.from((async function* () { await new Promise(resolve => setTimeout(resolve, 50)); yield gif; })());
+        response.statusCode = 200; response.headers = { 'content-type': 'image/gif' };
+        return { response, close() { response.destroy(); } };
+    } });
+    await assert.rejects(slow.fetchImage('https://example.test/x', 'alice'), { code: 'REMOTE_TIMEOUT' });
+    const chunks = createNetwork(config({ maxBytes: gif.length }), { resolver, open: async () => {
+        const response = Readable.from([gif, Buffer.from('extra')]); response.statusCode = 200;
+        response.headers = { 'content-type': 'image/gif' }; return { response, close() { response.destroy(); } };
+    } });
+    await assert.rejects(chunks.fetchImage('https://example.test/x', 'alice'), { code: 'REMOTE_RESOURCE_TOO_LARGE' });
+});
+
+test('per-user and global slots reject without queues and are freed by abort and shutdown', async () => {
+    const pending = [];
+    const network = createNetwork(config({ perUserConcurrency: 1, globalConcurrency: 2 }), { resolver,
+        open: async (_target, _policy, signal) => new Promise((resolve, reject) => {
+            const item = { resolve, reject }; pending.push(item);
+            signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        }) });
+    const a = new AbortController(), b = new AbortController();
+    const first = network.fetchImage('https://example.test/one', 'alice', a.signal);
+    const second = network.fetchImage('https://example.test/two', 'bob', b.signal);
+    while (pending.length < 2) await new Promise(resolve => setTimeout(resolve, 0));
+    await assert.rejects(network.fetchImage('https://example.test/three', 'alice'), { code: 'RESOURCE_BUSY' });
+    await assert.rejects(network.fetchImage('https://example.test/three', 'charlie'), { code: 'RESOURCE_BUSY' });
+    a.abort();
+    await assert.rejects(first, { code: 'REMOTE_TIMEOUT' });
+    const third = network.fetchImage('https://example.test/three', 'charlie');
+    while (pending.length < 3) await new Promise(resolve => setTimeout(resolve, 0));
+    network.shutdown();
+    await assert.rejects(second, { code: 'REMOTE_TIMEOUT' });
+    await assert.rejects(third, { code: 'REMOTE_TIMEOUT' });
 });
