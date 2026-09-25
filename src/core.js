@@ -126,8 +126,10 @@ export async function createCore({ policyOptions, registerModules, networkOption
                 if (!body || typeof body !== 'object' || Array.isArray(body)
                     || Object.keys(body).sort().join(',') !== 'profile,url' || body.profile !== 'image'
                     || typeof body.url !== 'string' || body.url.length > 2048) throw new NetworkFailure('INVALID_REQUEST');
-                const module = (await registry.snapshot(context)).modules.find(item => item.id === 'network');
-                if (module?.state !== 'ready') throw new NetworkFailure('CAPABILITY_UNAVAILABLE');
+                const capability = (await registry.snapshot(context)).capabilities.find(item => item.id === 'network.remoteFetch');
+                if (capability?.moduleId !== 'network' || !['ready', 'degraded'].includes(capability.state)
+                    || capability.operations.find(item => item.id === 'fetch')?.available !== true)
+                    throw new NetworkFailure('CAPABILITY_UNAVAILABLE');
                 const result = await network.fetchImage(body.url, context.contextId, controller.signal);
                 if (controller.signal.aborted || res.destroyed) return;
                 setPrivateHeaders(res);

@@ -244,6 +244,46 @@ test('real HTTP POST returns verified binary and structured policy failures with
     assert.equal((await blocked.json()).error.code, 'TARGET_NOT_ALLOWED');
 });
 
+test('proxy failure degrades Network but permits recovery without a Server restart', async t => {
+    const gif = Buffer.from('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 'base64');
+    let proxyAvailable = false, attempts = 0;
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config', read: async () => JSON.stringify({
+        schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] },
+        network: { enabled: true, transport: 'http-proxy', proxyUrl: 'http://proxy.example.com:8080',
+            destinationPolicy: 'allowlist-only', allowlist: ['example.invalid'] },
+    }) }, networkOptions: {
+        resolver: { resolve4: async () => ['93.184.216.34'], resolve6: async () => [] },
+        open: async () => {
+            attempts++;
+            if (!proxyAvailable) throw new Error('proxy unavailable');
+            const response = Readable.from([gif]); response.statusCode = 200;
+            response.headers = { 'content-type': 'image/gif' };
+            return { response, close() { response.destroy(); } };
+        },
+    } });
+    const app = await host(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    const post = () => fetch(`${app.url}/v1/network/fetch`, { method: 'POST', headers: {
+        'x-test-user': 'alice', 'X-TTB-Protocol': '1.0', 'Content-Type': 'application/json',
+        Origin: 'https://example.invalid', 'X-CSRF-Token': 'fixture-csrf-token',
+    }, body: JSON.stringify({ url: 'https://example.invalid/photo.gif', profile: 'image' }) });
+    const status = async () => (await request(app.url, '/v1/status', { protocol: '1.0' })).body.data;
+    assert.equal((await status()).modules.find(item => item.id === 'network').state, 'ready');
+    const failed = await post();
+    assert.equal(failed.status, 503);
+    assert.equal((await failed.json()).error.code, 'TRANSPORT_UNAVAILABLE');
+    const degraded = await status();
+    assert.equal(degraded.core.state, 'ready');
+    assert.equal(degraded.modules.find(item => item.id === 'network').state, 'degraded');
+    assert.equal(degraded.capabilities.find(item => item.id === 'network.remoteFetch').operations[0].available, true);
+    proxyAvailable = true;
+    const recovered = await post();
+    assert.equal(recovered.status, 200);
+    assert.deepEqual(Buffer.from(await recovered.arrayBuffer()), gif);
+    assert.equal(attempts, 2, 'the degraded operation actually retries the proxy');
+    assert.equal((await status()).modules.find(item => item.id === 'network').state, 'ready');
+});
+
 test('real HTTP client disconnect aborts the outbound operation', async t => {
     let started, outboundSignal;
     const outboundStarted = new Promise(resolve => { started = resolve; });

@@ -7,6 +7,7 @@ Branches: Server `stage/phase-2-network-foundation`; Frontend `stage/phase-2-ser
 - Core discovery and Protocol 1.0 remain readable with Network disabled or degraded. An older Phase 1 config defaults Network to disabled; malformed Network policy is isolated from Core.
 - `network.remoteFetch` contract 1.0 advertises the image profile, JPEG/PNG/WebP/GIF, transport kind, destination policy and finite effective limits. Successful POST sends validated binary; errors use the Protocol 1.0 JSON envelope.
 - Tests cover exact URL and allowlist matching, IDN normalization, IPv4/IPv6 special addresses, mixed DNS fail-closed, redirect blocking, MIME/signature, streamed size, rate limits, real router auth/CSRF/Origin and binary response, explicit HTTP proxy IP authority, HTTPS CONNECT pinned IP plus hostname SNI/Host and certificate rejection, and proxy failure without direct fallback.
+- The real HTTP route test covers proxy failure → Network degraded (fetch still available) → proxy recovery → successful fetch → Network ready, without restarting the Server.
 - Frontend tests cover absent Server, old Server capability absence, authenticated same-origin POST, binary result, operation abort, UI status and Object URL cleanup. Full Local regression and build pass.
 - `npm run audit:privacy` checks the public Server source and Git metadata. Public docs contain illustrative addresses only.
 
