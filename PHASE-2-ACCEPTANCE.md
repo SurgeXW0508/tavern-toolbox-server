@@ -1,6 +1,6 @@
-# Phase 2 Network candidate checkpoint
+# Phase 2 Network Foundation acceptance
 
-Branches: Server `stage/phase-2-network-foundation`; Frontend `stage/phase-2-server-network-client`. Neither branch is merged or released.
+Branches reviewed: Server `stage/phase-2-network-foundation`; Frontend `stage/phase-2-server-network-client`. This record closes the pre-merge acceptance gate; repository merge and release status are tracked on GitHub.
 
 ## Code-side verification
 
@@ -20,9 +20,10 @@ Branches: Server `stage/phase-2-network-foundation`; Frontend `stage/phase-2-ser
 - A non-allowlisted target is rejected. Disabling Network leaves Core and existing Local Toolbox functionality intact.
 - Stopping the proxy causes Remote Fetch failure; restoring it permits a successful retry without restarting SillyTavern. The backend health transitions are visible through authoritative status, although the previous frontend display lagged.
 
-## Current UI acceptance checkpoint
+## Final real-host UI acceptance (user confirmation, 2026-09-26)
 
-- Confirm the new frontend shows Network degraded immediately after a failed Fetch with the proxy stopped, then ready immediately after a successful retry with the proxy restored.
-- Confirm the compact Server Dialog, expandable test and diagnostics, image preview, scrolling and close actions on a real mobile Web Tavern, including the soft keyboard.
+- The frontend displays Network degraded immediately after failed Fetch with the proxy stopped and ready immediately after a successful retry with the proxy restored.
+- The compact Server Dialog, image preview, scrolling, close actions and mobile soft-keyboard layout were accepted on the real Web Tavern.
+- This confirmation closes the two remaining UI checkpoints for Phase 2.
 
-The route-level automated suite covers authentication, CSRF, Origin, URL/DNS/IP and resource rejection. This document does not claim each negative security case was separately exercised on the installed host. Keep real URL query values, session tokens, proxy endpoints and private addresses out of public evidence. Phase 2 remains a candidate until the two UI checkpoints pass; do not merge/release or start Phase 3 yet.
+The route-level automated suite covers authentication, CSRF, Origin, URL/DNS/IP and resource rejection. This document does not claim each negative security case was separately exercised on the installed host. Keep real URL query values, session tokens, proxy endpoints and private addresses out of public evidence. The user confirmed both UI checkpoints on 2026-09-26. Phase 2 is accepted for merge. The confirmation is scoped to those observed behaviors and the earlier installed-host checks.
