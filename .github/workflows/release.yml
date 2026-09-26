@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'SurgeXW0508/tavern-toolbox-server' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Resolve immutable release identity
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force origin '+refs/tags/*:refs/tags/*'
+          VERSION="$(node -p "require('./package.json').version")"
+          LOCK_VERSION="$(node -p "require('./package-lock.json').version")"
+          LOCK_ROOT_VERSION="$(node -p "require('./package-lock.json').packages[''].version")"
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "${VERSION}" == "${LOCK_VERSION}" && "${VERSION}" == "${LOCK_ROOT_VERSION}" ]]
+          TAG="v${VERSION}"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+          if git show-ref --verify --quiet "refs/tags/${TAG}"; then
+            TAG_SHA="$(git rev-list -n 1 "${TAG}")"
+            git merge-base --is-ancestor "${TAG_SHA}" "${GITHUB_SHA}"
+            TAG_VERSION="$(git show "${TAG}:package.json" | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>process.stdout.write(JSON.parse(s).version))")"
+            [[ "${TAG_VERSION}" == "${VERSION}" ]]
+            if gh release view "${TAG}" >/dev/null 2>&1; then
+              echo 'publish=false' >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            # A retry can finish a release whose tag was pushed before the run failed.
+            [[ "${TAG_SHA}" == "${GITHUB_SHA}" ]] || {
+              echo "${TAG} exists without a Release at an older commit; inspect it before retrying" >&2
+              exit 1
+            }
+            echo 'create_tag=false' >> "${GITHUB_OUTPUT}"
+          else
+            echo 'create_tag=true' >> "${GITHUB_OUTPUT}"
+          fi
+          echo 'publish=true' >> "${GITHUB_OUTPUT}"
+
+      - name: Verify release commit
+        if: steps.release.outputs.publish == 'true'
+        run: |
+          npm ci --ignore-scripts
+          npm run audit:privacy
+          npm run check
+
+      - name: Package source and checksum
+        if: steps.release.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          ZIP="tavern-toolbox-server-v${VERSION}-source.zip"
+          git archive --format=zip --prefix="tavern-toolbox-server-v${VERSION}/" --output="release/${ZIP}" "${GITHUB_SHA}"
+          (cd release && sha256sum "${ZIP}" > SHA256SUMS)
+
+      - name: Create annotated tag
+        if: steps.release.outputs.create_tag == 'true'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "${TAG}" "${GITHUB_SHA}" -m "Tavern Toolbox Server ${TAG}"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Publish GitHub Release
+        if: steps.release.outputs.publish == 'true'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "${TAG}" release/* --verify-tag --title "Tavern Toolbox Server ${TAG}" --generate-notes
+          mkdir -p verified-release
+          gh release download "${TAG}" --dir verified-release --pattern 'tavern-toolbox-server-*-source.zip' --pattern SHA256SUMS
+          (cd verified-release && sha256sum -c SHA256SUMS)
