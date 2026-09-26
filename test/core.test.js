@@ -260,6 +260,12 @@ test('authenticated Media serving is scoped to the current ST user with no brows
     }) } });
     const app = await host(core);
     t.after(async () => { await core.shutdown(); await app.close(); });
+    const status = await request(app.url, '/v1/status', { protocol: '1.0' });
+    const mediaCapability = status.body.data.capabilities.find(item => item.id === 'media.assets');
+    assert.equal(mediaCapability.state, 'ready');
+    assert.equal(mediaCapability.operations.find(op => op.id === 'localImport').available, true);
+    assert.equal(mediaCapability.operations.find(op => op.id === 'read').available, true);
+    assert.equal(mediaCapability.operations.find(op => op.id === 'remoteImport').available, false);
     const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#00ff00' } }).png().toBuffer();
     const headers = { 'X-TTB-Protocol': '1.0', Origin: 'https://example.invalid',
         'Sec-Fetch-Site': 'same-origin', 'X-CSRF-Token': 'fixture-csrf-token', 'Content-Type': 'image/png' };
