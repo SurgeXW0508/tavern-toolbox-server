@@ -1,6 +1,6 @@
 # Phase 2 Network candidate checkpoint
 
-Branches: Server `stage/phase-2-network-foundation`; Frontend `stage/phase-2-server-network-client`. Neither branch is a release or an accepted NAS installation.
+Branches: Server `stage/phase-2-network-foundation`; Frontend `stage/phase-2-server-network-client`. Neither branch is merged or released.
 
 ## Code-side verification
 
@@ -9,16 +9,20 @@ Branches: Server `stage/phase-2-network-foundation`; Frontend `stage/phase-2-ser
 - Tests cover exact URL and allowlist matching, IDN normalization, IPv4/IPv6 special addresses, mixed DNS fail-closed, redirect blocking, MIME/signature, streamed size, rate limits, real router auth/CSRF/Origin and binary response, explicit HTTP proxy IP authority, HTTPS CONNECT pinned IP plus hostname SNI/Host and certificate rejection, and proxy failure without direct fallback.
 - The real HTTP route test covers proxy failure → Network degraded (fetch still available) → proxy recovery → successful fetch → Network ready, without restarting the Server.
 - Transport fixtures also replace both host global Agents with constructors that reject inherited requests and set host proxy environment variables. Explicit proxy HTTP and HTTPS CONNECT plus direct HTTP/HTTPS still reach only their selected peer; CONNECT uses the approved IP while TLS retains hostname SNI, Host and certificate verification. A real proxy socket failure followed by recovery returns Network to ready.
-- These simulated Agents did not reproduce the installed-host failure in `8021daa`. The added host-proxy regression uses the real SillyTavern-locked ProxyAgent and equivalent initializer side effects. It reproduces `ERR_INVALID_PROTOCOL` on the old transport and passes with explicit request protocols: before initialization, after initialization, host API proxy coexistence, and failure/recovery. See [root cause and fixture equivalence](docs/NETWORK-HOST-PROXY-REGRESSION.md). Installed NAS acceptance remains pending.
+- These simulated Agents did not reproduce the installed-host failure in `8021daa`. The added host-proxy regression uses the real SillyTavern-locked ProxyAgent and equivalent initializer side effects. It reproduces `ERR_INVALID_PROTOCOL` on the old transport and passes with explicit request protocols: before initialization, after initialization, host API proxy coexistence, and failure/recovery. See [root cause and fixture equivalence](docs/NETWORK-HOST-PROXY-REGRESSION.md). The real host chain was subsequently verified by the user.
 - Frontend tests cover absent Server, old Server capability absence, authenticated same-origin POST, binary result, operation abort, UI status and Object URL cleanup. Full Local regression and build pass.
 - `npm run audit:privacy` checks the public Server source and Git metadata. Public docs contain illustrative addresses only.
 
-## Installed-host verification still required
+## Verified on the installed host (user report)
 
-1. Confirm official SillyTavern Web 1.19.0 starts both plugins and 柏宝库 remains available; Core status still responds.
-2. Put the real trusted Origin, allowed public image host and explicit HTTP proxy endpoint only in the private administrator config. Restart and confirm Network ready.
-3. In the Toolbox global settings, fetch an allowed HTTPS image from desktop and a representative phone/tablet, preview it, cancel a request and close the page. Check that closing/replacing releases the preview.
-4. Check non-allowlisted domain, private/overlay address, invalid URL, missing/invalid user context, CSRF and Origin are rejected by the real SillyTavern middleware. Confirm browser inability to reach the image does not affect a Server fetch through the configured proxy.
-5. With SillyTavern `initRequestProxy()` active, stop the proxy and observe an explicit failure without direct fallback; restart it and confirm recovery without restarting SillyTavern. Disable Network and confirm Core and Local Toolbox still work. Confirm no Media file, Regex edit or persistent proxy URL was created.
+- Official SillyTavern Web 1.19.0 on Docker/NAS loads both plugins; 柏宝库 coexists and Core stays ready.
+- Network reaches ready with the configured explicit HTTP proxy; an allowlisted HTTPS image is fetched through the Server and proxy, including from a phone. SillyTavern's own requestProxy behavior coexists.
+- A non-allowlisted target is rejected. Disabling Network leaves Core and existing Local Toolbox functionality intact.
+- Stopping the proxy causes Remote Fetch failure; restoring it permits a successful retry without restarting SillyTavern. The backend health transitions are visible through authoritative status, although the previous frontend display lagged.
 
-Do not move to Phase 3 or merge/release on the basis of in-process HTTP fixtures alone. Do not record real URL query values, session tokens, proxy endpoints or private addresses in public issues, logs or test fixtures.
+## Current UI acceptance checkpoint
+
+- Confirm the new frontend shows Network degraded immediately after a failed Fetch with the proxy stopped, then ready immediately after a successful retry with the proxy restored.
+- Confirm the compact Server Dialog, expandable test and diagnostics, image preview, scrolling and close actions on a real mobile Web Tavern, including the soft keyboard.
+
+The route-level automated suite covers authentication, CSRF, Origin, URL/DNS/IP and resource rejection. This document does not claim each negative security case was separately exercised on the installed host. Keep real URL query values, session tokens, proxy endpoints and private addresses out of public evidence. Phase 2 remains a candidate until the two UI checkpoints pass; do not merge/release or start Phase 3 yet.
