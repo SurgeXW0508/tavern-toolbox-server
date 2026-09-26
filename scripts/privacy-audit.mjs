@@ -45,7 +45,8 @@ function inspectText(location, value, { skipDomains = false } = {}) {
         }
         for (const match of skipDomains ? [] : s.matchAll(/\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|cn|me|local|lan|internal)\b/gi)) {
             const host = match[0].toLowerCase();
-            if (host === 'json-schema.org' || host === 'github.com' || host.endsWith('.github.com') ||
+            if (host === 'json-schema.org' || host === 'registry.npmjs.org' || host === 'opencollective.com' ||
+                host === 'github.com' || host.endsWith('.github.com') ||
                 host === 'example.com' || host.endsWith('.example.com')) continue;
             flag(where, 'unreviewed hostname');
         }

@@ -1,5 +1,11 @@
 # Tavern Toolbox Server
 
+## Releases and rollback
+
+The accepted Phase 2 Network Foundation is `v0.2.0`. Merging a reviewed version bump to `main` runs `.github/workflows/release.yml`: it verifies privacy and tests, creates an immutable annotated `vX.Y.Z` tag at the exact `main` commit, and publishes a GitHub Release with a source archive and SHA-256 checksum. Re-running the workflow never moves an existing tag. Commits with the same package version do not create another release; bump `package.json` and the two root versions in `package-lock.json` only after the next stage is accepted. Pin an installation to a tag or exact commit to roll back. Back up the user data separately; a code tag does not roll back a Media database or Original files.
+
+The Phase 3 Media Foundation remains a development candidate until installed-host validation. Do not deploy its draft PR as a released baseline.
+
 Phase 2 Network Foundation: Phase 1 Core plus an optional safe remote image fetch Network Module. This version has no Media persistence, database, role-card rewriting or background jobs.
 
 ## Install for official SillyTavern Web
