@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { once } from 'node:events';
 import path from 'node:path';
 import { createCore, SERVER_VERSION } from '../src/core.js';
@@ -10,6 +11,7 @@ import { loadPolicy, validatePolicy } from '../src/config.js';
 import { info } from '../index.js';
 import { userContext } from '../src/security.js';
 import { Readable } from 'node:stream';
+import sharp from 'sharp';
 
 function hostRouter() {
     const stack = [];
@@ -18,19 +20,21 @@ function hostRouter() {
         use(fn) { stack.push({ fn }); },
         get(path, fn) { stack.push({ method: 'GET', path, fn }); },
         post(path, fn) { stack.push({ method: 'POST', path, fn }); },
+        delete(path, fn) { stack.push({ method: 'DELETE', path, fn }); },
     };
 }
 
 async function host(core) {
     const router = hostRouter();
     core.attach(router);
+    const dataRoot = await mkdtemp(path.join(tmpdir(), 'ttb-media-test-'));
     const server = http.createServer((req, res) => {
         req.path = new URL(req.url, 'http://localhost').pathname;
         req.get = name => req.headers[name.toLowerCase()];
         req.session = { csrfToken: 'fixture-csrf-token' };
         req.user = req.headers['x-test-user'] ? {
             profile: { handle: req.headers['x-test-user'], enabled: true },
-            directories: { root: `/srv/st/data/${req.headers['x-test-user']}` },
+            directories: { root: path.join(dataRoot, req.headers['x-test-user']) },
         } : undefined;
         res.locals = {};
         res.status = n => { res.statusCode = n; return res; };
@@ -40,14 +44,20 @@ async function host(core) {
         const next = () => {
             const layer = router.stack[index++];
             if (!layer) return res.end();
-            if (layer.method && (layer.method !== req.method || layer.path !== req.path)) return next();
+            if (layer.method && layer.method !== req.method) return next();
+            if (layer.path) {
+                const parts = layer.path.split('/'), actual = req.path.split('/');
+                if (parts.length !== actual.length || parts.some((part, n) => !part.startsWith(':') && part !== actual[n])) return next();
+                req.params = Object.fromEntries(parts.flatMap((part, n) => part.startsWith(':') ? [[part.slice(1), actual[n]]] : []));
+            }
             Promise.resolve(layer.fn(req, res, next)).catch(() => { res.statusCode = 500; res.end(); });
         };
         next();
     });
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
-    return { server, url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise(resolve => server.close(resolve)) };
+    return { server, dataRoot, url: `http://127.0.0.1:${server.address().port}`,
+        close: async () => { await new Promise(resolve => server.close(resolve)); await rm(dataRoot, { recursive: true, force: true }); } };
 }
 
 async function request(url, route = '/status', { user = 'alice', method = 'GET', protocol, headers = {}, body } = {}) {
@@ -75,10 +85,10 @@ test('real HTTP discovery: exact product, read-only routes, version contract and
     const status = await request(app.url, '/v1/status', { protocol: '1.0' });
     assert.equal(status.code, 200);
     assert.deepEqual(status.body.meta.protocol, { major: 1, minor: 0 });
-    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch']);
+    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'media.assets']);
     assert.deepEqual(status.body.data.capabilities[0], fixture.status.data.capabilities[0]);
     assert.deepEqual(status.body.data.effectivePolicy, fixture.status.data.effectivePolicy);
-    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network']);
+    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'media']);
     assert.equal(status.body.data.modules[1].state, 'disabled');
     assert.equal(status.body.data.core.state, 'ready');
     assert.equal(status.body.data.effectivePolicy.unsafeRequestsEnabled, false);
@@ -242,6 +252,48 @@ test('real HTTP POST returns verified binary and structured policy failures with
     const blocked = await post('https://other.invalid/private?token=fixture-secret');
     assert.equal(blocked.status, 403);
     assert.equal((await blocked.json()).error.code, 'TARGET_NOT_ALLOWED');
+});
+
+test('authenticated Media serving is scoped to the current ST user with no browser cache reuse', async t => {
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config', read: async () => JSON.stringify({
+        schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] }, network: { enabled: false },
+    }) } });
+    const app = await host(core);
+    t.after(async () => { await core.shutdown(); await app.close(); });
+    const status = await request(app.url, '/v1/status', { protocol: '1.0' });
+    const mediaCapability = status.body.data.capabilities.find(item => item.id === 'media.assets');
+    assert.equal(mediaCapability.state, 'ready');
+    assert.equal(mediaCapability.operations.find(op => op.id === 'localImport').available, true);
+    assert.equal(mediaCapability.operations.find(op => op.id === 'read').available, true);
+    assert.equal(mediaCapability.operations.find(op => op.id === 'remoteImport').available, false);
+    const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#00ff00' } }).png().toBuffer();
+    const headers = { 'X-TTB-Protocol': '1.0', Origin: 'https://example.invalid',
+        'Sec-Fetch-Site': 'same-origin', 'X-CSRF-Token': 'fixture-csrf-token', 'Content-Type': 'image/png' };
+    const denied = await fetch(`${app.url}/v1/media/import/local`, { method: 'POST',
+        headers: { ...headers, 'x-test-user': 'alice', 'X-CSRF-Token': 'wrong' }, body: bytes });
+    assert.equal((await denied.json()).error.code, 'CSRF_REJECTED');
+    const upload = await fetch(`${app.url}/v1/media/import/local`, { method: 'POST',
+        headers: { ...headers, 'x-test-user': 'alice' }, body: bytes });
+    assert.equal(upload.status, 200);
+    const id = (await upload.json()).data.mediaRef.assetId;
+    const original = `/v1/media/assets/${id}/original`;
+    const own = await fetch(`${app.url}${original}`, { headers: { 'x-test-user': 'alice' } });
+    assert.equal(own.status, 200);
+    assert.equal(own.headers.get('cache-control'), 'no-store');
+    assert.equal(own.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(own.headers.get('content-type'), 'image/png');
+    assert.deepEqual(Buffer.from(await own.arrayBuffer()), bytes);
+    const other = await fetch(`${app.url}${original}`, { headers: { 'x-test-user': 'bob' } });
+    assert.equal(other.status, 404);
+    const absent = await fetch(`${app.url}/v1/media/assets/00000000-0000-4000-8000-000000000000/original`,
+        { headers: { 'x-test-user': 'bob' } });
+    assert.equal(absent.status, other.status);
+    const anonymous = await fetch(`${app.url}${original}`);
+    assert.equal(anonymous.status, 403);
+    const destroy = await fetch(`${app.url}/v1/media/assets/${id}`, { method: 'DELETE',
+        headers: { ...headers, 'x-test-user': 'alice' } });
+    assert.equal(destroy.status, 200);
+    assert.equal((await fetch(`${app.url}${original}`, { headers: { 'x-test-user': 'alice' } })).status, 404);
 });
 
 test('proxy failure degrades Network but permits recovery without a Server restart', async t => {
