@@ -1,6 +1,6 @@
 # Tavern Toolbox Server
 
-Phase 2 development candidate: Phase 1 Core plus an optional safe remote image fetch Network Module. This branch has no Media persistence, database, role-card rewriting or background jobs.
+Phase 2 Network Foundation: Phase 1 Core plus an optional safe remote image fetch Network Module. This version has no Media persistence, database, role-card rewriting or background jobs.
 
 ## Install for official SillyTavern Web
 
@@ -27,7 +27,7 @@ For development, run `npm ci --ignore-scripts` then `npm run check` for unit and
 3. Temporarily disable/remove this plugin, restart, and check that old outfit images, Genesis images, and lorebook editing still use their previous Local paths. Repeat in the actual TT client; TT never connects to this Server directly. Re-enable the plugin and check Docker container restart rotates boot/context IDs without modifying existing data.
 4. Check coexistence with installed 柏宝库 on the real NAS. The current plugin ID, route and config filename are dedicated; future data layout is not implemented. Keep the actual ST dataRoot and plugin code volume mounted as intended and check UID/GID; config persistence requires the dataRoot volume. The plugin never writes into its own code folder.
 
-The independent Protocol 1.0 fixture, shape, bounds and errors are documented in `protocol/README.md`. Phase 2 Network CSRF and proxy behavior still need verification on the installed NAS; the in-process HTTP harness tests the plugin router but does not prove the deployed SillyTavern middleware order. The itemized code-side review and explicit real-host gaps are in `PHASE-1-ACCEPTANCE.md`; this is not a release claim.
+The independent Protocol 1.0 fixture, shape, bounds and errors are documented in `protocol/README.md`. Phase 2 installed-host behavior and remaining verification limits are recorded in `PHASE-2-ACCEPTANCE.md`. The HTTP harness does not substitute for installed-host checks.
 
 ## Privacy before publication
 
@@ -56,4 +56,4 @@ The default and existing Phase 1 config leave Network disabled. A deployment adm
 
 `POST /v1/network/fetch` requires authenticated SillyTavern user context, protocol header, exact trusted Origin and a valid session CSRF token. It accepts only `{ "url": "https://example.com/image.png", "profile": "image" }`. HTTPS and allowed public domains are checked before and after each redirect; complete A/AAAA answers must be public. Direct sockets connect to a validated address; proxy requests send the approved IP in absolute-form HTTP or HTTPS CONNECT, preserving the original Host and verified TLS name. Every request specifies its protocol to avoid inheriting the host ProxyAgent's stack-dependent default. Mixed/private/Tailscale/metadata answers fail closed. Non-2xx upstream bodies, SVG, HTML and unsupported or oversized images are rejected. Success is a bounded, validated JPEG/PNG/WebP/GIF binary body with `no-store` and `nosniff`; failures use the Protocol 1.0 JSON error envelope.
 
-Network returns transient bytes for one user action. It does not save Media, return persistent proxy URLs, change Regex or rewrite character cards. Phase 3 can consume the validated result inside the server without routing bytes through the browser. Host session/CSRF behavior, Docker proxy routing, mobile preview and coexistence must be verified on the actual installation before accepting this candidate. See [`PHASE-2-ACCEPTANCE.md`](PHASE-2-ACCEPTANCE.md) for the code-side and real-host checkpoints.
+Network returns transient bytes for one user action. It does not save Media, return persistent proxy URLs, change Regex or rewrite character cards. Phase 3 can consume the validated result inside the server without routing bytes through the browser. The installed-host acceptance scope and verification limits are recorded in `PHASE-2-ACCEPTANCE.md`. See [`PHASE-2-ACCEPTANCE.md`](PHASE-2-ACCEPTANCE.md) for the code-side and real-host checkpoints.
