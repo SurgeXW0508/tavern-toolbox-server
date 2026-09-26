@@ -47,6 +47,6 @@ Verified behavior:
 
 Running the new regression against the `8021daa` transport fails with the same `ERR_INVALID_PROTOCOL`; applying explicit protocols passes. Existing certificate-rejection, SSRF, redirect, abort and resource tests remain required. Test dependencies are development-only. Install with `npm ci --ignore-scripts`, then run `npm run check` and `npm run audit:privacy`.
 
-## Remaining installed-host acceptance
+## Installed-host verification
 
-Code reproduction establishes this failure mechanism and its correction. It does not claim access to, or acceptance of, the user's NAS. After installing the candidate, verify the actual SillyTavern API proxy and Toolbox Remote Image Test together, then stop/start the configured proxy and retry without restarting SillyTavern. Keep real targets, query strings, proxy configuration and session material out of public evidence. Phase 2 remains a candidate until that verification succeeds.
+Code reproduction established this failure mechanism and its correction. The user subsequently verified the actual SillyTavern requestProxy and Toolbox Remote Image Test together on the installed NAS, including a proxy stop/restart and successful retry without restarting SillyTavern. Keep real targets, query strings, proxy configuration and session material out of public evidence. The remaining Phase 2 acceptance checks concern immediate Network health refresh in the frontend and the real mobile Dialog layout; see [PHASE-2-ACCEPTANCE.md](../PHASE-2-ACCEPTANCE.md).
