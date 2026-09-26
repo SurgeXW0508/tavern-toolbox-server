@@ -80,10 +80,19 @@ export class CapabilityRegistry {
             for (const capability of module.capabilities) {
                 if (!CAPABILITY_ID.test(capability?.id || '') || !capability?.contract || !Array.isArray(capability.operations)) continue;
                 const available = state === 'ready' || state === 'degraded';
+                let operationAvailability = {};
+                if (available && typeof capability.operationAvailability === 'function') {
+                    try { operationAvailability = await bounded(() => capability.operationAvailability(context), 250); }
+                    catch { operationAvailability = Object.fromEntries(capability.operations.map(op =>
+                        [op.id, { available: false, reasonCode: 'MODULE_HEALTH_FAILED' }])); }
+                }
                 capabilities.push({ id: capability.id, moduleId: id, contract: capability.contract,
                     state, reasonCode, operations: capability.operations.map(operation => ({
-                        id: operation.id, available: available && operation.available !== false,
-                        reasonCode: available && operation.available !== false ? null : reasonCode || operation.reasonCode || 'CAPABILITY_UNAVAILABLE',
+                        id: operation.id, available: available && operation.available !== false
+                            && operationAvailability?.[operation.id]?.available !== false,
+                        reasonCode: available && operation.available !== false
+                            && operationAvailability?.[operation.id]?.available !== false ? null
+                            : operationAvailability?.[operation.id]?.reasonCode || reasonCode || operation.reasonCode || 'CAPABILITY_UNAVAILABLE',
                     })), limits: capability.limits || {}, constraints: capability.constraints || {} });
             }
         }

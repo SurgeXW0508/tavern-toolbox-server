@@ -7,7 +7,23 @@ export const DEFAULT_POLICY = Object.freeze({
     schemaVersion: 1,
     core: Object.freeze({ maxStatusResponseBytes: 256 * 1024, allowedOrigins: Object.freeze([]) }),
     network: Object.freeze({ enabled: false }),
+    media: Object.freeze({ maxBytes: 16 * 1024 * 1024, quotaBytes: 2 * 1024 * 1024 * 1024,
+        maxDimension: 8192, maxPixels: 24 * 1024 * 1024, maxFrames: 64,
+        maxFramePixels: 48 * 1024 * 1024, maxConcurrentImports: 2 }),
 });
+
+function validateMedia(value) {
+    if (value === undefined) return DEFAULT_POLICY.media;
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).some(key => !Object.hasOwn(DEFAULT_POLICY.media, key))) throw new Error('INVALID_MEDIA_CONFIG');
+    const result = {};
+    for (const [key, maximum] of Object.entries(DEFAULT_POLICY.media)) {
+        const supplied = value[key] ?? maximum;
+        if (!Number.isSafeInteger(supplied) || supplied < 1 || supplied > maximum) throw new Error('INVALID_MEDIA_CONFIG');
+        result[key] = supplied;
+    }
+    return Object.freeze(result);
+}
 
 export const NETWORK_DEFAULTS = Object.freeze({ maxBytes: 16 * 1024 * 1024, maxRedirects: 3,
     connectTimeoutMs: 5000, firstByteTimeoutMs: 10000, idleTimeoutMs: 10000,
@@ -54,7 +70,7 @@ function validateNetwork(value) {
 
 export function validatePolicy(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_CORE_CONFIG');
-    if (Object.keys(value).some(key => !['schemaVersion', 'core', 'network'].includes(key)) || value.schemaVersion !== 1) throw new Error('INVALID_CORE_CONFIG');
+    if (Object.keys(value).some(key => !['schemaVersion', 'core', 'network', 'media'].includes(key)) || value.schemaVersion !== 1) throw new Error('INVALID_CORE_CONFIG');
     const core = value.core ?? {};
     if (!core || typeof core !== 'object' || Array.isArray(core)
         || Object.keys(core).some(key => !['maxStatusResponseBytes', 'allowedOrigins'].includes(key))) throw new Error('INVALID_CORE_CONFIG');
@@ -70,8 +86,11 @@ export function validatePolicy(value) {
     let network, networkError = null;
     try { network = validateNetwork(value.network); }
     catch { network = DEFAULT_POLICY.network; networkError = 'INVALID_NETWORK_CONFIG'; }
+    let media, mediaError = null;
+    try { media = validateMedia(value.media); }
+    catch { media = DEFAULT_POLICY.media; mediaError = 'INVALID_MEDIA_CONFIG'; }
     return Object.freeze({ schemaVersion: 1, core: Object.freeze({ maxStatusResponseBytes, allowedOrigins: Object.freeze([...allowedOrigins]) }),
-        network, networkError });
+        network, networkError, media, mediaError });
 }
 
 export async function loadPolicy({ dataRoot = globalThis.DATA_ROOT, configPath = process.env.TAVERN_TOOLBOX_SERVER_CONFIG, read = readFile } = {}) {

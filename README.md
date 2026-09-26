@@ -1,12 +1,14 @@
 # Tavern Toolbox Server
 
-Phase 2 Network Foundation: Phase 1 Core plus an optional safe remote image fetch Network Module. This version has no Media persistence, database, role-card rewriting or background jobs.
+Phase 3 Media Foundation is under development on `stage/phase-3-media-foundation`. See [Media Foundation candidate and NAS runtime gate](docs/MEDIA-FOUNDATION.md). It adds a user-private, versioned SQLite metadata Store plus immutable filesystem Originals, without migrating existing Local images. Do not treat this branch as a released deployment baseline.
+
+Phase 2 Network Foundation provides Phase 1 Core plus an optional safe remote image fetch Network Module. The Phase 3 branch additionally introduces Media persistence; it still does no role-card rewriting or background jobs.
 
 ## Install for official SillyTavern Web
 
 Use a pinned, reviewed version of this repository in the SillyTavern `plugins/tavern-toolbox-server/` directory. Enable `enableServerPlugins: true` in the persistent SillyTavern configuration and restart SillyTavern. The plugin is discovered by `GET /api/plugins/tavern-toolbox-server/status` after SillyTavern authentication; `GET /api/plugins/tavern-toolbox-server/v1/status` requires `X-TTB-Protocol: 1.0`. The frontend provides **设置 → 服务器与扩展能力**. If the plugin is absent, all existing Toolbox data stays local.
 
-Do not copy user data into the plugin code directory. Phase 1 does not create a database or migrate any data. The plugin works independently of 柏宝库. No CORS or cross-origin TT connection is supported.
+Do not copy user data into the plugin code directory. Phase 3 creates a separate per-user Media database and does not migrate existing Local data. The plugin works independently of 柏宝库. No CORS or cross-origin TT connection is supported.
 
 Optional administrator configuration lives outside the plugin at `<SillyTavern dataRoot>/tavern-toolbox-server.config.json`; `TAVERN_TOOLBOX_SERVER_CONFIG` can select an explicitly managed absolute config path. A missing default file uses safe defaults; a malformed or explicitly missing file reports `INVALID_CORE_CONFIG` and never silently replaces the administrator's policy. Example:
 
@@ -16,7 +18,7 @@ Optional administrator configuration lives outside the plugin at `<SillyTavern d
 
 `allowedOrigins` is the deployment administrator’s exact trusted browser origin list for Network POST, not a CORS allowlist. A missing list disables unsafe operations. Host session CSRF protection must also be active. Changes take effect on restart. `/status` and `/v1/status` are both authenticated, read-only and `Cache-Control: no-store`; the effective policy summary never returns the origin list or secrets.
 
-SillyTavern’s global JSON parser runs before plugin routers; deploy a small ingress request-body limit for the Network POST and verify it on the real NAS. The plugin checks its own unparsed request size, but a host parser may already have accepted a larger body. Node >=20 is the packaging minimum; this phase uses only Node built-ins. Validate the actual NAS Node and ST version in the real installation.
+SillyTavern’s global JSON parser runs before plugin routers; deploy a small ingress request-body limit for JSON POST and verify it on the real NAS. The plugin checks its own unparsed request size, but a host parser may already have accepted a larger body. Core/Network packaging supports Node >=20; Media requires Node >=22.13 plus its locked Sharp runtime dependency. Validate the actual NAS Node and ST version in the real installation.
 
 For development, run `npm ci --ignore-scripts` then `npm run check` for unit and HTTP-contract tests. The development dependencies reproduce SillyTavern's proxy initialization; plugin runtime still uses only Node built-ins. For real-device review: confirm the Toolbox page in the official Web client displays Core plus the disabled Network capability by default, then disable/remove this plugin and confirm the existing Local workflows still work. Test the real TT client separately; mocked tests do not establish real device support. No media data is being backed up by this phase.
 
