@@ -1,0 +1,12 @@
+node_modules/
+coverage/
+data/
+*.sqlite*
+*.log
+.env*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+tavern-toolbox-server.config.json

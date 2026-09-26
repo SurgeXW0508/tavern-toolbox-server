@@ -1,0 +1,5 @@
+{
+  "request": { "url": "https://example.com/image.png", "profile": "image" },
+  "successHeaders": { "Content-Type": "image/png", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+  "failure": { "ok": false, "error": { "code": "TARGET_NOT_ALLOWED", "message": "远程图片获取失败", "details": {}, "retryable": false, "outcome": "notApplicable" } }
+}
