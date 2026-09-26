@@ -186,6 +186,9 @@ test('Media is independent of Network and remote import uses its bounded fetch r
     const media = createMedia({ policy: { media: policy, core: { allowedOrigins: ['https://example.com'] } } }, network);
     await media.definition.initialize();
     const context = { userRoot: root, contextId: 'transient' };
+    const releaseA = media.reserveImport(), releaseB = media.reserveImport();
+    assert.throws(() => media.reserveImport(), { code: 'RESOURCE_BUSY' });
+    releaseA(); releaseB();
     assert.deepEqual(media.definition.dependsOn, ['core']);
     const local = await media.importBytes(context, bytes, 'image/png');
     assert.equal((await media.read(context, local.mediaRef.assetId)).bytes.length, bytes.length);
