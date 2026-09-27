@@ -16,7 +16,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
       - run: npm run audit:privacy
       - run: npm ci --ignore-scripts
       - run: npm run check
