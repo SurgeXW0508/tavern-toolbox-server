@@ -9,6 +9,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { requireOpenSslFixture } from './fixtures/openssl.js';
 import { validatePolicy } from '../src/config.js';
 import { createNetwork } from '../src/network/index.js';
 import { openApproved } from '../src/network/transport.js';
@@ -22,6 +23,7 @@ async function listen(server) {
 }
 
 test('real ST ProxyAgent initialization preserves TTB HTTPS fetch and host API proxy, including recovery', async t => {
+    if (!requireOpenSslFixture(t)) return;
     const originalHttp = http.globalAgent, originalHttps = https.globalAgent;
     const envNames = ['all_proxy', 'no_proxy', 'http_proxy', 'https_proxy', 'npm_config_proxy',
         'npm_config_http_proxy', 'npm_config_https_proxy', 'npm_config_no_proxy']

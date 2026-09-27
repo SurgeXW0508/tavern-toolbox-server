@@ -1,8 +1,12 @@
 # Tavern Toolbox Server
 
+## Phase 4 Business Provider and Outfit
+
+Release `v0.4.0` adds an independent Business Collection module and the first complete Outfit Consumer. Its protocol, persistence and backup boundary are in [Business Collection](docs/BUSINESS-COLLECTION.md); the official SillyTavern 1.19.0 Docker/NAS results and their limits are in [Phase 4 acceptance](PHASE-4-ACCEPTANCE.md). No Local Outfit data is migrated automatically. Business ownership is separate from Server Media ownership.
+
 ## Releases and rollback
 
-The accepted Phase 3 Media Foundation is `v0.3.0`; Phase 2 Network Foundation is `v0.2.0`. Merging a reviewed version bump to `main` runs `.github/workflows/release.yml`: it verifies privacy and tests, creates an immutable annotated `vX.Y.Z` tag at the exact `main` commit, and publishes a GitHub Release with a source archive and SHA-256 checksum. Re-running the workflow never moves an existing tag. Commits with the same package version do not create another release; bump `package.json` and the two root versions in `package-lock.json` only after the next stage is accepted. Pin an installation to a tag or exact commit to roll back. Back up the user data separately; a code tag does not roll back a Media database or Original files.
+Phase 3 Media Foundation remains available as `v0.3.0`; Phase 2 Network Foundation is `v0.2.0`. Merging a reviewed version bump to `main` runs `.github/workflows/release.yml`: it verifies privacy and tests, creates an immutable annotated `vX.Y.Z` tag at the exact `main` commit, and publishes a GitHub Release with a source archive and SHA-256 checksum. Re-running the workflow never moves an existing tag. Commits with the same package version do not create another release; bump `package.json` and the two root versions in `package-lock.json` only after the next stage is accepted. Pin an installation to a tag or exact commit to roll back. Back up the user data separately; a code tag does not roll back Business or Media data.
 
 Phase 3 adds a user-private, versioned SQLite metadata Store and immutable filesystem Originals without migrating Local images. See [Media Foundation and runtime requirements](docs/MEDIA-FOUNDATION.md) and [installed-host acceptance](PHASE-3-ACCEPTANCE.md). The Phase 2 release has Core and Network only; Phase 3 adds Media, but no role-card rewriting or background jobs.
 
@@ -10,7 +14,7 @@ Phase 3 adds a user-private, versioned SQLite metadata Store and immutable files
 
 Use a pinned, reviewed version of this repository in the SillyTavern `plugins/tavern-toolbox-server/` directory. Enable `enableServerPlugins: true` in the persistent SillyTavern configuration and restart SillyTavern. The plugin is discovered by `GET /api/plugins/tavern-toolbox-server/status` after SillyTavern authentication; `GET /api/plugins/tavern-toolbox-server/v1/status` requires `X-TTB-Protocol: 1.0`. The frontend provides **设置 → 服务器与扩展能力**. If the plugin is absent, all existing Toolbox data stays local.
 
-Do not copy user data into the plugin code directory. Phase 3 creates a separate per-user Media database and does not migrate existing Local data. The plugin works independently of 柏宝库. No CORS or cross-origin TT connection is supported.
+Do not copy user data into the plugin code directory. Phase 3 creates per-user Media metadata and files; Phase 4 adds a separate per-user Business Collection. Neither migrates existing Local data. The plugin works independently of 柏宝库. No CORS or cross-origin TT connection is supported.
 
 Optional administrator configuration lives outside the plugin at `<SillyTavern dataRoot>/tavern-toolbox-server.config.json`; `TAVERN_TOOLBOX_SERVER_CONFIG` can select an explicitly managed absolute config path. A missing default file uses safe defaults; a malformed or explicitly missing file reports `INVALID_CORE_CONFIG` and never silently replaces the administrator's policy. Example:
 
@@ -20,18 +24,18 @@ Optional administrator configuration lives outside the plugin at `<SillyTavern d
 
 `allowedOrigins` is the deployment administrator’s exact trusted browser origin list for Network POST, not a CORS allowlist. A missing list disables unsafe operations. Host session CSRF protection must also be active. Changes take effect on restart. `/status` and `/v1/status` are both authenticated, read-only and `Cache-Control: no-store`; the effective policy summary never returns the origin list or secrets.
 
-SillyTavern’s global JSON parser runs before plugin routers; deploy a small ingress request-body limit for JSON POST and verify it on the real NAS. The plugin checks its own unparsed request size, but a host parser may already have accepted a larger body. Core/Network packaging supports Node >=20; Media requires Node >=22.13 plus its locked Sharp runtime dependency. Validate the actual NAS Node and ST version in the real installation.
+SillyTavern’s global JSON parser runs before plugin routers; deploy a small ingress request-body limit for JSON POST and verify it on the real NAS. The plugin checks its own unparsed request size, but a host parser may already have accepted a larger body. Core/Network support Node >=20; Media and Phase 4 Business each require Node >=22.13 (`node:sqlite`), with Media also requiring its locked Sharp runtime dependency. The package engine remains >=20 so unsupported optional modules report unavailable independently. Validate the actual NAS Node and ST version in the real installation.
 
-For development, run `npm ci --ignore-scripts` then `npm run check` for unit and HTTP-contract tests. The development dependencies reproduce SillyTavern's proxy initialization and raw upload middleware; Phase 3 runtime also needs the locked Sharp dependency. Back up Media as described in the Media Foundation guide.
+For development, run `npm ci --ignore-scripts` then `npm run check` for unit and HTTP-contract tests. The development dependencies reproduce SillyTavern's proxy initialization and raw upload middleware; Media runtime also needs the locked Sharp dependency. Production does not require the openssl CLI: two self-signed HTTPS fixture tests explicitly skip if it is absent. Candidate CI requires openssl and runs both Network HTTPS/CONNECT tests in full. Back up Business and Media together as described in the Business Collection guide.
 
 ## Operator and review notes
 
-1. Pin the `v0.3.0` release or an exact reviewed commit before installing in `plugins/tavern-toolbox-server/`. Use the accepted frontend Phase 2 `main` in the official Web client; Phase 3 adds no Media consumer UI yet. Confirm the installed SillyTavern loader supports `init(router)` and exit hooks, `req.user.profile.handle` and `req.user.directories.root` in your real version. No separate administrator Web UI exists.
+1. Pin `v0.4.0` or an exact reviewed commit before installing in `plugins/tavern-toolbox-server/`. Use the matching frontend `v0.47.0` for Server Outfit. Confirm the installed SillyTavern loader supports `init(router)` and exit hooks, `req.user.profile.handle` and `req.user.directories.root` in your real version. No separate administrator Web UI exists.
 2. Confirm `enableServerPlugins: true`, restart one active SillyTavern instance, sign in to the official Web client, open any module homepage in Toolbox, select **服务器与扩展能力**, and inspect `core.status` plus `network.remoteFetch` (disabled until the administrator enables it). Refresh once and preview diagnostics before copying; verify no personal path/cookie. Try the other ST account, if configured, to verify separate context IDs.
 3. Temporarily disable/remove this plugin, restart, and check that old outfit images, Genesis images, and lorebook editing still use their previous Local paths. Repeat in the actual TT client; TT never connects to this Server directly. Re-enable the plugin and check Docker container restart rotates boot/context IDs without modifying existing data.
 4. Check coexistence with installed 柏宝库 on the real NAS. The plugin ID, route and config filename are dedicated. Keep the actual ST dataRoot and plugin code volume mounted as intended and check UID/GID; config persistence requires the dataRoot volume. The plugin never writes into its own code folder.
 
-The independent Protocol 1.0 fixture, shape, bounds and errors are documented in `protocol/README.md`. Installed-host evidence and verification limits are recorded in [`PHASE-2-ACCEPTANCE.md`](PHASE-2-ACCEPTANCE.md) and [`PHASE-3-ACCEPTANCE.md`](PHASE-3-ACCEPTANCE.md).
+The independent Protocol 1.0 fixture, shape, bounds and errors are documented in `protocol/README.md`. Installed-host evidence and verification limits are recorded in [`PHASE-2-ACCEPTANCE.md`](PHASE-2-ACCEPTANCE.md), [`PHASE-3-ACCEPTANCE.md`](PHASE-3-ACCEPTANCE.md) and [`PHASE-4-ACCEPTANCE.md`](PHASE-4-ACCEPTANCE.md).
 
 ## Privacy before publication
 

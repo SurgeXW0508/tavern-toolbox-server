@@ -1,6 +1,6 @@
 {
   "name": "tavern-toolbox-server",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "main": "index.js",
@@ -10,7 +10,7 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "audit:privacy": "node scripts/privacy-audit.mjs",
-    "check": "npm test && node --check index.js && node --check src/core.js && node --check src/registry.js && node --check src/config.js && node --check src/security.js && node --check src/media/index.js && node --check src/media/store.js && node --check src/media/validation.js"
+    "check": "npm test && node --check index.js && node --check src/core.js && node --check src/registry.js && node --check src/config.js && node --check src/security.js && node --check src/media/index.js && node --check src/media/store.js && node --check src/media/validation.js && node --check src/business/index.js && node --check src/business/store.js && node --check src/business/outfit.js"
   },
   "devDependencies": {
     "agent-base": "7.1.3",

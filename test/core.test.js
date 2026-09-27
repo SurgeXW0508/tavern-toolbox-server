@@ -23,6 +23,7 @@ function hostRouter() {
         use(fn) { stack.push({ fn }); },
         get(path, fn) { stack.push({ method: 'GET', path, fn }); },
         post(path, fn) { stack.push({ method: 'POST', path, fn }); },
+        put(path, fn) { stack.push({ method: 'PUT', path, fn }); },
         delete(path, fn) { stack.push({ method: 'DELETE', path, fn }); },
     };
 }
@@ -121,10 +122,10 @@ test('real HTTP discovery: exact product, read-only routes, version contract and
     const status = await request(app.url, '/v1/status', { protocol: '1.0' });
     assert.equal(status.code, 200);
     assert.deepEqual(status.body.meta.protocol, { major: 1, minor: 0 });
-    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'media.assets']);
+    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'media.assets', 'business.collections']);
     assert.deepEqual(status.body.data.capabilities[0], fixture.status.data.capabilities[0]);
     assert.deepEqual(status.body.data.effectivePolicy, fixture.status.data.effectivePolicy);
-    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'media']);
+    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'media', 'business']);
     assert.equal(status.body.data.modules[1].state, 'disabled');
     assert.equal(status.body.data.core.state, 'ready');
     assert.equal(status.body.data.effectivePolicy.unsafeRequestsEnabled, false);
@@ -330,6 +331,66 @@ test('authenticated Media serving is scoped to the current ST user with no brows
         headers: { ...headers, 'x-test-user': 'alice' } });
     assert.equal(destroy.status, 200);
     assert.equal((await fetch(`${app.url}${original}`, { headers: { 'x-test-user': 'alice' } })).status, 404);
+});
+
+test('installed-host Business collection uses trusted user, explicit schema, CSRF and stale revision conflict', async t => {
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config', read: async () => JSON.stringify({
+        schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] },
+    }) } });
+    const app = await sillyTavernHost(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    const route = '/v1/business/collections/outfit';
+    const read = user => request(app.url, `${route}?schemaVersion=1`, { user, protocol: '1.0' });
+    const initial = await read('alice');
+    assert.equal(initial.code, 200);
+    assert.equal(initial.body.data.revision, 0);
+    assert.deepEqual(initial.body.data.document, { assets: [], persons: [], wearStates: [] });
+    const headers = { Origin: 'https://example.invalid', 'X-CSRF-Token': 'fixture-csrf-token',
+        'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' };
+    const commit = (user, revision, options = {}) => request(app.url, route, { user, protocol: '1.0',
+        method: 'PUT', headers: { ...headers, ...options.headers }, body: JSON.stringify({
+            schemaVersion: 1, revision, document: { assets: [], persons: [], wearStates: [] },
+        }) });
+    assert.equal((await commit('alice', 0, { headers: { 'X-CSRF-Token': 'wrong' } })).body.error.code, 'CSRF_REJECTED');
+    assert.equal((await commit('alice', 0)).body.data.revision, 1);
+    const stale = await commit('alice', 0);
+    assert.equal(stale.code, 409);
+    assert.equal(stale.body.error.code, 'BUSINESS_CONFLICT');
+    assert.equal((await read('alice')).body.data.revision, 1);
+    assert.equal((await read('bob')).body.data.revision, 0);
+    assert.equal((await request(app.url, `${route}?schemaVersion=2`, { protocol: '1.0' })).body.error.code,
+        'BUSINESS_SCHEMA_INCOMPATIBLE');
+    assert.equal((await request(app.url, `${route}?schemaVersion=1`, { user: '', protocol: '1.0' })).code, 403);
+});
+
+test('installed-host Outfit record resolves Server MediaRef; business removal retains Media asset', async t => {
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config', read: async () => JSON.stringify({
+        schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] },
+    }) } });
+    const app = await sillyTavernHost(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    const headers = { 'x-test-user': 'alice', 'X-TTB-Protocol': '1.0', Origin: 'https://example.invalid',
+        'X-CSRF-Token': 'fixture-csrf-token', 'Sec-Fetch-Site': 'same-origin' };
+    const bytes = await sharp({ create: { width: 3, height: 3, channels: 3, background: '#0088ff' } }).png().toBuffer();
+    const upload = await fetch(`${app.url}/v1/media/import/local`, { method: 'POST',
+        headers: { ...headers, 'Content-Type': 'image/png' }, body: bytes });
+    assert.equal(upload.status, 200);
+    const ref = (await upload.json()).data.mediaRef;
+    const document = { assets: [{ id: 'item-one', kind: 'item', name: 'Coat', category: '',
+        tags: [], sceneTags: [], ownerPersonId: '', scope: { type: 'global', id: '', label: 'Global' },
+        mediaRef: ref, createdAt: '2026-01-01', updatedAt: '2026-01-01', itemType: 'clothing',
+        wearSlot: 'outer-layer', modelDescription: 'Blue coat' }], persons: [], wearStates: [] };
+    const put = (user, revision, value) => fetch(`${app.url}/v1/business/collections/outfit`, { method: 'PUT',
+        headers: { ...headers, 'x-test-user': user, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schemaVersion: 1, revision, document: value }) });
+    assert.equal((await put('bob', 0, document)).status, 422);
+    const committed = await put('alice', 0, document);
+    assert.equal(committed.status, 200);
+    assert.deepEqual((await committed.json()).data.document.assets[0].mediaRef, ref);
+    assert.equal((await put('alice', 1, { assets: [], persons: [], wearStates: [] })).status, 200);
+    const served = await fetch(`${app.url}/v1/media/assets/${ref.assetId}/original`, { headers });
+    assert.equal(served.status, 200);
+    assert.deepEqual(Buffer.from(await served.arrayBuffer()), bytes);
 });
 
 test('SillyTavern 1.19.0 middleware leaves raw PNG readable behind an empty body placeholder', async t => {

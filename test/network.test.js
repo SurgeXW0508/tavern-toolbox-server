@@ -10,6 +10,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { requireOpenSslFixture } from './fixtures/openssl.js';
 import { validatePolicy } from '../src/config.js';
 import { approveDestination, parseTarget, publicUnicast } from '../src/network/destination.js';
 import { createNetwork } from '../src/network/index.js';
@@ -133,6 +134,7 @@ test('HTTP proxy receives approved IP absolute-form while Host keeps original id
 });
 
 test('HTTPS CONNECT pins the validated IP and preserves hostname SNI and certificate verification', async t => {
+    if (!requireOpenSslFixture(t)) return;
     const folder = await mkdtemp(path.join(tmpdir(), 'ttb-network-'));
     t.after(() => rm(folder, { recursive: true, force: true }));
     execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(folder, 'key.pem'),

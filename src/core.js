@@ -6,6 +6,8 @@ import { userContext, mutationGate, setPrivateHeaders } from './security.js';
 import { createNetwork } from './network/index.js';
 import { NetworkFailure } from './network/destination.js';
 import { createMedia, MediaFailure } from './media/index.js';
+import { createBusiness, BusinessFailure } from './business/index.js';
+import { MAX_BUSINESS_BYTES } from './business/store.js';
 
 export const PRODUCT = 'tavern-toolbox-server';
 export const SERVER_VERSION = createRequire(import.meta.url)('../package.json').version;
@@ -46,6 +48,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(network.definition);
     const media = createMedia(config, network);
     registry.register(media.definition);
+    const business = createBusiness(config, media);
+    registry.register(business.definition);
     registerModules?.(registry); // Test fixture or a future trusted composition root; not callable over HTTP.
     await registry.initialize();
     let stopped = false;
@@ -261,6 +265,45 @@ export async function createCore({ policyOptions, registerModules, networkOption
         router.post('/v1/media/assets/:id/rebuild-thumbnail', mediaRoute('rebuildThumbnail', { mutation: true }));
         router.post('/v1/media/maintenance/cleanup', mediaRoute('cleanupTechnicalGarbage', { mutation: true }));
         router.get('/v1/media/assets/:id/:variant', mediaRoute('read', { binary: true }));
+        const businessRoute = mutation => async (req, res) => {
+            const { requestId, context, start } = res.locals.ttbRequest;
+            let code = 'OK';
+            try {
+                if (req.get('X-TTB-Protocol') !== '1.0') throw new BusinessFailure('PROTOCOL_INCOMPATIBLE');
+                if (mutation && !mutationGate(req, config.policy.core.allowedOrigins))
+                    throw new BusinessFailure('CSRF_REJECTED');
+                const capability = (await registry.snapshot(context)).capabilities.find(item => item.id === 'business.collections');
+                if (capability?.operations.find(item => item.id === (mutation ? 'commit' : 'read'))?.available !== true)
+                    throw new BusinessFailure('CAPABILITY_UNAVAILABLE');
+                const schemaVersion = mutation ? req.body?.schemaVersion : Number(req.query?.schemaVersion);
+                if (mutation) {
+                    if (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers?.['content-type'] || '')
+                        || !req.body || typeof req.body !== 'object' || Array.isArray(req.body)
+                        || Object.keys(req.body).sort().join(',') !== 'document,revision,schemaVersion'
+                        || Buffer.byteLength(JSON.stringify(req.body)) > MAX_BUSINESS_BYTES + 4096)
+                        throw new BusinessFailure('INVALID_REQUEST');
+                }
+                const result = mutation
+                    ? await business.commit(context, req.params.namespace, schemaVersion, req.body.revision, req.body.document)
+                    : await business.read(context, req.params.namespace, schemaVersion);
+                return send(res, 200, result, requestId, true, MAX_BUSINESS_BYTES + 65536);
+            } catch (error) {
+                code = error instanceof BusinessFailure ? error.code : 'BUSINESS_UNAVAILABLE';
+                const statusCode = { INVALID_REQUEST: 400, PROTOCOL_INCOMPATIBLE: 409,
+                    CSRF_REJECTED: 403, BUSINESS_CONSUMER_UNAVAILABLE: 404,
+                    BUSINESS_SCHEMA_INCOMPATIBLE: 409, BUSINESS_STORAGE_INCOMPATIBLE: 409,
+                    BUSINESS_CONFLICT: 409, BUSINESS_DATA_INVALID: 422,
+                    BUSINESS_MEDIA_UNAVAILABLE: 422, BUSINESS_TOO_LARGE: 413,
+                    CAPABILITY_UNAVAILABLE: 503, BUSINESS_UNAVAILABLE: 503 }[code] || 503;
+                return send(res, statusCode, failure(code, '业务集合操作失败'), requestId, true, 4096);
+            } finally {
+                logger.info?.({ service: PRODUCT, time: new Date().toISOString(), severity: 'info', requestId,
+                    moduleId: 'business', operation: mutation ? 'commit' : 'read',
+                    durationMs: now() - start, code, outcome: 'notApplicable' });
+            }
+        };
+        router.get('/v1/business/collections/:namespace', businessRoute(false));
+        router.put('/v1/business/collections/:namespace', businessRoute(true));
         router.use((req, res) => {
             const knownPath = req.path === '/status' || req.path === '/v1/status' || req.path === '/v1/network/fetch';
             const { requestId } = res.locals.ttbRequest;
