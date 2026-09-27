@@ -1,6 +1,6 @@
-# Phase 4 Business Collection candidate
+# Phase 4 Business Collection
 
-This is a code-side candidate, not an accepted installed-host release. The Business module depends on Core, not Media or Network. An unavailable Business Store does not make those modules unavailable. Its generic SQLite Store recognizes a trusted ST user root, consumer namespace, document schema version, collection revision, and bounded opaque document. Outfit semantics are confined to `src/business/outfit.js`.
+The Business module depends on Core, not Media or Network. An unavailable Business Store does not make those modules unavailable. Its generic SQLite Store recognizes a trusted ST user root, consumer namespace, document schema version, collection revision, and bounded opaque document. Outfit semantics are confined to `src/business/outfit.js`. The official ST 1.19.0 Docker/NAS acceptance scope is recorded in [Phase 4 acceptance](../PHASE-4-ACCEPTANCE.md).
 
 Runtime: Core and Network can run on Node >=20; Phase 4 Business requires Node >=22.13 for `node:sqlite`, independently of Media (which requires Node >=22.13 and Sharp). On older Node, Business reports unavailable without changing the package-wide >=20 engine or disabling Core/Network.
 
@@ -23,6 +23,6 @@ Commit also requires the trusted same-origin Origin and active ST CSRF token. Th
 
 The Server Media Store remains separate. A successfully imported Media Asset may remain unreferenced if Business commit fails. A cold backup must include both Business and Media roots while SillyTavern is stopped; a code tag does not restore data. A damaged or missing Media Asset never removes its Business record.
 
-## Verification still required
+## Verification boundaries
 
-Automated tests cover SQLite revision races, durable cold copy, user-root isolation, business graph validation, MediaRef ownership, Business/Media lifecycle separation and an Express middleware harness shaped like official SillyTavern 1.19.0. The real installed-host vertical slice, second device, editor conflict UX, and missing-media display require NAS acceptance before a v0.4.0 release.
+Automated tests cover SQLite revision races, durable cold copy, user-root isolation, business graph validation, MediaRef ownership, Business/Media lifecycle separation and an Express middleware harness shaped like official SillyTavern 1.19.0. The real installed-host vertical slice, second device, editor conflict UX, missing-media repair and cold restore passed as described in [Phase 4 acceptance](../PHASE-4-ACCEPTANCE.md). Real multi-user isolation was not exercised because this host has one ST user; the trusted user-root boundary remains an automated test claim.
