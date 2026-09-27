@@ -2,6 +2,8 @@
 
 This is a code-side candidate, not an accepted installed-host release. The Business module depends on Core, not Media or Network. An unavailable Business Store does not make those modules unavailable. Its generic SQLite Store recognizes a trusted ST user root, consumer namespace, document schema version, collection revision, and bounded opaque document. Outfit semantics are confined to `src/business/outfit.js`.
 
+Runtime: Core and Network can run on Node >=20; Phase 4 Business requires Node >=22.13 for `node:sqlite`, independently of Media (which requires Node >=22.13 and Sharp). On older Node, Business reports unavailable without changing the package-wide >=20 engine or disabling Core/Network.
+
 ## Persistence and versions
 
 Each authenticated ST user's `req.user.directories.root` owns `tavern-toolbox-server/business-v1/collections.sqlite`. The internal SQLite schema is v1. The Outfit Business document schema is separately v1; `.ttoutfit` package v8 and Local IndexedDB versions do not determine either Server version. A newer unknown storage version or incompatible Outfit schema fails closed without clearing data. The collection uses a SQLite transaction and an integer revision. Read of an empty collection returns revision 0 without creating a row; a commit with expected revision 0 creates it. Every subsequent commit must provide the exact revision read by the client. A stale write returns `BUSINESS_CONFLICT` and changes nothing.
