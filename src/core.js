@@ -174,17 +174,30 @@ export async function createCore({ policyOptions, registerModules, networkOption
                     const release = media.reserveImport();
                     try {
                         const type = String(req.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase();
+                        // ST 1.19.0 body-parser leaves an empty req.body for non-JSON raw uploads
+                        // without consuming the request stream. Accept only that placeholder.
+                        const hostPlaceholder = req.body && Object.getPrototypeOf(req.body) === Object.prototype
+                            && Reflect.ownKeys(req.body).length === 0;
                         if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/octet-stream'].includes(type)
-                            || req.body !== undefined && !Buffer.isBuffer(req.body)) throw new MediaFailure('INVALID_REQUEST');
+                            || req.body !== undefined && !Buffer.isBuffer(req.body) && !hostPlaceholder)
+                            throw new MediaFailure('INVALID_REQUEST');
                         const limit = config.policy.media.maxBytes;
-                        if (Number(req.headers['content-length']) > limit) throw new MediaFailure('MEDIA_TOO_LARGE');
+                        const lengthHeader = req.headers['content-length'];
+                        const declaredLength = lengthHeader === undefined ? null : Number(lengthHeader);
+                        if (lengthHeader !== undefined && (!/^\d+$/.test(lengthHeader) || !Number.isSafeInteger(declaredLength)))
+                            throw new MediaFailure('INVALID_REQUEST');
+                        if (declaredLength > limit) throw new MediaFailure('MEDIA_TOO_LARGE');
                         let size = 0; const chunks = [];
+                        if (!Buffer.isBuffer(req.body) && (req.readableEnded || req.destroyed))
+                            throw new MediaFailure('INVALID_REQUEST');
                         const incoming = Buffer.isBuffer(req.body) ? [req.body] : req;
                         for await (const chunk of incoming) {
                             size += chunk.length;
                             if (size > limit) throw new MediaFailure('MEDIA_TOO_LARGE');
                             chunks.push(chunk);
                         }
+                        if (!size || declaredLength !== null && size !== declaredLength)
+                            throw new MediaFailure('INVALID_REQUEST');
                         result = await media.importBytes(context, Buffer.concat(chunks), type, true);
                     } finally { release(); }
                 } else if (operation === 'remoteImport') {

@@ -12,6 +12,9 @@ import { info } from '../index.js';
 import { userContext } from '../src/security.js';
 import { Readable } from 'node:stream';
 import sharp from 'sharp';
+import express from 'express';
+import bodyParser from 'body-parser';
+import multer from 'multer';
 
 function hostRouter() {
     const stack = [];
@@ -57,6 +60,38 @@ async function host(core) {
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
     return { server, dataRoot, url: `http://127.0.0.1:${server.address().port}`,
+        close: async () => { await new Promise(resolve => server.close(resolve)); await rm(dataRoot, { recursive: true, force: true }); } };
+}
+
+async function sillyTavernHost(core) {
+    const dataRoot = await mkdtemp(path.join(tmpdir(), 'ttb-st-upload-test-'));
+    const app = express(), observed = [];
+    // SillyTavern 1.19.0 server-main.js installs these before the native plugin router.
+    app.use(bodyParser.json({ limit: '500mb' }));
+    app.use(bodyParser.urlencoded({ extended: true, limit: '500mb' }));
+    app.use((req, _res, next) => {
+        req.session = { csrfToken: 'fixture-csrf-token' };
+        req.user = req.headers['x-test-user'] ? {
+            profile: { handle: req.headers['x-test-user'], enabled: true },
+            directories: { root: path.join(dataRoot, req.headers['x-test-user']) },
+        } : undefined;
+        next();
+    });
+    app.use(multer({ dest: dataRoot, limits: { fieldSize: 500 * 1024 * 1024 } }).single('avatar'));
+    app.use(async (req, _res, next) => {
+        if (req.path.endsWith('/v1/media/import/local')) {
+            observed.push({ body: req.body, readableEnded: req.readableEnded });
+            if (req.headers['x-test-consume'] === 'yes') for await (const _ of req) { /* simulate a consuming host */ }
+            if (req.headers['x-test-object'] === 'yes') req.body = { unexpected: true };
+        }
+        next();
+    });
+    const router = express.Router();
+    core.attach(router);
+    app.use('/api/plugins/tavern-toolbox-server', router);
+    const server = app.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    return { observed, url: `http://127.0.0.1:${server.address().port}/api/plugins/tavern-toolbox-server`,
         close: async () => { await new Promise(resolve => server.close(resolve)); await rm(dataRoot, { recursive: true, force: true }); } };
 }
 
@@ -295,6 +330,60 @@ test('authenticated Media serving is scoped to the current ST user with no brows
         headers: { ...headers, 'x-test-user': 'alice' } });
     assert.equal(destroy.status, 200);
     assert.equal((await fetch(`${app.url}${original}`, { headers: { 'x-test-user': 'alice' } })).status, 404);
+});
+
+test('SillyTavern 1.19.0 middleware leaves raw PNG readable behind an empty body placeholder', async t => {
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config', read: async () => JSON.stringify({
+        schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] },
+    }) } });
+    const app = await sillyTavernHost(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    const pixels = Buffer.alloc(80 * 80 * 3);
+    let seed = 0x12345678;
+    for (let i = 0; i < pixels.length; i++) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        pixels[i] = seed >>> 24;
+    }
+    const png = await sharp(pixels, { raw: { width: 80, height: 80, channels: 3 } }).png().toBuffer();
+    assert.ok(png.length > 1000);
+    const headers = { 'X-TTB-Protocol': '1.0', Origin: 'https://example.invalid',
+        'Sec-Fetch-Site': 'same-origin', 'X-CSRF-Token': 'fixture-csrf-token',
+        'Content-Type': 'image/png', 'x-test-user': 'alice' };
+    const upload = extra => request(app.url, '/v1/media/import/local', { method: 'POST', user: null,
+        headers: { ...headers, ...extra }, body: png });
+    const accepted = await upload();
+    assert.deepEqual(Object.keys(app.observed[0].body), []);
+    assert.equal(app.observed[0].readableEnded, false, 'the raw stream reaches the plugin unread');
+    assert.equal(accepted.code, 200);
+    assert.equal(accepted.body.data.mediaRef.provider, 'server');
+    const original = await fetch(`${app.url}/v1/media/assets/${accepted.body.data.mediaRef.assetId}/original`,
+        { headers: { 'x-test-user': 'alice' } });
+    assert.deepEqual(Buffer.from(await original.arrayBuffer()), png);
+
+    const badCsrf = await upload({ 'X-CSRF-Token': 'wrong' });
+    assert.equal(badCsrf.code, 403);
+    assert.equal(badCsrf.body.error.code, 'CSRF_REJECTED');
+    const badOrigin = await upload({ Origin: 'https://other.invalid' });
+    assert.equal(badOrigin.code, 403);
+    const consumed = await upload({ 'x-test-consume': 'yes' });
+    assert.equal(consumed.code, 400);
+    assert.equal(consumed.body.error.code, 'INVALID_REQUEST');
+    const wrongBody = await upload({ 'x-test-object': 'yes' });
+    assert.equal(wrongBody.code, 400);
+    assert.equal(wrongBody.body.error.code, 'INVALID_REQUEST');
+    const wrongMime = await upload({ 'Content-Type': 'image/jpeg' });
+    assert.equal(wrongMime.code, 415);
+    assert.equal(wrongMime.body.error.code, 'MIME_MISMATCH');
+
+    const boundedCore = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config',
+        read: async () => JSON.stringify({ schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] },
+            media: { maxBytes: 1024 } }) } });
+    const bounded = await sillyTavernHost(boundedCore);
+    t.after(async () => { await bounded.close(); await boundedCore.shutdown(); });
+    const tooLarge = await request(bounded.url, '/v1/media/import/local', { method: 'POST', user: null,
+        headers, body: png });
+    assert.equal(tooLarge.code, 413);
+    assert.equal(tooLarge.body.error.code, 'MEDIA_TOO_LARGE');
 });
 
 test('proxy failure degrades Network but permits recovery without a Server restart', async t => {
