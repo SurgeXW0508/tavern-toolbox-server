@@ -1,5 +1,9 @@
 # Tavern Toolbox Server
 
+## Phase 4 development candidate
+
+The `stage/phase-4-business-outfit` branch adds an independent Business Collection module and the first Outfit Consumer. Its protocol, persistence and backup boundary are in [Business Collection](docs/BUSINESS-COLLECTION.md). This is awaiting installed-host acceptance; the latest accepted release remains `v0.3.0`. Do not treat a code-side check as permission to release or migrate a live NAS. No Local Outfit data is migrated automatically.
+
 ## Releases and rollback
 
 The accepted Phase 3 Media Foundation is `v0.3.0`; Phase 2 Network Foundation is `v0.2.0`. Merging a reviewed version bump to `main` runs `.github/workflows/release.yml`: it verifies privacy and tests, creates an immutable annotated `vX.Y.Z` tag at the exact `main` commit, and publishes a GitHub Release with a source archive and SHA-256 checksum. Re-running the workflow never moves an existing tag. Commits with the same package version do not create another release; bump `package.json` and the two root versions in `package-lock.json` only after the next stage is accepted. Pin an installation to a tag or exact commit to roll back. Back up the user data separately; a code tag does not roll back a Media database or Original files.
