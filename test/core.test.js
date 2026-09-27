@@ -79,6 +79,7 @@ test('real HTTP discovery: exact product, read-only routes, version contract and
     assert.equal(boot.body.data.product, info.id);
     assert.deepEqual(boot.body.data, fixture.bootstrap.data);
     assert.equal(boot.body.data.serverVersion, SERVER_VERSION);
+    assert.equal(SERVER_VERSION, JSON.parse(await readFile(new URL('../package.json', import.meta.url))).version);
     assert.deepEqual(boot.body.data.protocols, [{ major: 1, minMinor: 0, maxMinor: 0 }]);
     assert.equal(boot.headers.get('cache-control'), 'no-store');
     assert.ok(boot.body.meta.requestId);
@@ -334,6 +335,52 @@ test('proxy failure degrades Network but permits recovery without a Server resta
     assert.deepEqual(Buffer.from(await recovered.arrayBuffer()), gif);
     assert.equal(attempts, 2, 'the degraded operation actually retries the proxy');
     assert.equal((await status()).modules.find(item => item.id === 'network').state, 'ready');
+});
+
+test('Media Remote Import retries through degraded Network after proxy recovery', async t => {
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#ee4400' } }).png().toBuffer();
+    let proxyAvailable = false, attempts = 0;
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config', read: async () => JSON.stringify({
+        schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] },
+        network: { enabled: true, transport: 'http-proxy', proxyUrl: 'http://proxy.example.com:8080',
+            destinationPolicy: 'allowlist-only', allowlist: ['example.invalid'] },
+    }) }, networkOptions: {
+        resolver: { resolve4: async () => ['93.184.216.34'], resolve6: async () => [] },
+        open: async () => {
+            attempts++;
+            if (!proxyAvailable) throw new Error('proxy unavailable');
+            const response = Readable.from([png]); response.statusCode = 200;
+            response.headers = { 'content-type': 'image/png' };
+            return { response, close() { response.destroy(); } };
+        },
+    } });
+    const app = await host(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    const post = () => request(app.url, '/v1/media/import/remote', { method: 'POST', protocol: '1.0', headers: {
+        'Content-Type': 'application/json', Origin: 'https://example.invalid',
+        'Sec-Fetch-Site': 'same-origin', 'X-CSRF-Token': 'fixture-csrf-token',
+    }, body: JSON.stringify({ url: 'https://example.invalid/photo.png' }) });
+    const status = async () => (await request(app.url, '/v1/status', { protocol: '1.0' })).body.data;
+    const remoteAvailable = snapshot => snapshot.capabilities.find(item => item.id === 'media.assets')
+        .operations.find(item => item.id === 'remoteImport').available;
+
+    const failed = await post();
+    assert.equal(failed.code, 503);
+    assert.equal(failed.body.error.code, 'TRANSPORT_UNAVAILABLE');
+    const degraded = await status();
+    assert.equal(degraded.modules.find(item => item.id === 'network').state, 'degraded');
+    assert.equal(degraded.modules.find(item => item.id === 'media').state, 'ready');
+    assert.equal(remoteAvailable(degraded), true);
+    proxyAvailable = true;
+    const recovered = await post();
+    assert.equal(recovered.code, 200);
+    assert.equal(recovered.body.data.mediaRef.provider, 'server');
+    assert.equal(attempts, 2, 'Media must allow Network to retry the recovered proxy');
+    assert.equal((await status()).modules.find(item => item.id === 'network').state, 'ready');
+    const original = await fetch(`${app.url}/v1/media/assets/${recovered.body.data.mediaRef.assetId}/original`,
+        { headers: { 'x-test-user': 'alice' } });
+    assert.equal(original.status, 200);
+    assert.deepEqual(Buffer.from(await original.arrayBuffer()), png);
 });
 
 test('real HTTP client disconnect aborts the outbound operation', async t => {

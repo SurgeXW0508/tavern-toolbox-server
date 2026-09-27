@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { loadPolicy, policyRevision } from './config.js';
 import { CapabilityRegistry } from './registry.js';
 import { userContext, mutationGate, setPrivateHeaders } from './security.js';
@@ -7,7 +8,7 @@ import { NetworkFailure } from './network/destination.js';
 import { createMedia, MediaFailure } from './media/index.js';
 
 export const PRODUCT = 'tavern-toolbox-server';
-export const SERVER_VERSION = '0.1.0';
+export const SERVER_VERSION = createRequire(import.meta.url)('../package.json').version;
 const PROTOCOL = Object.freeze({ major: 1, minor: 0 });
 const RANGES = Object.freeze([{ major: 1, minMinor: 0, maxMinor: 0 }]);
 const MAX_MODULES = 64;

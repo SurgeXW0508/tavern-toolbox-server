@@ -51,9 +51,10 @@ export function createMedia(config, network) {
             operationAvailability: () => {
                 const mutations = config.policy.core.allowedOrigins.length > 0;
                 const networkState = network.definition.health().state;
+                const networkAvailable = networkState === 'ready' || networkState === 'degraded';
                 return { localImport: { available: mutations, reasonCode: 'ORIGIN_POLICY_MISSING' },
-                    remoteImport: { available: mutations && networkState === 'ready',
-                        reasonCode: networkState !== 'ready' ? 'NETWORK_UNAVAILABLE' : 'ORIGIN_POLICY_MISSING' },
+                    remoteImport: { available: mutations && networkAvailable,
+                        reasonCode: !networkAvailable ? 'NETWORK_UNAVAILABLE' : 'ORIGIN_POLICY_MISSING' },
                     delete: { available: mutations, reasonCode: 'ORIGIN_POLICY_MISSING' },
                     rebuildThumbnail: { available: mutations, reasonCode: 'ORIGIN_POLICY_MISSING' },
                     cleanupTechnicalGarbage: { available: mutations, reasonCode: 'ORIGIN_POLICY_MISSING' } };
@@ -92,7 +93,7 @@ export function createMedia(config, network) {
             const release = reserveImport();
             try {
                 const state = network.definition.health().state;
-                if (state !== 'ready') throw new MediaFailure('NETWORK_UNAVAILABLE');
+                if (state !== 'ready' && state !== 'degraded') throw new MediaFailure('NETWORK_UNAVAILABLE');
                 const result = await network.fetchImage(url, context.contextId, signal);
                 return await importBytes(context, result.body, result.mime, true);
             } finally { release(); }

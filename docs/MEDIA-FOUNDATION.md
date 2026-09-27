@@ -30,7 +30,7 @@ All paths below are relative to `/api/plugins/tavern-toolbox-server`. JSON reque
 | Rebuild | `POST /v1/media/assets/:id/rebuild-thumbnail` | Rebuilds Derived from Original without changing MediaRef |
 | Maintenance | `POST /v1/media/maintenance/cleanup` | Removes only physical orphan files and expired staging |
 
-Media registers independently of Network and advertises `media.assets` with operation-level availability. Network failure affects Remote Import; Local Import and existing Reads remain available. An explicitly requested Server write never falls back to IndexedDB. Remote URL, supplied filename and content digest do not become MediaRef identity. Animated GIF Original is preserved; animated WebP and APNG are explicitly rejected in this first profile. SVG, Video, Audio and arbitrary files are unsupported.
+Media registers independently of Network and advertises `media.assets` with operation-level availability. A proxy transport failure degrades Network, but Remote Import remains available for a real retry after proxy recovery; disabled or unavailable Network prevents Remote Import. Local Import and existing Reads remain available. An explicitly requested Server write never falls back to IndexedDB. Remote URL, supplied filename and content digest do not become MediaRef identity. Animated GIF Original is preserved; animated WebP and APNG are explicitly rejected in this first profile. SVG, Video, Audio and arbitrary files are unsupported.
 
 ## Current verification boundary
 

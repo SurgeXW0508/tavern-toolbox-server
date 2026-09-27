@@ -194,7 +194,8 @@ test('Media is independent of Network and remote import uses its bounded fetch r
     assert.equal((await media.read(context, local.mediaRef.assetId)).bytes.length, bytes.length);
     await assert.rejects(media.remoteImport(context, 'https://example.com/image.png'), { code: 'NETWORK_UNAVAILABLE' });
     assert.equal(calls, 0);
-    network.definition.health = () => ({ state: 'ready' });
+    network.definition.health = () => ({ state: 'degraded' });
+    assert.equal(media.definition.capabilities[0].operationAvailability().remoteImport.available, true);
     const remote = await media.remoteImport(context, 'https://example.com/image.png');
     assert.deepEqual(remote.mediaRef, local.mediaRef);
     assert.equal(calls, 1);
