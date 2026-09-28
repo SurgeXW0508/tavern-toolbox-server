@@ -1,5 +1,11 @@
 # Tavern Toolbox Server
 
+## Phase 5 Character image localization candidate
+
+The `stage/phase-5-remote-image` branch adds `localization.characters` without changing Protocol 1.0 or the Phase 4 release. The authenticated per-user Catalog stores Character Scopes, SHA-256 identities of exact remote locators, and standard Server MediaRefs. It does not store source URLs or own character cards. Explicit Localize uses the existing policy-controlled Network remote import, then commits the Binding with a revision check; failed import or commit leaves the old Binding intact. Unlocalize, replacement, and character deletion never hard-delete Media.
+
+An avatar filename alone can be reused after a character is deleted. The Server checks the current file instance under the trusted ST user's character directory; a missing or changed instance detaches the previous Scope. Rename of the same file instance follows the Scope. A restored backup or an atomic host rewrite may change that instance and require explicit manual rebind. This conservative behavior and the actual NAS file metadata must be verified before release. Group chats may use transient Network image access, but character localization requires a clear single-character identity. This candidate has not completed installed-host acceptance.
+
 ## Phase 4 Business Provider and Outfit
 
 Release `v0.4.0` adds an independent Business Collection module and the first complete Outfit Consumer. Its protocol, persistence and backup boundary are in [Business Collection](docs/BUSINESS-COLLECTION.md); the official SillyTavern 1.19.0 Docker/NAS results and their limits are in [Phase 4 acceptance](PHASE-4-ACCEPTANCE.md). No Local Outfit data is migrated automatically. Business ownership is separate from Server Media ownership.

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { once } from 'node:events';
 import path from 'node:path';
@@ -92,7 +92,7 @@ async function sillyTavernHost(core) {
     app.use('/api/plugins/tavern-toolbox-server', router);
     const server = app.listen(0, '127.0.0.1');
     await once(server, 'listening');
-    return { observed, url: `http://127.0.0.1:${server.address().port}/api/plugins/tavern-toolbox-server`,
+    return { observed, dataRoot, url: `http://127.0.0.1:${server.address().port}/api/plugins/tavern-toolbox-server`,
         close: async () => { await new Promise(resolve => server.close(resolve)); await rm(dataRoot, { recursive: true, force: true }); } };
 }
 
@@ -122,15 +122,40 @@ test('real HTTP discovery: exact product, read-only routes, version contract and
     const status = await request(app.url, '/v1/status', { protocol: '1.0' });
     assert.equal(status.code, 200);
     assert.deepEqual(status.body.meta.protocol, { major: 1, minor: 0 });
-    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'media.assets', 'business.collections']);
+    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'media.assets', 'business.collections', 'localization.characters']);
     assert.deepEqual(status.body.data.capabilities[0], fixture.status.data.capabilities[0]);
     assert.deepEqual(status.body.data.effectivePolicy, fixture.status.data.effectivePolicy);
-    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'media', 'business']);
+    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'media', 'business', 'localization']);
     assert.equal(status.body.data.modules[1].state, 'disabled');
     assert.equal(status.body.data.core.state, 'ready');
     assert.equal(status.body.data.effectivePolicy.unsafeRequestsEnabled, false);
     assert.equal((await request(app.url, '/status', { method: 'POST' })).code, 405);
     assert.equal((await request(app.url, '/proxy?url=http://127.0.0.1')).code, 404);
+});
+
+test('installed-host localization routes require trusted user, host avatar and CSRF', async t => {
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config',
+        read: async () => JSON.stringify({ schemaVersion: 1,
+            core: { allowedOrigins: ['https://example.invalid'] }, network: { enabled: false } }) } });
+    const app = await sillyTavernHost(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    await mkdir(path.join(app.dataRoot, 'alice', 'characters'), { recursive: true });
+    await mkdir(path.join(app.dataRoot, 'bob', 'characters'), { recursive: true });
+    await writeFile(path.join(app.dataRoot, 'alice', 'characters', 'A.png'), 'host avatar');
+    const headers = { 'X-TTB-Protocol': '1.0', 'x-test-user': 'alice',
+        Origin: 'https://example.invalid', 'Sec-Fetch-Site': 'same-origin',
+        'X-CSRF-Token': 'fixture-csrf-token', 'Content-Type': 'application/json' };
+    const read = async (user, hostId) => fetch(app.url + '/v1/localization/catalog?hostId=' + hostId,
+        { headers: { ...headers, 'x-test-user': user } });
+    assert.equal((await (await read('alice', 'A.png')).json()).data.revision, 0);
+    assert.equal((await (await read('bob', 'A.png')).json()).error.code, 'HOST_IDENTITY_UNAVAILABLE');
+    const url = 'https://img.example/private.png?token=secret';
+    const resolve = csrf => fetch(app.url + '/v1/localization/resolve', { method: 'POST',
+        headers: { ...headers, 'X-CSRF-Token': csrf }, body: JSON.stringify({ hostId: 'A.png', url }) });
+    assert.equal((await (await resolve('invalid')).json()).error.code, 'CSRF_REJECTED');
+    const response = await resolve('fixture-csrf-token');
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).data.mediaRef, null);
 });
 
 test('protocol negotiation rejects absent and incompatible versions without business routing', async t => {

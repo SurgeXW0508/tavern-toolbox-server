@@ -8,6 +8,7 @@ import { NetworkFailure } from './network/destination.js';
 import { createMedia, MediaFailure } from './media/index.js';
 import { createBusiness, BusinessFailure } from './business/index.js';
 import { MAX_BUSINESS_BYTES } from './business/store.js';
+import { createLocalization } from './localization/index.js';
 
 export const PRODUCT = 'tavern-toolbox-server';
 export const SERVER_VERSION = createRequire(import.meta.url)('../package.json').version;
@@ -50,6 +51,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(media.definition);
     const business = createBusiness(config, media);
     registry.register(business.definition);
+    const localization = createLocalization(media);
+    registry.register(localization.definition);
     registerModules?.(registry); // Test fixture or a future trusted composition root; not callable over HTTP.
     await registry.initialize();
     let stopped = false;
@@ -304,6 +307,60 @@ export async function createCore({ policyOptions, registerModules, networkOption
         };
         router.get('/v1/business/collections/:namespace', businessRoute(false));
         router.put('/v1/business/collections/:namespace', businessRoute(true));
+        const localizationRoute = operation => async (req, res) => {
+            const { requestId, context, start } = res.locals.ttbRequest;
+            let code = 'OK';
+            const controller = new AbortController();
+            const disconnected = () => { if (!res.writableEnded) controller.abort(); };
+            res.once('close', disconnected);
+            try {
+                if (req.get('X-TTB-Protocol') !== '1.0') throw new BusinessFailure('PROTOCOL_INCOMPATIBLE');
+                if (operation !== 'read' && !mutationGate(req, config.policy.core.allowedOrigins))
+                    throw new BusinessFailure('CSRF_REJECTED');
+                const capability = (await registry.snapshot(context)).capabilities
+                    .find(item => item.id === 'localization.characters');
+                if (capability?.operations.find(item => item.id === operation)?.available !== true)
+                    throw new BusinessFailure('CAPABILITY_UNAVAILABLE');
+                if (operation !== 'read' && (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers?.['content-type'] || '')
+                    || !req.body || typeof req.body !== 'object' || Array.isArray(req.body)
+                    || Buffer.byteLength(JSON.stringify(req.body)) > 4096))
+                    throw new BusinessFailure('INVALID_REQUEST');
+                const body = req.body;
+                const keys = { resolve: 'hostId,url', localize: 'displayName,hostId,revision,url',
+                    unlocalize: 'hostId,revision,url', rebind: 'displayName,hostId,revision,scopeId' };
+                if (operation !== 'read' && Object.keys(body).sort().join(',') !== keys[operation]
+                    || operation !== 'read' && operation !== 'resolve'
+                        && (!Number.isSafeInteger(body.revision) || body.revision < 0))
+                    throw new BusinessFailure('INVALID_REQUEST');
+                const result = operation === 'read' ? await localization.read(context, req.query?.hostId)
+                    : operation === 'resolve' ? await localization.resolve(context, body.hostId, body.url)
+                    : operation === 'localize' ? await localization.localize(context, body, controller.signal)
+                    : operation === 'unlocalize' ? await localization.unlocalize(context, body)
+                    : await localization.rebind(context, body);
+                if (controller.signal.aborted || res.destroyed) return;
+                return send(res, 200, result, requestId, true, MAX_BUSINESS_BYTES + 65536);
+            } catch (error) {
+                code = error instanceof BusinessFailure || error instanceof MediaFailure || error instanceof NetworkFailure
+                    ? error.code : 'LOCALIZATION_UNAVAILABLE';
+                const statusCode = { INVALID_REQUEST: 400, PROTOCOL_INCOMPATIBLE: 409, CSRF_REJECTED: 403,
+                    CAPABILITY_UNAVAILABLE: 503, HOST_IDENTITY_UNAVAILABLE: 409, LOCALIZATION_CONFLICT: 409,
+                    BUSINESS_CONFLICT: 409, LOCALIZATION_SCOPE_CONFLICT: 409, LOCALIZATION_NOT_FOUND: 404,
+                    LOCALIZATION_DATA_INVALID: 422, MEDIA_TOO_LARGE: 413, UNSUPPORTED_MEDIA_TYPE: 415,
+                    INVALID_MEDIA: 422, QUOTA_EXCEEDED: 507, TARGET_NOT_ALLOWED: 403,
+                    REMOTE_UNAVAILABLE: 502, REMOTE_TIMEOUT: 504 }[code] || 503;
+                if (!res.destroyed && !res.headersSent)
+                    return send(res, statusCode, failure(code, '角色图片本地化操作失败'), requestId, true, 4096);
+            } finally {
+                res.off('close', disconnected);
+                logger.info?.({ service: PRODUCT, time: new Date().toISOString(), severity: 'info', requestId,
+                    moduleId: 'localization', operation, durationMs: now() - start, code, outcome: 'notApplicable' });
+            }
+        };
+        router.get('/v1/localization/catalog', localizationRoute('read'));
+        router.post('/v1/localization/resolve', localizationRoute('resolve'));
+        router.post('/v1/localization/localize', localizationRoute('localize'));
+        router.post('/v1/localization/unlocalize', localizationRoute('unlocalize'));
+        router.post('/v1/localization/rebind', localizationRoute('rebind'));
         router.use((req, res) => {
             const knownPath = req.path === '/status' || req.path === '/v1/status' || req.path === '/v1/network/fetch';
             const { requestId } = res.locals.ttbRequest;
