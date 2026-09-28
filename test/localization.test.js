@@ -121,3 +121,23 @@ test('old inode scopes migrate detached and require explicit rebind before servi
     assert.deepEqual((await service.resolve(owner, 'A.png', url)).mediaRef,
         { provider: 'server', assetId: asset });
 });
+
+test('same filename imported with a new create_date never inherits the old binding', async t => {
+    const owner = await user(t);
+    const filename = path.join(owner.userRoot, 'characters', 'A.png');
+    await card(filename, '2025-01-01');
+    const service = createLocalization({ async remoteImport() {
+        return { mediaRef: { provider: 'server', assetId: asset } };
+    } });
+    await service.definition.initialize();
+    t.after(() => service.definition.shutdown());
+    await service.localize(owner, { hostId: 'A.png', displayName: 'A', url, revision: 0 });
+    await unlink(filename);
+    await card(filename, '2026-03-03');
+    const resolved = await service.resolve(owner, 'A.png', url);
+    assert.equal(resolved.mediaRef, null);
+    assert.equal(resolved.uncertain, true);
+    const catalog = await service.read(owner, 'A.png');
+    assert.equal(catalog.current, null);
+    assert.equal(catalog.detached.length, 1);
+});
