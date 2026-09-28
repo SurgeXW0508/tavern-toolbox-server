@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readdir, lstat } from 'node:fs/promises';
+import { readdir, open } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import { BusinessStore, BusinessFailure } from '../business/store.js';
 
-const NAMESPACE = 'character-localization';
+const NAMESPACE = 'character-localization-v2';
+const LEGACY_NAMESPACE = 'character-localization';
 const SCHEMA = 1;
 const MAX_SCOPES = 2000;
 const MAX_BINDINGS = 5000;
@@ -17,7 +19,7 @@ function validate(document) {
     if (!document || Object.keys(document).join(',') !== 'scopes'
         || !Array.isArray(document.scopes) || document.scopes.length > MAX_SCOPES)
         fail('LOCALIZATION_DATA_INVALID');
-    const ids = new Set(), hosts = new Set(), proofs = new Set();
+    const ids = new Set(), hosts = new Set();
     let count = 0;
     for (const scope of document.scopes) {
         if (!scope || Object.keys(scope).sort().join(',') !== 'bindings,createdAt,detachedAt,displayName,hostId,id,proof'
@@ -29,9 +31,9 @@ function validate(document) {
         ids.add(scope.id);
         if (scope.hostId !== null || scope.proof !== null) {
             if (!HOST_ID.test(scope.hostId || '') || !KEY.test(scope.proof || '')
-                || scope.detachedAt !== null || hosts.has(scope.hostId) || proofs.has(scope.proof))
+                || scope.detachedAt !== null || hosts.has(scope.hostId))
                 fail('LOCALIZATION_DATA_INVALID');
-            hosts.add(scope.hostId); proofs.add(scope.proof);
+            hosts.add(scope.hostId);
         } else if (!scope.detachedAt) fail('LOCALIZATION_DATA_INVALID');
         const keys = new Set();
         for (const binding of scope.bindings) {
@@ -46,34 +48,65 @@ function validate(document) {
     if (count > MAX_BINDINGS) fail('LOCALIZATION_DATA_INVALID');
 }
 
-// An avatar filename is reusable after deletion. Its filesystem incarnation is
-// required for automatic continuity; uncertain identities become detached.
+// SillyTavern 1.19.0 atomically replaces PNGs on an ordinary edit, and copies
+// PNGs for Duplicate. Its tEXt chara/ccv3 metadata retains create_date on edit
+// and assigns a new value on import. The host filename deliberately participates
+// in the proof: rename requires explicit rebind rather than a guessed match.
+async function hostProof(userRoot, hostId) {
+    if (!HOST_ID.test(hostId || '')) return null;
+    let file;
+    try {
+        file = await open(path.join(userRoot, 'characters', hostId), constants.O_RDONLY | constants.O_NOFOLLOW);
+        const stat = await file.stat();
+        if (!stat.isFile() || stat.size > 128 * 1024 * 1024) return null;
+        const header = Buffer.alloc(8);
+        if ((await file.read(header, 0, 8, 0)).bytesRead !== 8
+            || !header.equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return null;
+        let offset = 8, metadata = null;
+        const chunk = Buffer.alloc(8);
+        while (offset + 12 <= stat.size) {
+            if ((await file.read(chunk, 0, 8, offset)).bytesRead !== 8) return null;
+            const length = chunk.readUInt32BE(0), type = chunk.toString('ascii', 4, 8);
+            if (offset + 12 + length > stat.size) return null;
+            if (type === 'tEXt' && length <= 2 * 1024 * 1024) {
+                const data = Buffer.alloc(length);
+                if ((await file.read(data, 0, length, offset + 8)).bytesRead !== length) return null;
+                const separator = data.indexOf(0);
+                const name = data.toString('latin1', 0, separator).toLowerCase();
+                if (separator > 0 && (name === 'chara' || name === 'ccv3')) {
+                    const encoded = data.toString('latin1', separator + 1);
+                    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) return null;
+                    const parsed = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+                    if (name === 'ccv3' || metadata === null) metadata = parsed;
+                }
+            }
+            offset += length + 12;
+            if (type === 'IEND') break;
+        }
+        const date = metadata?.create_date;
+        if (typeof date !== 'string' || !date || date.length > 128) return null;
+        return createHash('sha256').update(JSON.stringify([hostId, date])).digest('hex');
+    } catch { return null; }
+    finally { await file?.close(); }
+}
+
 async function inventory(userRoot) {
-    const characters = path.join(userRoot, 'characters');
     const result = new Map();
-    for (const file of await readdir(characters)) {
+    for (const file of await readdir(path.join(userRoot, 'characters'))) {
         if (!HOST_ID.test(file)) continue;
-        const info = await lstat(path.join(characters, file), { bigint: true });
-        if (!info.isFile() || info.birthtimeNs <= 0n || info.ino <= 0n) continue;
-        const proof = createHash('sha256').update(JSON.stringify([
-            String(info.dev), String(info.ino), String(info.birthtimeNs)])).digest('hex');
-        result.set(file, proof);
+        const proof = await hostProof(userRoot, file);
+        if (proof) result.set(file, proof);
     }
     return result;
 }
 
 function reconcile(document, current) {
     let changed = false;
-    const byProof = new Map([...current].map(([id, proof]) => [proof, id]));
     for (const scope of document.scopes) {
         if (!scope.proof) continue;
-        const id = byProof.get(scope.proof);
-        if (!id) {
+        if (current.get(scope.hostId) !== scope.proof) {
             scope.hostId = null; scope.proof = null;
             scope.detachedAt = new Date().toISOString();
-            changed = true;
-        } else if (scope.hostId !== id) {
-            scope.hostId = id;
             changed = true;
         }
     }
@@ -92,6 +125,7 @@ function safeView(snapshot, hostId) {
 export function createLocalization(media) {
     let DatabaseSync, unavailable = false, stopped = false;
     const stores = new Map();
+    const migrations = new Map();
     async function getStore(context) {
         if (stopped || unavailable || !context?.userRoot) fail('LOCALIZATION_UNAVAILABLE');
         if (!stores.has(context.userRoot)) {
@@ -104,8 +138,35 @@ export function createLocalization(media) {
         try { return await stores.get(context.userRoot); }
         catch { stores.delete(context.userRoot); fail('LOCALIZATION_UNAVAILABLE'); }
     }
+    async function migrate(context, target) {
+        if (migrations.has(context.userRoot)) return migrations.get(context.userRoot);
+        const pending = (async () => {
+        // The old inode-based proof is incompatible with atomic host rewrites.
+        // Preserve its bindings as detached scopes, requiring a conscious rebind.
+        const fresh = target.read(NAMESPACE, empty(), SCHEMA);
+        if (fresh.revision === 0) {
+            const legacy = target.read(LEGACY_NAMESPACE, empty(), SCHEMA);
+            if (legacy.revision) {
+                validate(legacy.document);
+                const document = structuredClone(legacy.document);
+                for (const scope of document.scopes) {
+                    scope.hostId = null; scope.proof = null;
+                    scope.detachedAt ||= new Date().toISOString();
+                }
+                try { target.commit(NAMESPACE, SCHEMA, 0, document, validate); }
+                catch (error) {
+                    if (!(error instanceof BusinessFailure) || error.code !== 'BUSINESS_CONFLICT') throw error;
+                }
+            }
+        }
+        })();
+        migrations.set(context.userRoot, pending);
+        try { await pending; }
+        finally { migrations.delete(context.userRoot); }
+    }
     async function snapshot(context) {
         const target = await getStore(context);
+        await migrate(context, target);
         const current = await inventory(context.userRoot);
         for (let attempt = 0; attempt < 3; attempt++) {
             const result = target.read(NAMESPACE, empty(), SCHEMA);
@@ -129,7 +190,7 @@ export function createLocalization(media) {
         definition: { id: 'localization', version: '0.1.0', dependsOn: ['core', 'media'],
             capabilities: [{ id: 'localization.characters', contract: { major: 1, minMinor: 0, maxMinor: 0 },
                 operations: ['read', 'resolve', 'localize', 'unlocalize', 'rebind'].map(id => ({ id, available: true })),
-                constraints: { schemaVersion: SCHEMA, mediaProvider: 'server', identity: 'host-incarnation' } }],
+                constraints: { schemaVersion: SCHEMA, mediaProvider: 'server', identity: 'host-filename-create-date' } }],
             initialize: async () => {
                 try {
                     const [major, minor] = process.versions.node.split('.').map(Number);
@@ -153,12 +214,20 @@ export function createLocalization(media) {
             return safeView(result, hostId);
         },
         async resolve(context, hostId, url) {
-            const { current, result } = await snapshot(context);
-            requireHost(current, hostId);
+            const proof = await hostProof(context.userRoot, hostId);
+            if (!proof) fail('HOST_IDENTITY_UNAVAILABLE');
+            const target = await getStore(context);
+            await migrate(context, target);
+            const result = target.read(NAMESPACE, empty(), SCHEMA);
+            validate(result.document);
             const key = locatorKey(url);
-            const scope = result.document.scopes.find(item => item.hostId === hostId);
+            const scope = result.document.scopes.find(item => item.hostId === hostId && item.proof === proof);
+            const mediaRef = scope?.bindings.find(item => item.locatorKey === key)?.mediaRef || null;
+            const uncertain = !mediaRef && result.document.scopes.some(item =>
+                item.bindings.some(binding => binding.locatorKey === key)
+                && (item.detachedAt !== null || item.hostId === hostId));
             return { scopeId: scope?.id || null,
-                mediaRef: scope?.bindings.find(item => item.locatorKey === key)?.mediaRef || null };
+                mediaRef, uncertain };
         },
         async localize(context, { hostId, displayName, url, revision }, signal) {
             // Import first. A failed import or a later CAS conflict never changes a binding.

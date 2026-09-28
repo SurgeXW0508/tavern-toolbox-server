@@ -15,6 +15,7 @@ import sharp from 'sharp';
 import express from 'express';
 import bodyParser from 'body-parser';
 import multer from 'multer';
+import { card } from './localization-fixture.js';
 
 function hostRouter() {
     const stack = [];
@@ -141,7 +142,7 @@ test('installed-host localization routes require trusted user, host avatar and C
     t.after(async () => { await app.close(); await core.shutdown(); });
     await mkdir(path.join(app.dataRoot, 'alice', 'characters'), { recursive: true });
     await mkdir(path.join(app.dataRoot, 'bob', 'characters'), { recursive: true });
-    await writeFile(path.join(app.dataRoot, 'alice', 'characters', 'A.png'), 'host avatar');
+    await card(path.join(app.dataRoot, 'alice', 'characters', 'A.png'), '2025-01-01');
     const headers = { 'X-TTB-Protocol': '1.0', 'x-test-user': 'alice',
         Origin: 'https://example.invalid', 'Sec-Fetch-Site': 'same-origin',
         'X-CSRF-Token': 'fixture-csrf-token', 'Content-Type': 'application/json' };
