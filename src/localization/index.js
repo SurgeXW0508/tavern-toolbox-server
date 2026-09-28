@@ -107,18 +107,19 @@ export function createLocalization(media) {
     async function snapshot(context) {
         const target = await getStore(context);
         const current = await inventory(context.userRoot);
-        let result = target.read(NAMESPACE, empty(), SCHEMA);
-        validate(result.document);
-        const document = structuredClone(result.document);
-        if (reconcile(document, current)) {
-            try { result = target.commit(NAMESPACE, SCHEMA, result.revision, document, validate); }
-            catch (error) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const result = target.read(NAMESPACE, empty(), SCHEMA);
+            validate(result.document);
+            const document = structuredClone(result.document);
+            if (!reconcile(document, current)) return { target, current, result };
+            try {
+                const committed = target.commit(NAMESPACE, SCHEMA, result.revision, document, validate);
+                return { target, current, result: committed };
+            } catch (error) {
                 if (!(error instanceof BusinessFailure) || error.code !== 'BUSINESS_CONFLICT') throw error;
-                result = target.read(NAMESPACE, empty(), SCHEMA);
-                validate(result.document);
             }
         }
-        return { target, current, result };
+        fail('LOCALIZATION_CONFLICT');
     }
     function requireHost(current, hostId) {
         if (!HOST_ID.test(hostId || '') || !current.has(hostId)) fail('HOST_IDENTITY_UNAVAILABLE');
@@ -161,6 +162,7 @@ export function createLocalization(media) {
         },
         async localize(context, { hostId, displayName, url, revision }, signal) {
             // Import first. A failed import or a later CAS conflict never changes a binding.
+            if (typeof displayName !== 'string' || displayName.length > 160) fail('INVALID_REQUEST');
             const key = locatorKey(url);
             const before = await snapshot(context);
             const proof = requireHost(before.current, hostId);
@@ -172,7 +174,7 @@ export function createLocalization(media) {
             const document = structuredClone(after.result.document);
             let scope = document.scopes.find(item => item.hostId === hostId);
             if (!scope) {
-                scope = { id: randomUUID(), hostId, proof, displayName: String(displayName || '').slice(0, 160),
+                scope = { id: randomUUID(), hostId, proof, displayName,
                     createdAt: new Date().toISOString(), detachedAt: null, bindings: [] };
                 document.scopes.push(scope);
             }
@@ -196,6 +198,8 @@ export function createLocalization(media) {
             return safeView(committed, hostId);
         },
         async rebind(context, { hostId, displayName, scopeId, revision }) {
+            if (typeof displayName !== 'string' || displayName.length > 160 || !UUID.test(scopeId || ''))
+                fail('INVALID_REQUEST');
             const { target, current, result } = await snapshot(context);
             const proof = requireHost(current, hostId);
             if (result.revision !== revision) fail('LOCALIZATION_CONFLICT');
@@ -206,7 +210,7 @@ export function createLocalization(media) {
             if (!targetScope) fail('LOCALIZATION_NOT_FOUND');
             if (existing) document.scopes = document.scopes.filter(item => item !== existing);
             targetScope.hostId = hostId; targetScope.proof = proof; targetScope.detachedAt = null;
-            targetScope.displayName = String(displayName || targetScope.displayName).slice(0, 160);
+            targetScope.displayName = displayName || targetScope.displayName;
             const committed = target.commit(NAMESPACE, SCHEMA, revision, document, validate);
             return safeView(committed, hostId);
         },
