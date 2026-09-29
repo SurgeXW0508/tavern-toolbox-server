@@ -15,6 +15,7 @@ async function user(t) {
 }
 const url = 'https://img.example/a.gif?token=do-not-store';
 const asset = '12345678-1234-4123-8123-123456789abc';
+const updatedAsset = '12345678-1234-4123-8123-123456789abd';
 
 test('edit survives atomic replacement, duplicate stays separate, rename detaches, reimport and manual rebind', async t => {
     const alice = await user(t), bob = await user(t);
@@ -155,4 +156,37 @@ test('missing host create_date disables binding but leaves remote resolution ava
     assert.deepEqual(await service.resolve(owner, 'Legacy.png', url),
         { scopeId: null, mediaRef: null, identityAvailable: false });
     await assert.rejects(service.read(owner, 'Legacy.png'), { code: 'HOST_IDENTITY_UNAVAILABLE' });
+});
+
+test('two clients share one user Catalog; failed update preserves the old MediaRef', async t => {
+    const owner = await user(t);
+    await card(path.join(owner.userRoot, 'characters', 'A.png'), '2025-01-01');
+    let nextAsset = asset, deleted = 0;
+    const media = { async remoteImport() {
+        if (nextAsset === null) throw new Error('REMOTE_TIMEOUT');
+        return { mediaRef: { provider: 'server', assetId: nextAsset } };
+    }, async delete() { deleted++; } };
+    const phone = createLocalization(media), desktop = createLocalization(media);
+    await phone.definition.initialize(); await desktop.definition.initialize();
+    t.after(async () => { await phone.definition.shutdown(); await desktop.definition.shutdown(); });
+    const first = await phone.localize(owner, { hostId: 'A.png', displayName: 'A', url, revision: 0 });
+    assert.deepEqual((await desktop.resolve(owner, 'A.png', url)).mediaRef,
+        { provider: 'server', assetId: asset });
+    nextAsset = null;
+    await assert.rejects(desktop.localize(owner, { hostId: 'A.png', displayName: 'A', url,
+        revision: first.revision }), { message: 'REMOTE_TIMEOUT' });
+    assert.deepEqual((await phone.resolve(owner, 'A.png', url)).mediaRef,
+        { provider: 'server', assetId: asset });
+    nextAsset = updatedAsset;
+    const updated = await desktop.localize(owner, { hostId: 'A.png', displayName: 'A', url,
+        revision: first.revision });
+    assert.deepEqual((await phone.resolve(owner, 'A.png', url)).mediaRef,
+        { provider: 'server', assetId: updatedAsset });
+    await assert.rejects(phone.localize(owner, { hostId: 'A.png', displayName: 'A', url,
+        revision: first.revision }), { code: 'LOCALIZATION_CONFLICT' });
+    assert.deepEqual((await desktop.resolve(owner, 'A.png', url)).mediaRef,
+        { provider: 'server', assetId: updatedAsset });
+    await phone.unlocalize(owner, { hostId: 'A.png', url, revision: updated.revision });
+    assert.equal((await desktop.resolve(owner, 'A.png', url)).mediaRef, null);
+    assert.equal(deleted, 0);
 });
