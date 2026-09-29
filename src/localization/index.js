@@ -214,20 +214,19 @@ export function createLocalization(media) {
             return safeView(result, hostId);
         },
         async resolve(context, hostId, url) {
-            const proof = await hostProof(context.userRoot, hostId);
-            if (!proof) fail('HOST_IDENTITY_UNAVAILABLE');
             const target = await getStore(context);
             await migrate(context, target);
             const result = target.read(NAMESPACE, empty(), SCHEMA);
             validate(result.document);
             const key = locatorKey(url);
+            const proof = await hostProof(context.userRoot, hostId);
+            // A missing host marker disables Character binding, not transient
+            // Network access. The Catalog is still read first so an unavailable
+            // Localization module cannot be mistaken for an unbound image.
+            if (!proof) return { scopeId: null, mediaRef: null, identityAvailable: false };
             const scope = result.document.scopes.find(item => item.hostId === hostId && item.proof === proof);
             const mediaRef = scope?.bindings.find(item => item.locatorKey === key)?.mediaRef || null;
-            const uncertain = !mediaRef && result.document.scopes.some(item =>
-                item.bindings.some(binding => binding.locatorKey === key)
-                && (item.detachedAt !== null || item.hostId === hostId));
-            return { scopeId: scope?.id || null,
-                mediaRef, uncertain };
+            return { scopeId: scope?.id || null, mediaRef, identityAvailable: true };
         },
         async localize(context, { hostId, displayName, url, revision }, signal) {
             // Import first. A failed import or a later CAS conflict never changes a binding.

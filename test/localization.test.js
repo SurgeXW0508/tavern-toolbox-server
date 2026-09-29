@@ -93,7 +93,7 @@ test('failed import and stale revision never change the binding', async t => {
         { provider: 'server', assetId: asset });
 });
 
-test('old inode scopes migrate detached and require explicit rebind before serving a binding', async t => {
+test('old inode scopes migrate detached without blocking transient access or explicit rebind', async t => {
     const owner = await user(t);
     await card(path.join(owner.userRoot, 'characters', 'A.png'), '2025-01-01');
     const { DatabaseSync } = await import('node:sqlite');
@@ -111,7 +111,7 @@ test('old inode scopes migrate detached and require explicit rebind before servi
     t.after(() => service.definition.shutdown());
     const first = await service.resolve(owner, 'A.png', url);
     assert.equal(first.mediaRef, null);
-    assert.equal(first.uncertain, true);
+    assert.equal(first.identityAvailable, true);
     const catalog = await service.read(owner, 'A.png');
     assert.equal(catalog.current, null);
     assert.equal(catalog.detached.length, 1);
@@ -136,8 +136,23 @@ test('same filename imported with a new create_date never inherits the old bindi
     await card(filename, '2026-03-03');
     const resolved = await service.resolve(owner, 'A.png', url);
     assert.equal(resolved.mediaRef, null);
-    assert.equal(resolved.uncertain, true);
+    assert.equal(resolved.identityAvailable, true);
     const catalog = await service.read(owner, 'A.png');
     assert.equal(catalog.current, null);
     assert.equal(catalog.detached.length, 1);
+    await card(path.join(owner.userRoot, 'characters', 'B.png'), '2026-04-04');
+    const other = await service.resolve(owner, 'B.png', url);
+    assert.equal(other.mediaRef, null);
+    assert.equal(other.identityAvailable, true);
+});
+
+test('missing host create_date disables binding but leaves remote resolution available', async t => {
+    const owner = await user(t);
+    await writeFile(path.join(owner.userRoot, 'characters', 'Legacy.png'), 'PNG without card metadata');
+    const service = createLocalization({});
+    await service.definition.initialize();
+    t.after(() => service.definition.shutdown());
+    assert.deepEqual(await service.resolve(owner, 'Legacy.png', url),
+        { scopeId: null, mediaRef: null, identityAvailable: false });
+    await assert.rejects(service.read(owner, 'Legacy.png'), { code: 'HOST_IDENTITY_UNAVAILABLE' });
 });
