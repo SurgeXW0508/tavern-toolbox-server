@@ -38,7 +38,7 @@ async function host(core) {
         req.get = name => req.headers[name.toLowerCase()];
         req.session = { csrfToken: 'fixture-csrf-token' };
         req.user = req.headers['x-test-user'] ? {
-            profile: { handle: req.headers['x-test-user'], enabled: true },
+            profile: { handle: req.headers['x-test-user'], enabled: true, admin: req.headers['x-test-admin'] === 'yes' },
             directories: { root: path.join(dataRoot, req.headers['x-test-user']) },
         } : undefined;
         res.locals = {};
@@ -106,6 +106,32 @@ async function request(url, route = '/status', { user = 'alice', method = 'GET',
 
 const quiet = { info() {}, error() {} };
 
+test('Network policy HTTP operations recheck admin, Origin and CSRF and never return secrets', async t => {
+    const dataRoot = await mkdtemp(path.join(tmpdir(), 'ttb-policy-http-'));
+    await writeFile(path.join(dataRoot, 'tavern-toolbox-server.config.json'), JSON.stringify({ schemaVersion: 1,
+        core: { allowedOrigins: ['https://example.invalid'] }, network: { enabled: true, transport: 'direct',
+            destinationPolicy: 'allowlist-only', allowlist: ['img.example.com'] } }));
+    const core = await createCore({ logger: quiet, policyOptions: { dataRoot } }), app = await host(core);
+    t.after(async () => { await app.close(); await core.shutdown(); await rm(dataRoot, { recursive: true, force: true }); });
+    const read = await request(app.url, '/v1/network/policy', { protocol: '1.0', headers: { 'x-test-admin': 'yes' } });
+    assert.equal(read.body.data.canManage, true);
+    const body = JSON.stringify({ host: 'new.example.com', includeSubdomains: false, revision: read.body.data.revision });
+    const headers = { Origin: 'https://example.invalid', 'Content-Type': 'application/json', 'X-CSRF-Token': 'fixture-csrf-token' };
+    const add = more => request(app.url, '/v1/network/policy/add', { protocol: '1.0', method: 'POST', headers: { ...headers, ...more }, body });
+    assert.equal((await add({})).body.error.code, 'ADMIN_REQUIRED');
+    assert.equal((await add({ 'x-test-admin': 'yes', 'X-CSRF-Token': 'bad' })).body.error.code, 'CSRF_REJECTED');
+    assert.equal((await add({ 'x-test-admin': 'yes', Origin: 'https://other.invalid' })).body.error.code, 'CSRF_REJECTED');
+    const added = await add({ 'x-test-admin': 'yes' });
+    assert.equal(added.code, 200);
+    assert.equal((await add({ 'x-test-admin': 'yes' })).body.error.code, 'POLICY_CONFLICT');
+    const ordinary = await request(app.url, '/v1/network/policy', { protocol: '1.0' });
+    assert.equal(ordinary.body.data.hosts, undefined);
+    assert.equal(ordinary.body.data.canManage, false);
+    const snapshot = await request(app.url, '/v1/status', { protocol: '1.0' });
+    assert.doesNotMatch(JSON.stringify(snapshot.body), /img\.example|new\.example/);
+    assert.equal(snapshot.body.data.capabilities.find(x => x.id === 'network.remoteFetch').constraints.allowlistEntryCount, 2);
+});
+
 test('real HTTP discovery: exact product, read-only routes, version contract and no-store', async t => {
     const fixture = JSON.parse(await readFile(new URL('../protocol/v1.0.fixture.json', import.meta.url), 'utf8'));
     const core = await createCore({ logger: quiet });
@@ -123,7 +149,7 @@ test('real HTTP discovery: exact product, read-only routes, version contract and
     const status = await request(app.url, '/v1/status', { protocol: '1.0' });
     assert.equal(status.code, 200);
     assert.deepEqual(status.body.meta.protocol, { major: 1, minor: 0 });
-    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'media.assets', 'business.collections', 'localization.characters']);
+    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'network.policy', 'media.assets', 'business.collections', 'localization.characters']);
     assert.deepEqual(status.body.data.capabilities[0], fixture.status.data.capabilities[0]);
     assert.deepEqual(status.body.data.effectivePolicy, fixture.status.data.effectivePolicy);
     assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'media', 'business', 'localization']);

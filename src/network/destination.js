@@ -26,7 +26,7 @@ export function publicUnicast(address) {
 }
 
 export class NetworkFailure extends Error {
-    constructor(code) { super(code); this.code = code; }
+    constructor(code, details = {}) { super(code); this.code = code; this.details = details; }
 }
 const fail = code => { throw new NetworkFailure(code); };
 
@@ -55,7 +55,7 @@ export function parseTarget(raw, policy, previous) {
         const wildcard = entry.startsWith('*.');
         const domain = canonicalHost(wildcard ? entry.slice(2) : entry);
         return wildcard ? host.endsWith(`.${domain}`) && host !== domain : host === domain;
-    })) fail('TARGET_NOT_ALLOWED');
+    })) throw new NetworkFailure('TARGET_NOT_ALLOWED', { hostname: host });
     return { url, host, port: url.protocol === 'https:' ? 443 : 80 };
 }
 

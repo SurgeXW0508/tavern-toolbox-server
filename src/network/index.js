@@ -20,7 +20,7 @@ function mediaType(body, declared) {
 }
 
 export function createNetwork(config, { resolver, open = openApproved, clock = () => Date.now() } = {}) {
-    const policy = config.policy.network;
+    let policy = config.policy.network;
     const invalid = config.policy.networkError;
     const state = !policy.enabled ? invalid ? 'unavailable' : 'disabled' :
         !config.policy.core.allowedOrigins.length ? 'unavailable' : 'ready';
@@ -48,6 +48,8 @@ export function createNetwork(config, { resolver, open = openApproved, clock = (
 
     async function fetchImage(url, contextId, clientSignal) {
         if (state !== 'ready') fail('CAPABILITY_UNAVAILABLE');
+        // Each request uses one policy snapshot, including all redirect hops.
+        const policy = config.policy.network;
         const moment = clock();
         const user = users.get(contextId) || { times: [], concurrent: 0 };
         user.times = user.times.filter(time => time > moment - 60000);
@@ -135,5 +137,14 @@ export function createNetwork(config, { resolver, open = openApproved, clock = (
             if (!user.concurrent && !user.times.length) users.delete(contextId);
         }
     }
-    return { definition, fetchImage, shutdown: definition.shutdown };
+    return { definition, fetchImage, shutdown: definition.shutdown,
+        preparePolicy(next) {
+            if (!next.enabled || next.transport !== policy.transport || next.proxyUrl !== policy.proxyUrl
+                || next.destinationPolicy !== policy.destinationPolicy) fail('POLICY_ACTIVATION_FAILED');
+            // No I/O or fallible validation remains when this prepared closure runs.
+            return () => {
+                policy = next;
+                definition.capabilities[0].constraints.allowlistEntryCount = next.allowlist.length;
+            };
+        } };
 }

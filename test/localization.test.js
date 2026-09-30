@@ -17,6 +17,29 @@ const url = 'https://img.example/a.gif?token=do-not-store';
 const asset = '12345678-1234-4123-8123-123456789abc';
 const updatedAsset = '12345678-1234-4123-8123-123456789abd';
 
+test('forget removes only a detached scope and bindings, with CAS and no Media deletion', async t => {
+    const owner = await user(t);
+    const file = id => path.join(owner.userRoot, 'characters', id);
+    await card(file('A.png'), '2025-01-01'); await card(file('B.png'), '2025-02-02');
+    let deleted = 0;
+    const service = createLocalization({ async remoteImport() { return { mediaRef: { provider: 'server', assetId: asset } }; },
+        async delete() { deleted++; } });
+    await service.definition.initialize(); t.after(() => service.definition.shutdown());
+    const a = await service.localize(owner, { hostId: 'A.png', displayName: 'A', url, revision: 0 });
+    await assert.rejects(service.forget(owner, { hostId: 'B.png', scopeId: a.current.id, revision: a.revision }),
+        { code: 'LOCALIZATION_NOT_FOUND' });
+    const b = await service.localize(owner, { hostId: 'B.png', displayName: 'B', url, revision: a.revision });
+    await unlink(file('A.png'));
+    const detached = await service.read(owner, 'B.png');
+    await assert.rejects(service.forget(owner, { hostId: 'B.png', scopeId: a.current.id, revision: b.revision }),
+        { code: 'LOCALIZATION_CONFLICT' });
+    const forgotten = await service.forget(owner, { hostId: 'B.png', scopeId: a.current.id, revision: detached.revision });
+    assert.equal(forgotten.detached.length, 0);
+    assert.equal(forgotten.current.id, b.current.id);
+    assert.deepEqual((await service.resolve(owner, 'B.png', url)).mediaRef, { provider: 'server', assetId: asset });
+    assert.equal(deleted, 0);
+});
+
 test('edit survives atomic replacement, duplicate stays separate, rename detaches, reimport and manual rebind', async t => {
     const alice = await user(t), bob = await user(t);
     const file = id => path.join(alice.userRoot, 'characters', id);

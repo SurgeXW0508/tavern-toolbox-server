@@ -4,6 +4,7 @@ import { loadPolicy, policyRevision } from './config.js';
 import { CapabilityRegistry } from './registry.js';
 import { userContext, mutationGate, setPrivateHeaders } from './security.js';
 import { createNetwork } from './network/index.js';
+import { createNetworkPolicy } from './network/policy.js';
 import { NetworkFailure } from './network/destination.js';
 import { createMedia, MediaFailure } from './media/index.js';
 import { createBusiness, BusinessFailure } from './business/index.js';
@@ -35,6 +36,13 @@ function failure(code, message, outcome = 'notApplicable') {
     return { code, message, details: {}, retryable: false, outcome };
 }
 
+// Repair information is a hostname only, never a URL or upstream error object.
+function networkFailureDetails(error) {
+    const host = error?.details?.hostname;
+    return error?.code === 'TARGET_NOT_ALLOWED' && typeof host === 'string' && host.length <= 253
+        && /^[a-z0-9.-]+$/.test(host) ? { hostname: host } : {};
+}
+
 export async function createCore({ policyOptions, registerModules, networkOptions, logger = console, now = () => Date.now() } = {}) {
     const config = await loadPolicy(policyOptions);
     const registry = new CapabilityRegistry();
@@ -46,6 +54,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
         health: () => config.error ? { state: 'degraded', reasonCode: config.error } : { state: 'ready', reasonCode: null },
     });
     const network = createNetwork(config, networkOptions);
+    const networkPolicy = createNetworkPolicy(config, network);
+    network.definition.capabilities.push(networkPolicy.capability);
     registry.register(network.definition);
     const media = createMedia(config, network);
     registry.register(media.definition);
@@ -56,9 +66,9 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registerModules?.(registry); // Test fixture or a future trusted composition root; not callable over HTTP.
     await registry.initialize();
     let stopped = false;
-    const policyRev = policyRevision(config);
 
     async function status(context) {
+        const policyRev = policyRevision(config);
         const snapshot = await registry.snapshot(context);
         if (snapshot.modules.length > MAX_MODULES) throw new Error('STATUS_TOO_LARGE');
         const core = snapshot.modules.find(module => module.id === 'core');
@@ -109,6 +119,47 @@ export async function createCore({ policyOptions, registerModules, networkOption
         router.get('/status', route(false, async () => ({ product: PRODUCT, discoveryVersion: 1,
             serverVersion: SERVER_VERSION, protocols: RANGES, coreState: config.error ? 'degraded' : 'ready' })));
         router.get('/v1/status', route(true, status));
+        const policyRoute = operation => async (req, res) => {
+            const { requestId, context, start } = res.locals.ttbRequest;
+            let code = 'OK';
+            try {
+                if (req.get('X-TTB-Protocol') !== '1.0') throw new NetworkFailure('PROTOCOL_INCOMPATIBLE');
+                if (operation !== 'read') {
+                    if (!context.isAdmin) throw new NetworkFailure('ADMIN_REQUIRED');
+                    if (!mutationGate(req, config.policy.core.allowedOrigins)) throw new NetworkFailure('CSRF_REJECTED');
+                    if (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers?.['content-type'] || ''))
+                        throw new NetworkFailure('INVALID_REQUEST');
+                    if (req.body === undefined) {
+                        let size = 0; const chunks = [];
+                        for await (const chunk of req) {
+                            size += chunk.length;
+                            if (size > 4096) throw new NetworkFailure('INVALID_REQUEST');
+                            chunks.push(chunk);
+                        }
+                        try { req.body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+                        catch { throw new NetworkFailure('INVALID_REQUEST'); }
+                    }
+                    const keys = operation === 'add' ? 'host,includeSubdomains,revision' : 'host,revision';
+                    if (!req.body || Array.isArray(req.body) || Object.keys(req.body).sort().join(',') !== keys)
+                        throw new NetworkFailure('INVALID_REQUEST');
+                }
+                const result = operation === 'read' ? await networkPolicy.read(context)
+                    : await networkPolicy.mutate(context, operation, req.body);
+                return send(res, 200, result, requestId, true, 65536);
+            } catch (error) {
+                code = error instanceof NetworkFailure ? error.code : 'POLICY_UNAVAILABLE';
+                const statusCode = { ADMIN_REQUIRED: 403, CSRF_REJECTED: 403, PROTOCOL_INCOMPATIBLE: 409,
+                    INVALID_REQUEST: 400, INVALID_HOST: 422, HOST_ALREADY_ALLOWED: 409, HOST_NOT_FOUND: 404,
+                    ALLOWLIST_FULL: 409, POLICY_CONFLICT: 409, POLICY_BUSY: 409 }[code] || 503;
+                return send(res, statusCode, failure(code, '远程主机策略操作失败'), requestId, true, 4096);
+            } finally {
+                logger.info?.({ service: PRODUCT, time: new Date().toISOString(), severity: 'info', requestId,
+                    moduleId: 'network', operation: `policy.${operation}`, durationMs: now() - start, code, outcome: 'notApplicable' });
+            }
+        };
+        router.get('/v1/network/policy', policyRoute('read'));
+        router.post('/v1/network/policy/add', policyRoute('add'));
+        router.post('/v1/network/policy/remove', policyRoute('remove'));
         router.post('/v1/network/fetch', async (req, res) => {
             const { requestId, context, start } = res.locals.ttbRequest;
             const controller = new AbortController();
@@ -157,7 +208,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
                         REDIRECT_REJECTED: 403, TOO_MANY_REDIRECTS: 502, REMOTE_UNAVAILABLE: 502,
                         REMOTE_TIMEOUT: 504, REMOTE_RESOURCE_TOO_LARGE: 413, UNSUPPORTED_MEDIA_TYPE: 415,
                         VALIDATION_FAILED: 422, RATE_LIMITED: 429, RESOURCE_BUSY: 429 }[code] || 500;
-                    send(res, statusCode, failure(code, '远程图片获取失败'), requestId, true, 4096);
+                    send(res, statusCode, { ...failure(code, '远程图片获取失败'),
+                        details: networkFailureDetails(error) }, requestId, true, 4096);
                 }
             } finally {
                 res.off('close', disconnected);
@@ -327,7 +379,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
                     throw new BusinessFailure('INVALID_REQUEST');
                 const body = req.body;
                 const keys = { resolve: 'hostId,url', localize: 'displayName,hostId,revision,url',
-                    unlocalize: 'hostId,revision,url', rebind: 'displayName,hostId,revision,scopeId' };
+                    unlocalize: 'hostId,revision,url', rebind: 'displayName,hostId,revision,scopeId', forget: 'hostId,revision,scopeId' };
                 if (operation !== 'read' && Object.keys(body).sort().join(',') !== keys[operation]
                     || operation !== 'read' && operation !== 'resolve'
                         && (!Number.isSafeInteger(body.revision) || body.revision < 0))
@@ -336,6 +388,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
                     : operation === 'resolve' ? await localization.resolve(context, body.hostId, body.url)
                     : operation === 'localize' ? await localization.localize(context, body, controller.signal)
                     : operation === 'unlocalize' ? await localization.unlocalize(context, body)
+                    : operation === 'forget' ? await localization.forget(context, body)
                     : await localization.rebind(context, body);
                 if (controller.signal.aborted || res.destroyed) return;
                 return send(res, 200, result, requestId, true, MAX_BUSINESS_BYTES + 65536);
@@ -349,7 +402,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
                     INVALID_MEDIA: 422, QUOTA_EXCEEDED: 507, TARGET_NOT_ALLOWED: 403,
                     REMOTE_UNAVAILABLE: 502, REMOTE_TIMEOUT: 504 }[code] || 503;
                 if (!res.destroyed && !res.headersSent)
-                    return send(res, statusCode, failure(code, '角色图片本地化操作失败'), requestId, true, 4096);
+                    return send(res, statusCode, { ...failure(code, '角色图片本地化操作失败'),
+                        details: networkFailureDetails(error) }, requestId, true, 4096);
             } finally {
                 res.off('close', disconnected);
                 logger.info?.({ service: PRODUCT, time: new Date().toISOString(), severity: 'info', requestId,
@@ -361,6 +415,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
         router.post('/v1/localization/localize', localizationRoute('localize'));
         router.post('/v1/localization/unlocalize', localizationRoute('unlocalize'));
         router.post('/v1/localization/rebind', localizationRoute('rebind'));
+        router.post('/v1/localization/forget', localizationRoute('forget'));
         router.use((req, res) => {
             const knownPath = req.path === '/status' || req.path === '/v1/status' || req.path === '/v1/network/fetch';
             const { requestId } = res.locals.ttbRequest;

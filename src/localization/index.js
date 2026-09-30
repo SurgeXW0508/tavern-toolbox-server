@@ -189,7 +189,7 @@ export function createLocalization(media) {
     return {
         definition: { id: 'localization', version: '0.1.0', dependsOn: ['core', 'media'],
             capabilities: [{ id: 'localization.characters', contract: { major: 1, minMinor: 0, maxMinor: 0 },
-                operations: ['read', 'resolve', 'localize', 'unlocalize', 'rebind'].map(id => ({ id, available: true })),
+                operations: ['read', 'resolve', 'localize', 'unlocalize', 'rebind', 'forget'].map(id => ({ id, available: true })),
                 constraints: { schemaVersion: SCHEMA, mediaProvider: 'server', identity: 'host-filename-create-date' } }],
             initialize: async () => {
                 try {
@@ -262,6 +262,17 @@ export function createLocalization(media) {
             const scope = document.scopes.find(item => item.hostId === hostId);
             if (!scope) fail('LOCALIZATION_NOT_FOUND');
             scope.bindings = scope.bindings.filter(item => item.locatorKey !== key);
+            const committed = target.commit(NAMESPACE, SCHEMA, revision, document, validate);
+            return safeView(committed, hostId);
+        },
+        async forget(context, { hostId, scopeId, revision }) {
+            if (!UUID.test(scopeId || '')) fail('INVALID_REQUEST');
+            const { target, result } = await snapshot(context);
+            if (result.revision !== revision) fail('LOCALIZATION_CONFLICT');
+            const document = structuredClone(result.document);
+            const scope = document.scopes.find(item => item.id === scopeId);
+            if (!scope || scope.detachedAt === null) fail('LOCALIZATION_NOT_FOUND');
+            document.scopes = document.scopes.filter(item => item !== scope);
             const committed = target.commit(NAMESPACE, SCHEMA, revision, document, validate);
             return safeView(committed, hostId);
         },

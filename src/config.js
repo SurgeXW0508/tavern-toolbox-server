@@ -55,7 +55,6 @@ function validateNetwork(value) {
         return wildcard ? `*.${host}` : host;
     });
     if (new Set(allowlist).size !== allowlist.length) throw new Error('INVALID_NETWORK_CONFIG');
-    if (value.destinationPolicy === 'allowlist-only' && !allowlist.length) throw new Error('INVALID_NETWORK_CONFIG');
     if (value.allowHttp !== undefined && typeof value.allowHttp !== 'boolean') throw new Error('INVALID_NETWORK_CONFIG');
     const limits = {};
     for (const [key, fallback] of Object.entries(NETWORK_DEFAULTS)) {
@@ -105,7 +104,8 @@ export async function loadPolicy({ dataRoot = globalThis.DATA_ROOT, configPath =
     try {
         const raw = await read(target, 'utf8');
         const policy = validatePolicy(JSON.parse(raw));
-        return { policy, source: 'administrator', error: null };
+        return { policy, source: 'administrator', error: null,
+            management: { path: target, external: Boolean(configPath), raw } };
     } catch (error) {
         if (error?.code === 'ENOENT' && !configPath) return { policy: DEFAULT_POLICY, source: 'defaults', error: null };
         return { policy: DEFAULT_POLICY, source: 'invalid', error: 'INVALID_CORE_CONFIG' };

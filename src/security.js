@@ -18,7 +18,7 @@ export function userContext(req, secret) {
     // Opaque within a boot; never a credential or a durable storage identity.
     const contextId = createHmac('sha256', secret).update(JSON.stringify([handle, resolvedRoot])).digest('hex').slice(0, 32);
     // Internal-only durable identity. Never serialize this field into status, logs or a MediaRef.
-    return { contextId, userRoot: resolvedRoot };
+    return { contextId, userRoot: resolvedRoot, isAdmin: req.user.profile.admin === true };
 }
 
 export function mutationGate(req, allowedOrigins) {
