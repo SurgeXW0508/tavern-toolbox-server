@@ -242,7 +242,7 @@ test('response profile checks signatures, upstream status, encoding, length, idl
         [{ 'content-type': 'image/svg+xml' }, Buffer.from('<svg></svg>'), 'VALIDATION_FAILED'],
         [{ 'content-type': 'image/png' }, gif, 'UNSUPPORTED_MEDIA_TYPE'],
         [{ 'content-type': 'image/gif', 'content-encoding': 'gzip' }, gif, 'UNSUPPORTED_MEDIA_TYPE'],
-        [{ 'content-type': 'image/gif', 'content-length': String(17 * 1024 * 1024) }, gif, 'REMOTE_RESOURCE_TOO_LARGE'],
+        [{ 'content-type': 'image/gif', 'content-length': String(config().policy.network.maxBytes + 1) }, gif, 'REMOTE_RESOURCE_TOO_LARGE'],
         [{ 'content-type': 'image/gif' }, Buffer.alloc(0), 'VALIDATION_FAILED'],
     ]) {
         const network = createNetwork(config(), { resolver, open: async () => fakeResponse(200, headers, body) });
