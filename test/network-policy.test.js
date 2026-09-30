@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm, chmod, symlink } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, chmod, symlink, mkdir } from 'node:fs/promises';
+import { fork } from 'node:child_process';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -122,4 +124,63 @@ test('bounded allowlist refuses overflow without changing disk or active policy'
         { code: 'ALLOWLIST_FULL' });
     assert.equal(await readFile(file, 'utf8'), disk);
     assert.equal((await manager.read(admin)).revision, original.revision);
+});
+
+test('legacy filesystem lock artifact never blocks management and is never removed as a guessed stale lock', async t => {
+    const { file, manager } = await setup(t);
+    const legacy = file + '.ttb-lock';
+    await mkdir(legacy);
+    await writeFile(path.join(legacy, 'sentinel'), 'leave existing artifacts untouched');
+    const original = await manager.read(admin);
+    const next = await manager.mutate(admin, 'add', {
+        host: 'new.example.com', includeSubdomains: false, revision: original.revision,
+    });
+    assert.equal(next.hosts.includes('new.example.com'), true);
+    assert.equal(await readFile(path.join(legacy, 'sentinel'), 'utf8'), 'leave existing artifacts untouched');
+});
+
+test('live and paused process locks remain exclusive; SIGKILL releases lock and the next mutation succeeds',
+    { skip: process.platform !== 'linux', timeout: 15000 }, async t => {
+        const { file, dataRoot, manager, network } = await setup(t);
+        const original = await manager.read(admin), disk = await readFile(file, 'utf8');
+        const child = fork(new URL('./fixtures/policy-lock-holder.mjs', import.meta.url), [dataRoot],
+            { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+        const exited = once(child, 'exit');
+        t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await exited; });
+        const [ready] = await once(child, 'message');
+        assert.deepEqual(ready, { state: 'locked' });
+        const mutate = () => manager.mutate(admin, 'add', {
+            host: 'new.example.com', includeSubdomains: false, revision: original.revision,
+        });
+        await assert.rejects(mutate(), { code: 'POLICY_BUSY' });
+        child.kill('SIGSTOP');
+        await assert.rejects(mutate(), { code: 'POLICY_BUSY' });
+        assert.equal(await readFile(file, 'utf8'), disk);
+        child.kill('SIGKILL');
+        await exited;
+        const next = await mutate();
+        assert.equal(next.hosts.includes('new.example.com'), true);
+        await network.fetchImage('https://new.example.com/a.gif', 'one');
+        assert.deepEqual((await loadPolicy({ dataRoot })).policy.network.allowlist, next.hosts);
+    });
+
+test('independent managers cannot acquire or release another active mutation lock', async t => {
+    const { config, network, file } = await setup(t);
+    let held, finish;
+    const entered = new Promise(resolve => { held = resolve; });
+    const gate = new Promise(resolve => { finish = resolve; });
+    const manager = createNetworkPolicy(config, network, { persist: async (raw, activate) => {
+        held(); await gate; await writeFile(file, raw); activate();
+    } });
+    const other = createNetworkPolicy(await loadPolicy({ dataRoot: path.dirname(file) }), network);
+    const revision = (await manager.read(admin)).revision;
+    const flight = manager.mutate(admin, 'add', { host: 'first.example.com', includeSubdomains: false, revision });
+    try {
+        await entered;
+        for (let i = 0; i < 2; i++) await assert.rejects(other.mutate(admin, 'add', {
+            host: 'second.example.com', includeSubdomains: false, revision,
+        }), { code: 'POLICY_BUSY' });
+    } finally { finish(); }
+    assert.equal((await flight).hosts.includes('first.example.com'), true);
+    assert.equal(JSON.parse(await readFile(file)).network.allowlist.includes('second.example.com'), false);
 });

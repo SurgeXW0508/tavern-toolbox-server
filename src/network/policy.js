@@ -1,11 +1,36 @@
-import { lstat, readFile, open, rename, unlink, mkdir, rmdir } from 'node:fs/promises';
+import { lstat, readFile, open, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { isIP } from 'node:net';
+import { randomUUID, createHash } from 'node:crypto';
+import { isIP, createServer } from 'node:net';
 import { validatePolicy, policyRevision } from '../config.js';
 import { canonicalHost, NetworkFailure } from './destination.js';
 
 const fail = code => { throw new NetworkFailure(code); };
+
+const supportsProcessLock = () => process.platform === 'win32' || process.platform === 'linux'
+    && (Number(process.versions.node.split('.')[0]) > 20 || Number(process.versions.node.split('.')[0]) === 20
+        && Number(process.versions.node.split('.')[1]) >= 8);
+
+// The kernel owns this mutex, so SIGKILL, container exit and reboot release it.
+// No filesystem lease, age threshold or stale-path deletion can steal a live lock.
+// A deployment still has one active ST instance; Linux abstract sockets are scoped
+// to its network namespace, not a distributed lock across shared-volume containers.
+async function acquireProcessLock(configPath) {
+    if (!supportsProcessLock()) fail('POLICY_MANAGEMENT_UNAVAILABLE');
+    const directory = await lstat(path.dirname(configPath), { bigint: true });
+    // Directory identity is stable across atomic replacement of the config itself.
+    const key = createHash('sha256').update(`${directory['dev']}:${directory.ino}:${path.basename(configPath)}`).digest('hex');
+    const endpoint = process.platform === 'linux' ? `\0ttb-policy-${key}` : `\\\\.\\pipe\\ttb-policy-${key}`;
+    const lock = createServer(socket => socket.destroy());
+    await new Promise((resolve, reject) => {
+        const failed = error => reject(new NetworkFailure(error.code === 'EADDRINUSE' ? 'POLICY_BUSY' : 'POLICY_READ_ONLY'));
+        lock.once('error', failed);
+        lock.listen({ path: endpoint, exclusive: true }, () => {
+            lock.off('error', failed); lock.on('error', () => {}); resolve();
+        });
+    });
+    return () => new Promise(resolve => lock.close(resolve));
+}
 
 export function managedHost(value) {
     if (typeof value !== 'string' || value.length > 255 || /[\s/\\:@?#\[\]\u0000-\u001f\u007f]/.test(value))
@@ -29,6 +54,7 @@ export function createNetworkPolicy(config, network, { persist } = {}) {
         if (config.error || config.policy.networkError || !config.policy.network.enabled
             || config.policy.network.destinationPolicy !== 'allowlist-only') return 'POLICY_MANAGEMENT_UNAVAILABLE';
         if (!location || location.external) return 'POLICY_EXTERNALLY_MANAGED';
+        if (!supportsProcessLock()) return 'POLICY_MANAGEMENT_UNAVAILABLE';
         try {
             const [file, directory, current] = await Promise.all([
                 lstat(location.path), lstat(path.dirname(location.path)), readFile(location.path, 'utf8'),
@@ -106,10 +132,13 @@ export function createNetworkPolicy(config, network, { persist } = {}) {
         try { activate = network.preparePolicy(next.network); }
         catch { fail('POLICY_ACTIVATION_FAILED'); }
         const nextRaw = JSON.stringify(document, null, 2) + '\n';
-        const lock = location.path + '.ttb-lock';
-        try { await mkdir(lock, { mode: 0o700 }); }
-        catch (error) { fail(error.code === 'EEXIST' ? 'POLICY_BUSY' : 'POLICY_READ_ONLY'); }
+        let release;
+        try { release = await acquireProcessLock(location.path); }
+        catch (error) { if (error instanceof NetworkFailure) throw error; fail('POLICY_READ_ONLY'); }
         try {
+            // A different instance may have committed while this one validated.
+            // Even injected persistence paths must recheck under the mutex.
+            if (await writableReason()) fail('POLICY_CONFLICT');
             await write(nextRaw, () => {
                 activate();
                 config.policy = next;
@@ -118,7 +147,7 @@ export function createNetworkPolicy(config, network, { persist } = {}) {
         } catch (error) {
             if (error instanceof NetworkFailure) throw error;
             fail('POLICY_PERSISTENCE_FAILED');
-        } finally { await rmdir(lock).catch(() => {}); }
+        } finally { await release(); }
         return view(context);
     }
     return { read: view,
