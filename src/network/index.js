@@ -1,5 +1,6 @@
 import { approveDestination, NetworkFailure } from './destination.js';
 import { openApproved } from './transport.js';
+import { NETWORK_DEFAULTS } from '../config.js';
 
 const MIME = Object.freeze(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const fail = code => { throw new NetworkFailure(code); };
@@ -32,7 +33,7 @@ export function createNetwork(config, { resolver, open = openApproved, clock = (
     const definition = { id: 'network', version: '0.1.0', dependsOn: ['core'],
         capabilities: [{ id: 'network.remoteFetch', contract: { major: 1, minMinor: 0, maxMinor: 0 },
             operations: [{ id: 'fetch', available: state === 'ready' }],
-            limits: { maxBytes: policy.maxBytes || 16 * 1024 * 1024, maxRedirects: policy.maxRedirects || 3,
+            limits: { maxBytes: policy.maxBytes || NETWORK_DEFAULTS.maxBytes, maxRedirects: policy.maxRedirects || 3,
                 connectTimeoutMs: policy.connectTimeoutMs || 5000, firstByteTimeoutMs: policy.firstByteTimeoutMs || 10000,
                 idleTimeoutMs: policy.idleTimeoutMs || 10000, totalTimeoutMs: policy.totalTimeoutMs || 30000,
                 perUserConcurrency: policy.perUserConcurrency || 2, globalConcurrency: policy.globalConcurrency || 4,

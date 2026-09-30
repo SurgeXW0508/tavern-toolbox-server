@@ -2,7 +2,7 @@ import { lstat, readFile, open, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { isIP, createServer } from 'node:net';
-import { validatePolicy, policyRevision } from '../config.js';
+import { validatePolicy, policyRevision, MAX_ALLOWLIST_ENTRIES } from '../config.js';
 import { canonicalHost, NetworkFailure } from './destination.js';
 
 const fail = code => { throw new NetworkFailure(code); };
@@ -70,6 +70,7 @@ export function createNetworkPolicy(config, network, { persist } = {}) {
         const reason = await writableReason();
         return { revision: policyRevision(config), destinationPolicy: config.policy.network.destinationPolicy || 'allowlist-only',
             transport: config.policy.network.transport || 'none', allowlistEntryCount: config.policy.network.allowlist?.length || 0,
+            maxHosts: MAX_ALLOWLIST_ENTRIES,
             administrator: context.isAdmin === true, canManage: context.isAdmin === true && !reason,
             readOnlyReason: reason || (context.isAdmin ? null : 'ADMIN_REQUIRED'),
             ...(context.isAdmin ? { hosts: [...(config.policy.network.allowlist || [])] } : {}) };
@@ -118,7 +119,7 @@ export function createNetworkPolicy(config, network, { persist } = {}) {
             const additions = [host, ...(body.includeSubdomains ? [`*.${host}`] : [])].filter(item => !list.includes(item));
             if (!additions.length) fail('HOST_ALREADY_ALLOWED');
             list.push(...additions);
-            if (list.length > 128) fail('ALLOWLIST_FULL');
+            if (list.length > MAX_ALLOWLIST_ENTRIES) fail('ALLOWLIST_FULL');
         } else {
             const index = list.indexOf(host);
             if (index < 0) fail('HOST_NOT_FOUND');
@@ -161,6 +162,6 @@ export function createNetworkPolicy(config, network, { persist } = {}) {
             operationAvailability: async context => {
                 const reason = context?.isAdmin ? await writableReason() : 'ADMIN_REQUIRED';
                 return { add: { available: !reason, reasonCode: reason }, remove: { available: !reason, reasonCode: reason } };
-            }, limits: { maxHosts: 128 }, constraints: { authority: 'deployment', managedFields: ['allowlist'] } },
+            }, limits: { maxHosts: MAX_ALLOWLIST_ENTRIES }, constraints: { authority: 'deployment', managedFields: ['allowlist'] } },
     };
 }

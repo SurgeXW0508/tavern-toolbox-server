@@ -6,11 +6,23 @@ This module is a Server capability. It does not migrate existing IndexedDB data 
 
 The official SillyTavern 1.19.0 Dockerfile uses a moving `node:lts-alpine3.23` base. Check `node -v` **inside the actual running container** before installing: Media requires Node >=22.13 (including Node 24), `node:sqlite`, and the locked `sharp` runtime dependencies. Install with `npm ci --omit=dev --ignore-scripts` after verifying the image's native Sharp package loads; run `node -e "import('sharp').then(m => console.log(m.default.versions.sharp))"` in the plugin directory. On an older or unsupported runtime, Media is unavailable while Core, Network and existing Local functions remain independent.
 
-The policy file remains outside plugin code. Optional `media` fields are positive finite ceilings that can only reduce the defaults: `maxBytes` (16 MiB), `quotaBytes` (2 GiB per ST user), `maxDimension` (8192), `maxPixels` (24 Mi pixels), `maxFrames` (64), `maxFramePixels` (48 Mi aggregate frame pixels), and `maxConcurrentImports` (2 globally). Invalid Media policy makes Media unavailable without replacing Core or Network policy. `core.allowedOrigins` must include the trusted browser origin for mutation operations.
+The policy file remains outside plugin code. Optional `media` fields must be positive safe integers. Defaults and configurable ceilings are separate:
+
+| Field | Default | Configurable ceiling |
+| --- | --- | --- |
+| maxBytes | 64 MiB | 256 MiB |
+| quotaBytes | 2 GiB per ST user | 1 TiB per ST user; 20/100 GiB supported |
+| maxDimension | 8192 | 8192 |
+| maxPixels | 24 Mi pixels | 24 Mi pixels |
+| maxFrames | 64 | 64 |
+| maxFramePixels | 48 Mi aggregate frame pixels | 48 Mi aggregate frame pixels |
+| maxConcurrentImports | 2 globally | 2 globally |
+
+`network.maxBytes` independently defaults to 64 MiB and accepts up to 256 MiB; Remote Import passes both budgets. An old explicit 16 MiB setting is preserved, not migrated or silently raised. Administrator config edits require restart; the UI only reports the authoritative quota and offers no quota editor. All other decode/request safeguards remain independent ceilings. Invalid Media policy makes Media unavailable without replacing Core or Network policy. `core.allowedOrigins` must include the trusted browser origin for mutation operations.
 
 ## Storage and backup
 
-Every authenticated ST user's trusted `req.user.directories.root` owns a separate `tavern-toolbox-server/media-v1/` directory: `metadata.sqlite`, `originals/`, `derived/`, and `staging/`. The user's real root is never returned to the browser or logged. SQLite schema v1 records the opaque asset ID, SHA-256 internal content identity, authoritative MIME, size, dimensions, frame count, creation time and derived state. The database never contains large media bytes. Exact imported Original bytes are immutable. A content-identical Import in the same user Store returns the same valid MediaRef. Different users have separate databases and physical blobs.
+Every authenticated ST user's trusted `req.user.directories.root` owns a separate `tavern-toolbox-server/media-v1/` directory: `metadata.sqlite`, `originals/`, `derived/`, and `staging/`. The user's real root is never returned to the browser or logged. SQLite schema v1 records the opaque asset ID, SHA-256 internal content identity, authoritative MIME, size, dimensions, frame count, creation time and derived state. The database never contains large media bytes. Exact imported Original bytes are immutable. A content-identical Import in the same user Store returns the same valid MediaRef. Different users have separate databases and physical blobs. Within one user this is a shared Asset Pool: Consumer/Character Scopes store logical MediaRefs and do not create physical subdirectories or copies. Removing a Consumer binding does not delete an asset. No existing storage is migrated. A future Media Manager should query logical Consumer ownership, reference state (Active / Detached-only / Unreferenced), kind, size and creation time; deletion must account for all references. No new gallery, deletion policy or GC is introduced here.
 
 Back up the whole Media Store as one unit **with SillyTavern stopped**. Restore that consistent unit before restarting; asset IDs continue resolving. `derived/` can be rebuilt; `metadata.sqlite` plus `originals/` are canonical. Do not remove individual Original files in NAS File Manager. A missing or changed Original reports `MEDIA_CORRUPT` and is never silently fetched again. A newer unknown SQLite schema reports `INCOMPATIBLE_SCHEMA` and is never reset to empty. A physical orphan cleanup is available through the explicit authenticated maintenance operation; valid unreferenced assets are retained.
 
