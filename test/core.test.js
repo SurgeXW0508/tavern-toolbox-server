@@ -134,20 +134,24 @@ test('Network policy HTTP operations recheck admin, Origin and CSRF and never re
 
 test('real HTTP discovery: exact product, read-only routes, version contract and no-store', async t => {
     const fixture = JSON.parse(await readFile(new URL('../protocol/v1.0.fixture.json', import.meta.url), 'utf8'));
+    const releaseVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url))).version;
     const core = await createCore({ logger: quiet });
     const app = await host(core);
     t.after(async () => { await app.close(); await core.shutdown(); });
     const boot = await request(app.url);
     assert.equal(boot.code, 200);
     assert.equal(boot.body.data.product, info.id);
-    assert.deepEqual(boot.body.data, fixture.bootstrap.data);
+    // The fixed Protocol 1.0 example is independent of the package release version.
+    assert.deepEqual(boot.body.data, { ...fixture.bootstrap.data, serverVersion: releaseVersion });
     assert.equal(boot.body.data.serverVersion, SERVER_VERSION);
-    assert.equal(SERVER_VERSION, JSON.parse(await readFile(new URL('../package.json', import.meta.url))).version);
+    assert.equal(SERVER_VERSION, releaseVersion);
     assert.deepEqual(boot.body.data.protocols, [{ major: 1, minMinor: 0, maxMinor: 0 }]);
     assert.equal(boot.headers.get('cache-control'), 'no-store');
     assert.ok(boot.body.meta.requestId);
     const status = await request(app.url, '/v1/status', { protocol: '1.0' });
     assert.equal(status.code, 200);
+    assert.equal(status.body.data.serverVersion, releaseVersion);
+    assert.equal(status.body.data.core.version, releaseVersion);
     assert.deepEqual(status.body.meta.protocol, { major: 1, minor: 0 });
     assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'network.policy', 'media.assets', 'business.collections', 'localization.characters']);
     assert.deepEqual(status.body.data.capabilities[0], fixture.status.data.capabilities[0]);
