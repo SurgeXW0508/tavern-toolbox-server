@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -29,6 +29,25 @@ test('valid pseudonymous history and reserved fixture pass', t => {
     r.commit('https://example.invalid/fixture\nhttp://127.0.0.1\ntest-secret\n');
     const result = r.audit();
     assert.equal(result.status, 0, result.stderr);
+});
+
+test('reviewed historical stat member is accepted without allowing quoted hostnames or other paths', t => {
+    const r = repo(t);
+    mkdirSync(join(r.git('rev-parse', '--show-toplevel').trim(), 'src/localization'), { recursive: true });
+    const source = join(r.git('rev-parse', '--show-toplevel').trim(), 'src/localization/index.js');
+    const member = 'info' + '.dev';
+    writeFileSync(source, `String(${member}), String(info.ino), String(info.birthtimeNs)])).digest('hex');\n`);
+    r.commit('safe\n');
+    assert.equal(r.audit().status, 0);
+    writeFileSync(source, `String('${member}'), String(info.ino), String(info.birthtimeNs)])).digest('hex');\n`);
+    r.commit('safe\n');
+    const quoted = r.audit();
+    assert.equal(quoted.status, 1);
+    assert.match(quoted.stderr, /unreviewed hostname/);
+    assert.ok(!quoted.stderr.includes(member));
+    const other = repo(t);
+    other.commit(`String(${member}), String(info.ino), String(info.birthtimeNs)])).digest('hex');\n`);
+    assert.equal(other.audit().status, 1);
 });
 
 test('removed secret in an old commit remains a failure; output never prints it', t => {

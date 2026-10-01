@@ -1,5 +1,6 @@
 import { approveDestination, NetworkFailure } from './destination.js';
 import { openApproved } from './transport.js';
+import { NETWORK_DEFAULTS } from '../config.js';
 
 const MIME = Object.freeze(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const fail = code => { throw new NetworkFailure(code); };
@@ -20,7 +21,7 @@ function mediaType(body, declared) {
 }
 
 export function createNetwork(config, { resolver, open = openApproved, clock = () => Date.now() } = {}) {
-    const policy = config.policy.network;
+    let policy = config.policy.network;
     const invalid = config.policy.networkError;
     const state = !policy.enabled ? invalid ? 'unavailable' : 'disabled' :
         !config.policy.core.allowedOrigins.length ? 'unavailable' : 'ready';
@@ -32,7 +33,7 @@ export function createNetwork(config, { resolver, open = openApproved, clock = (
     const definition = { id: 'network', version: '0.1.0', dependsOn: ['core'],
         capabilities: [{ id: 'network.remoteFetch', contract: { major: 1, minMinor: 0, maxMinor: 0 },
             operations: [{ id: 'fetch', available: state === 'ready' }],
-            limits: { maxBytes: policy.maxBytes || 16 * 1024 * 1024, maxRedirects: policy.maxRedirects || 3,
+            limits: { maxBytes: policy.maxBytes || NETWORK_DEFAULTS.maxBytes, maxRedirects: policy.maxRedirects || 3,
                 connectTimeoutMs: policy.connectTimeoutMs || 5000, firstByteTimeoutMs: policy.firstByteTimeoutMs || 10000,
                 idleTimeoutMs: policy.idleTimeoutMs || 10000, totalTimeoutMs: policy.totalTimeoutMs || 30000,
                 perUserConcurrency: policy.perUserConcurrency || 2, globalConcurrency: policy.globalConcurrency || 4,
@@ -48,6 +49,8 @@ export function createNetwork(config, { resolver, open = openApproved, clock = (
 
     async function fetchImage(url, contextId, clientSignal) {
         if (state !== 'ready') fail('CAPABILITY_UNAVAILABLE');
+        // Each request uses one policy snapshot, including all redirect hops.
+        const policy = config.policy.network;
         const moment = clock();
         const user = users.get(contextId) || { times: [], concurrent: 0 };
         user.times = user.times.filter(time => time > moment - 60000);
@@ -135,5 +138,14 @@ export function createNetwork(config, { resolver, open = openApproved, clock = (
             if (!user.concurrent && !user.times.length) users.delete(contextId);
         }
     }
-    return { definition, fetchImage, shutdown: definition.shutdown };
+    return { definition, fetchImage, shutdown: definition.shutdown,
+        preparePolicy(next) {
+            if (!next.enabled || next.transport !== policy.transport || next.proxyUrl !== policy.proxyUrl
+                || next.destinationPolicy !== policy.destinationPolicy) fail('POLICY_ACTIVATION_FAILED');
+            // No I/O or fallible validation remains when this prepared closure runs.
+            return () => {
+                policy = next;
+                definition.capabilities[0].constraints.allowlistEntryCount = next.allowlist.length;
+            };
+        } };
 }

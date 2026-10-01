@@ -83,6 +83,16 @@ jobs:
           git archive --format=zip --prefix="tavern-toolbox-server-v${VERSION}/" --output="release/${ZIP}" "${GITHUB_SHA}"
           (cd release && sha256sum "${ZIP}" > SHA256SUMS)
 
+      - name: Prepare release notes from README
+        if: steps.release.outputs.publish == 'true'
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const section = readFileSync('README.md', 'utf8').split(/^## Release notes\r?\n/m)[1]?.split(/^## /m)[0]?.trim();
+          if (!section) throw new Error('Current release notes are missing from README');
+          writeFileSync('release-notes.md', section + '\n');
+          NODE
+
       - name: Create annotated tag
         if: steps.release.outputs.create_tag == 'true'
         env:
@@ -101,7 +111,33 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          gh release create "${TAG}" release/* --verify-tag --title "Tavern Toolbox Server ${TAG}" --generate-notes
+          gh release create "${TAG}" release/* --verify-tag --title "Tavern Toolbox Server ${TAG}" --notes-file release-notes.md
           mkdir -p verified-release
           gh release download "${TAG}" --dir verified-release --pattern 'tavern-toolbox-server-*-source.zip' --pattern SHA256SUMS
           (cd verified-release && sha256sum -c SHA256SUMS)
+
+      # This closeout is restricted to the accepted Phase 5 branch and version.
+      # It never scans or deletes unrelated stage branches.
+      - name: Clean up accepted Phase 5 branch after verified release
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "${VERSION}" == "0.5.0" ]] || exit 0
+          STAGE_BRANCH='stage/phase-5-remote-image'
+          if STAGE_REF="$(git ls-remote --exit-code origin "refs/heads/${STAGE_BRANCH}")"; then
+            STAGE_SHA="${STAGE_REF%%[[:space:]]*}"
+          else
+            RESULT=$?
+            [[ "${RESULT}" == 2 ]] || exit "${RESULT}"
+            exit 0
+          fi
+          MAIN_REF="$(git ls-remote --exit-code origin refs/heads/main)"
+          MAIN_SHA="${MAIN_REF%%[[:space:]]*}"
+          TAG_SHA="$(git rev-list -n 1 "${TAG}")"
+          [[ "${STAGE_SHA}" == "${GITHUB_SHA}" && "${MAIN_SHA}" == "${GITHUB_SHA}" ]]
+          [[ "${TAG_SHA}" == "${GITHUB_SHA}" ]]
+          [[ "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" == false ]]
+          echo 'Accepted stage/main ahead=0 behind=0; Tag and published Release verified'
+          git push origin --force-with-lease="refs/heads/${STAGE_BRANCH}:${STAGE_SHA}" ":refs/heads/${STAGE_BRANCH}"

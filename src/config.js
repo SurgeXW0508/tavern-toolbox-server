@@ -7,27 +7,35 @@ export const DEFAULT_POLICY = Object.freeze({
     schemaVersion: 1,
     core: Object.freeze({ maxStatusResponseBytes: 256 * 1024, allowedOrigins: Object.freeze([]) }),
     network: Object.freeze({ enabled: false }),
-    media: Object.freeze({ maxBytes: 16 * 1024 * 1024, quotaBytes: 2 * 1024 * 1024 * 1024,
+    media: Object.freeze({ maxBytes: 64 * 1024 * 1024, quotaBytes: 2 * 1024 * 1024 * 1024,
         maxDimension: 8192, maxPixels: 24 * 1024 * 1024, maxFrames: 64,
         maxFramePixels: 48 * 1024 * 1024, maxConcurrentImports: 2 }),
 });
+
+// Defaults are deployment starting points, not permanent storage ceilings.
+// Decode complexity/concurrency budgets remain bounded independently of bytes.
+export const MEDIA_CEILINGS = Object.freeze({ ...DEFAULT_POLICY.media,
+    maxBytes: 256 * 1024 * 1024, quotaBytes: 1024 ** 4 });
+export const MAX_ALLOWLIST_ENTRIES = 128;
 
 function validateMedia(value) {
     if (value === undefined) return DEFAULT_POLICY.media;
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).some(key => !Object.hasOwn(DEFAULT_POLICY.media, key))) throw new Error('INVALID_MEDIA_CONFIG');
     const result = {};
-    for (const [key, maximum] of Object.entries(DEFAULT_POLICY.media)) {
-        const supplied = value[key] ?? maximum;
+    for (const [key, fallback] of Object.entries(DEFAULT_POLICY.media)) {
+        const maximum = MEDIA_CEILINGS[key];
+        const supplied = value[key] === undefined ? fallback : value[key];
         if (!Number.isSafeInteger(supplied) || supplied < 1 || supplied > maximum) throw new Error('INVALID_MEDIA_CONFIG');
         result[key] = supplied;
     }
     return Object.freeze(result);
 }
 
-export const NETWORK_DEFAULTS = Object.freeze({ maxBytes: 16 * 1024 * 1024, maxRedirects: 3,
+export const NETWORK_DEFAULTS = Object.freeze({ maxBytes: 64 * 1024 * 1024, maxRedirects: 3,
     connectTimeoutMs: 5000, firstByteTimeoutMs: 10000, idleTimeoutMs: 10000,
     totalTimeoutMs: 30000, perUserConcurrency: 2, globalConcurrency: 4, requestsPerMinute: 30 });
+export const NETWORK_CEILINGS = Object.freeze({ ...NETWORK_DEFAULTS, maxBytes: MEDIA_CEILINGS.maxBytes });
 
 function validateNetwork(value) {
     if (value === undefined) return DEFAULT_POLICY.network;
@@ -47,7 +55,7 @@ function validateNetwork(value) {
         } catch { throw new Error('INVALID_NETWORK_CONFIG'); }
     } else if (value.proxyUrl !== undefined) throw new Error('INVALID_NETWORK_CONFIG');
     if (!['allowlist-only', 'restricted-public'].includes(value.destinationPolicy)) throw new Error('INVALID_NETWORK_CONFIG');
-    if (!Array.isArray(value.allowlist) || value.allowlist.length > 128) throw new Error('INVALID_NETWORK_CONFIG');
+    if (!Array.isArray(value.allowlist) || value.allowlist.length > MAX_ALLOWLIST_ENTRIES) throw new Error('INVALID_NETWORK_CONFIG');
     const allowlist = value.allowlist.map(entry => {
         if (typeof entry !== 'string' || entry.length > 255) throw new Error('INVALID_NETWORK_CONFIG');
         const wildcard = entry.startsWith('*.');
@@ -55,12 +63,11 @@ function validateNetwork(value) {
         return wildcard ? `*.${host}` : host;
     });
     if (new Set(allowlist).size !== allowlist.length) throw new Error('INVALID_NETWORK_CONFIG');
-    if (value.destinationPolicy === 'allowlist-only' && !allowlist.length) throw new Error('INVALID_NETWORK_CONFIG');
     if (value.allowHttp !== undefined && typeof value.allowHttp !== 'boolean') throw new Error('INVALID_NETWORK_CONFIG');
     const limits = {};
     for (const [key, fallback] of Object.entries(NETWORK_DEFAULTS)) {
-        const supplied = value[key] ?? fallback;
-        if (!Number.isSafeInteger(supplied) || supplied <= 0 || supplied > fallback) throw new Error('INVALID_NETWORK_CONFIG');
+        const supplied = value[key] === undefined ? fallback : value[key];
+        if (!Number.isSafeInteger(supplied) || supplied <= 0 || supplied > NETWORK_CEILINGS[key]) throw new Error('INVALID_NETWORK_CONFIG');
         limits[key] = supplied;
     }
     return Object.freeze({ enabled: true, transport, proxyUrl: value.proxyUrl,
@@ -105,7 +112,8 @@ export async function loadPolicy({ dataRoot = globalThis.DATA_ROOT, configPath =
     try {
         const raw = await read(target, 'utf8');
         const policy = validatePolicy(JSON.parse(raw));
-        return { policy, source: 'administrator', error: null };
+        return { policy, source: 'administrator', error: null,
+            management: { path: target, external: Boolean(configPath), raw } };
     } catch (error) {
         if (error?.code === 'ENOENT' && !configPath) return { policy: DEFAULT_POLICY, source: 'defaults', error: null };
         return { policy: DEFAULT_POLICY, source: 'invalid', error: 'INVALID_CORE_CONFIG' };

@@ -97,7 +97,7 @@ test('image bytes, media validation, redirect checks, limits and slots apply to 
     await assert.rejects(network.fetchImage('https://example.test/html', 'alice'), { code: 'VALIDATION_FAILED' });
     await assert.rejects(network.fetchImage('https://example.test/oversize', 'alice'), { code: 'REMOTE_RESOURCE_TOO_LARGE' });
     const before = opens;
-    await assert.rejects(network.fetchImage('https://example.test/redirect', 'bob'), { code: 'TARGET_NOT_ALLOWED' });
+    await assert.rejects(network.fetchImage('https://example.test/redirect', 'bob'), { code: 'TARGET_NOT_ALLOWED', details: {} });
     assert.equal(opens, before + 1, 'redirect never connects to forbidden target');
     await assert.rejects(network.fetchImage('https://example.test/ok', 'alice'), { code: 'RATE_LIMITED' });
     assert.equal((await network.fetchImage('https://example.test/ok', 'bob')).body.length, gif.length);
@@ -242,7 +242,7 @@ test('response profile checks signatures, upstream status, encoding, length, idl
         [{ 'content-type': 'image/svg+xml' }, Buffer.from('<svg></svg>'), 'VALIDATION_FAILED'],
         [{ 'content-type': 'image/png' }, gif, 'UNSUPPORTED_MEDIA_TYPE'],
         [{ 'content-type': 'image/gif', 'content-encoding': 'gzip' }, gif, 'UNSUPPORTED_MEDIA_TYPE'],
-        [{ 'content-type': 'image/gif', 'content-length': String(17 * 1024 * 1024) }, gif, 'REMOTE_RESOURCE_TOO_LARGE'],
+        [{ 'content-type': 'image/gif', 'content-length': String(config().policy.network.maxBytes + 1) }, gif, 'REMOTE_RESOURCE_TOO_LARGE'],
         [{ 'content-type': 'image/gif' }, Buffer.alloc(0), 'VALIDATION_FAILED'],
     ]) {
         const network = createNetwork(config(), { resolver, open: async () => fakeResponse(200, headers, body) });
@@ -281,4 +281,19 @@ test('per-user and global slots reject without queues and are freed by abort and
     network.shutdown();
     await assert.rejects(second, { code: 'REMOTE_TIMEOUT' });
     await assert.rejects(third, { code: 'REMOTE_TIMEOUT' });
+});
+
+
+test('allowlist rejection of redirected host reports hostname only without redirect path or token', async () => {
+    let opens = 0;
+    const network = createNetwork(config(), { resolver, open: async () => {
+        opens++; return fakeResponse(302, { location: 'https://redirect-other.example.com/private?token=secret' });
+    } });
+    await assert.rejects(network.fetchImage('https://example.test/a.gif', 'alice'), error => {
+        assert.equal(error.code, 'TARGET_NOT_ALLOWED');
+        assert.deepEqual(error.details, { hostname: 'redirect-other.example.com' });
+        assert.doesNotMatch(JSON.stringify(error.details), /private|secret|https/);
+        return true;
+    });
+    assert.equal(opens, 1);
 });

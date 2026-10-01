@@ -201,3 +201,37 @@ test('Media is independent of Network and remote import uses its bounded fetch r
     assert.equal(calls, 1);
     await media.definition.shutdown();
 });
+
+test('a valid Image larger than 16 MiB passes actual Network and Media import with exact Original and unchanged safety guards', async t => {
+    const { randomFillSync } = await import('node:crypto');
+    const { Readable } = await import('node:stream');
+    const { createNetwork } = await import('../src/network/index.js');
+    const root = await temp(t);
+    const bytes = await sharp(randomFillSync(Buffer.alloc(2500 * 2500 * 3)),
+        { raw: { width: 2500, height: 2500, channels: 3 } }).png({ compressionLevel: 0 }).toBuffer();
+    assert.ok(bytes.length > 16 * 1024 ** 2 && bytes.length < 64 * 1024 ** 2);
+    const config = { policy: validatePolicy({ schemaVersion: 1, core: { allowedOrigins: ['https://example.com'] },
+        network: { enabled: true, transport: 'direct', destinationPolicy: 'allowlist-only', allowlist: ['img.example.com'] } }) };
+    let fetches = 0;
+    const network = createNetwork(config, {
+        resolver: { resolve4: async () => ['8.8.8.8'], resolve6: async () => [] },
+        open: async () => {
+            fetches++;
+            const response = Readable.from((function* () { for (let offset = 0; offset < bytes.length; offset += 65536) yield bytes.subarray(offset, offset + 65536); })());
+            response.statusCode = 200; response.headers = { 'content-type': 'image/png', 'content-length': String(bytes.length) };
+            return { response, close: () => response.destroy() };
+        },
+    });
+    const media = createMedia(config, network); await media.definition.initialize();
+    t.after(() => media.definition.shutdown());
+    const context = { userRoot: root, contextId: 'large-image' };
+    const imported = await media.remoteImport(context, 'https://img.example.com/noise.png');
+    assert.equal(fetches, 1); assert.equal(imported.originalBytes, bytes.length);
+    assert.deepEqual((await media.read(context, imported.mediaRef.assetId)).bytes, bytes);
+    assert.equal((await media.storage(context)).quotaBytes, 2 * 1024 ** 3);
+    await assert.rejects(validateImage(bytes, 'image/png', { ...policy, maxBytes: 16 * 1024 ** 2 }, sharp), { code: 'MEDIA_TOO_LARGE' });
+    await assert.rejects(validateImage(bytes, 'image/gif', policy, sharp), { code: 'MIME_MISMATCH' });
+    await assert.rejects(validateImage(bytes, 'image/png', { ...policy, maxDimension: 2048 }, sharp), { code: 'MEDIA_COMPLEXITY_EXCEEDED' });
+    await assert.rejects(validateImage(bytes, 'image/png', { ...policy, maxPixels: 100 }, sharp), { code: 'MEDIA_COMPLEXITY_EXCEEDED' });
+    network.shutdown();
+});
