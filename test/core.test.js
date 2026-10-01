@@ -106,6 +106,30 @@ async function request(url, route = '/status', { user = 'alice', method = 'GET',
 
 const quiet = { info() {}, error() {} };
 
+test('bindExisting HTTP reports missing media as 404 and corrupt Original as 422', async t => {
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config',
+        read: async () => JSON.stringify({ schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] } }) } });
+    const app = await sillyTavernHost(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    await mkdir(path.join(app.dataRoot, 'alice', 'characters'), { recursive: true });
+    await card(path.join(app.dataRoot, 'alice', 'characters', 'A.png'), '2026-01-01');
+    const headers = { 'x-test-user': 'alice', 'X-TTB-Protocol': '1.0', Origin: 'https://example.invalid',
+        'X-CSRF-Token': 'fixture-csrf-token', 'Sec-Fetch-Site': 'same-origin' };
+    const bind = mediaRef => request(app.url, '/v1/localization/bindExisting', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hostId: 'A.png', displayName: 'A', url: 'https://blocked.example/image.png', revision: 0, mediaRef }) });
+    const missing = await bind({ provider: 'server', assetId: '12345678-1234-4123-8123-123456789abc' });
+    assert.equal(missing.code, 404); assert.equal(missing.body.error.code, 'MEDIA_NOT_FOUND');
+    const bytes = await sharp({ create: { width: 3, height: 3, channels: 3, background: 'blue' } }).png().toBuffer();
+    const uploaded = await request(app.url, '/v1/media/import/local', { method: 'POST', headers: { ...headers, 'Content-Type': 'image/png' }, body: bytes });
+    assert.equal(uploaded.code, 200);
+    const ref = uploaded.body.data.mediaRef;
+    await writeFile(path.join(app.dataRoot, 'alice', 'tavern-toolbox-server', 'media-v1', 'originals', ref.assetId + '.png'), 'corrupt');
+    const corrupt = await bind(ref);
+    assert.equal(corrupt.code, 422); assert.equal(corrupt.body.error.code, 'MEDIA_CORRUPT');
+    const catalog = await request(app.url, '/v1/localization/catalog?hostId=A.png', { headers });
+    assert.equal(catalog.body.data.revision, 0);
+});
+
 test('Network policy HTTP operations recheck admin, Origin and CSRF and never return secrets', async t => {
     const dataRoot = await mkdtemp(path.join(tmpdir(), 'ttb-policy-http-'));
     await writeFile(path.join(dataRoot, 'tavern-toolbox-server.config.json'), JSON.stringify({ schemaVersion: 1,

@@ -151,12 +151,25 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
         async deleteBatch(context, assetIds) {
             if (!Array.isArray(assetIds) || !assetIds.length || assetIds.length > 48
                 || new Set(assetIds).size !== assetIds.length || assetIds.some(id => !ID.test(id))) fail('INVALID_REQUEST');
-            const items = [];
-            for (const assetId of assetIds) {
-                try { await api.delete(context, assetId); items.push({ assetId, deleted: true }); }
-                catch (error) { items.push({ assetId, deleted: false, code: error instanceof MediaFailure ? error.code : 'MEDIA_UNAVAILABLE' }); }
-            }
-            return { items, deletedCount: items.filter(item => item.deleted).length, retainedCount: items.filter(item => !item.deleted).length };
+            return coordinate(context, async () => {
+                // No Consumer can introduce a reference between this fresh scan
+                // and the final item. Re-entering api.delete would deadlock.
+                const refs = await analysis(context);
+                const protectedIds = new Set(refs.references.map(ref => ref.mediaRef.assetId));
+                const items = [];
+                for (const assetId of assetIds) {
+                    try {
+                        await media.metadata(context, assetId);
+                        if (!refs.complete) fail('REFERENCE_ANALYSIS_INCOMPLETE');
+                        if (protectedIds.has(assetId)) fail('MEDIA_REFERENCED');
+                        await media.delete(context, assetId);
+                        items.push({ assetId, deleted: true });
+                    } catch (error) {
+                        items.push({ assetId, deleted: false, code: error instanceof MediaFailure ? error.code : 'MEDIA_UNAVAILABLE' });
+                    }
+                }
+                return { items, deletedCount: items.filter(item => item.deleted).length, retainedCount: items.filter(item => !item.deleted).length };
+            });
         },
     };
     api.definition.capabilities[0].constraints = { referenceAnalysis: 'consumer-providers', deletion: 'reference-aware', automaticGc: false };

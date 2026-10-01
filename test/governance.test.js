@@ -144,3 +144,53 @@ test('Character group unlink and changed URL recovery do not fetch sources, copy
     assert.equal((await f.media.storage(f.context)).assetCount, 1);
     assert.equal((await f.governance.detail(f.context, asset.mediaRef.assetId)).references.total, 1);
 });
+
+test('48-item batch scans each Consumer once and retains referenced/missing items', async t => {
+    const f = await fixture(t), assets = [];
+    for (let n = 0; n < 47; n++) assets.push(await f.image({ r: n, g: 42, b: 99 }));
+    const used = assets.at(-1);
+    await f.business.commit(f.context, 'outfit', 1, 0, outfit(used.mediaRef));
+    const scans = { localization: 0, outfit: 0 };
+    for (const provider of [f.localization.referenceProvider, f.business.referenceProvider]) {
+        const enumerate = provider.enumerate;
+        provider.enumerate = async context => { scans[provider.id]++; return enumerate(context); };
+    }
+    const missing = '12345678-1234-4123-8123-123456789abc';
+    const result = await f.governance.deleteBatch(f.context, [...assets.map(asset => asset.mediaRef.assetId), missing]);
+    assert.deepEqual(scans, { localization: 1, outfit: 1 });
+    assert.equal(result.deletedCount, 46); assert.equal(result.retainedCount, 2);
+    assert.deepEqual(result.items.slice(-2).map(item => item.code), ['MEDIA_REFERENCED', 'MEDIA_NOT_FOUND']);
+    assert.equal((await f.media.storage(f.context)).assetCount, 1);
+});
+
+test('batch holds the coordinator across all deletions; a queued Consumer cannot bind an already-deleted item', async t => {
+    const f = await fixture(t), first = await f.image(), second = await f.image('blue');
+    let entered, release;
+    const started = new Promise(resolve => { entered = resolve; });
+    const barrier = new Promise(resolve => { release = resolve; });
+    const remove = f.media.delete;
+    f.media.delete = async (context, id) => { if (id === first.mediaRef.assetId) { entered(); await barrier; } return remove(context, id); };
+    const batch = f.governance.deleteBatch(f.context, [first.mediaRef.assetId, second.mediaRef.assetId]);
+    await started;
+    let settled = false;
+    const write = f.business.commit(f.context, 'outfit', 1, 0, outfit(second.mediaRef)).finally(() => { settled = true; });
+    const rejected = assert.rejects(write, { code: 'BUSINESS_MEDIA_UNAVAILABLE' });
+    try {
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(settled, false);
+        assert.equal((await f.business.read(f.context, 'outfit', 1)).revision, 0);
+    } finally { release(); }
+    assert.equal((await batch).deletedCount, 2);
+    await rejected;
+    assert.equal((await f.business.read(f.context, 'outfit', 1)).revision, 0);
+});
+
+test('incomplete batch analysis retains all existing items and scans the failed Provider once', async t => {
+    const f = await fixture(t), first = await f.image(), second = await f.image('blue');
+    let scans = 0;
+    f.governance.register({ id: 'future', consumer: 'future', label: 'Future', enumerate: async () => { scans++; throw new Error('unavailable'); } });
+    const result = await f.governance.deleteBatch(f.context, [first.mediaRef.assetId, second.mediaRef.assetId]);
+    assert.equal(scans, 1); assert.equal(result.deletedCount, 0); assert.equal(result.retainedCount, 2);
+    assert.ok(result.items.every(item => item.code === 'REFERENCE_ANALYSIS_INCOMPLETE'));
+    assert.equal((await f.media.storage(f.context)).assetCount, 2);
+});
