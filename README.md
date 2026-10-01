@@ -1,5 +1,15 @@
 # Tavern Toolbox Server
 
+## Phase 6 development candidate — Media Governance & Asset Manager
+
+Continue both repositories on `stage/phase-6-media-governance`. The formal baseline remains Server v0.5.0 / Frontend v0.48.0; no version bump, main merge or Release before installed-host acceptance. Protocol 1.0 and existing Media IDs/Originals/SQLite schemas are preserved.
+
+`media.governance` adds bounded Summary, Asset/Reference Group browsers, details, Consumer-owned reference actions and reference-aware batch deletion. Character Localization and Outfit register independent Reference Providers; Governance never parses their business schemas. Active / Detached / Unreferenced / Unknown reference states are separate from Original/Thumbnail health. Broken references survive absent Media rows. Provider failure makes analysis incomplete, preserves known references and prevents deletion; it does not disable Media reads. See [Media Foundation and Governance](docs/MEDIA-FOUNDATION.md), [protocol](protocol/README.md) and [Phase 6 acceptance](PHASE-6-ACCEPTANCE.md).
+
+Every external hard delete, including the existing `DELETE /v1/media/assets/:id`, now rechecks complete provider analysis and zero references under the same per-user coordinator as Business/Localization writes. Active and detached references both prevent deletion. Consumer deletion, unlink, detached forget and replacement retain Media. Batch deletion reports each outcome; no automatic GC or expiry. Existing Originals can be bound to a precise Character locator without Network access and reused in a Server Outfit image slot. No Local IndexedDB Genesis/Worldbook/Outfit data is scanned or migrated.
+
+The frontend global manager replaces the old detached-management panel in Server Status. Thumbnails are lazy/static with no Original fallback; Original is explicit, references are paginated and user changes discard previews. Only one active ST process may use a user data volume: the coordinator is process-local and is not a distributed lock. Current development checks have no installed-host or visual pass; retain the acceptance gate below.
+
 ## Phase 5 Remote Image Access & Localization Foundation
 
 Release `v0.5.0`, paired with frontend `v0.48.0`, completes Phase 5 and adds `localization.characters` without changing Protocol 1.0. The authenticated per-user Catalog stores Character Scopes, SHA-256 identities of exact remote locators, and standard Server MediaRefs. It does not store source URLs or own character cards. Explicit Localize uses the existing policy-controlled Network remote import, then commits the Binding with a revision check; failed import or commit leaves the old Binding intact. Unlocalize, replacement, and character deletion never hard-delete Media.

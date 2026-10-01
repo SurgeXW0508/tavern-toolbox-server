@@ -139,3 +139,12 @@ export function addedMediaRefs(document, previous) {
     return [...new Set(document.assets.filter(item => item.mediaRef?.assetId
         && old.get(item.id) !== item.mediaRef.assetId).map(item => item.mediaRef.assetId))];
 }
+
+// Consumer-owned adapter: Governance sees only groups and media slots.
+export function outfitReferenceGroups(snapshot) {
+    return snapshot.document.assets.filter(asset => asset.mediaRef).map(asset => ({
+        id: asset.id, label: asset.name, lifecycle: 'active', revision: snapshot.revision,
+        description: [asset.kind, asset.scope.label].filter(Boolean).join(' · '), actions: [],
+        references: [{ id: 'image', label: '图片', mediaRef: asset.mediaRef, actions: ['replace', 'unlink'] }],
+    }));
+}

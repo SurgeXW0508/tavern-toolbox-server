@@ -98,6 +98,8 @@ export function createMedia(config, network) {
                 return await importBytes(context, result.body, result.mime, true);
             } finally { release(); }
         },
+        catalog: async context => (await store(context)).catalog(),
+        health: async (context, id) => (await store(context)).health(id),
         metadata: async (context, id) => (await store(context)).metadata(id),
         read: async (context, id, derived) => (await store(context)).read(id, derived),
         delete: async (context, id) => (await store(context)).delete(id),

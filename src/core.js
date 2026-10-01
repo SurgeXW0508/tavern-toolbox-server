@@ -10,6 +10,8 @@ import { createMedia, MediaFailure } from './media/index.js';
 import { createBusiness, BusinessFailure } from './business/index.js';
 import { MAX_BUSINESS_BYTES } from './business/store.js';
 import { createLocalization } from './localization/index.js';
+import { createReferenceCoordinator } from './governance/coordination.js';
+import { createGovernance } from './governance/index.js';
 
 export const PRODUCT = 'tavern-toolbox-server';
 export const SERVER_VERSION = createRequire(import.meta.url)('../package.json').version;
@@ -59,10 +61,15 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(network.definition);
     const media = createMedia(config, network);
     registry.register(media.definition);
-    const business = createBusiness(config, media);
+    const coordinate = createReferenceCoordinator();
+    const business = createBusiness(config, media, coordinate);
     registry.register(business.definition);
-    const localization = createLocalization(media);
+    const localization = createLocalization(media, coordinate);
     registry.register(localization.definition);
+    const governance = createGovernance(media, coordinate, { mutations: config.policy.core.allowedOrigins.length > 0 });
+    governance.register(localization.referenceProvider);
+    governance.register(business.referenceProvider);
+    registry.register(governance.definition);
     registerModules?.(registry); // Test fixture or a future trusted composition root; not callable over HTTP.
     await registry.initialize();
     let stopped = false;
@@ -282,7 +289,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
                     result = await media.read(context, req.params.id, req.params.variant === 'thumbnail');
                 }
                 else if (operation === 'metadata') result = await media.metadata(context, req.params.id);
-                else if (operation === 'delete') result = await media.delete(context, req.params.id);
+                else if (operation === 'delete') result = await governance.delete(context, req.params.id);
                 else if (operation === 'rebuildThumbnail') result = await media.rebuild(context, req.params.id);
                 else if (operation === 'cleanupTechnicalGarbage') result = await media.cleanup(context);
                 else result = await media.storage(context);
@@ -298,7 +305,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
             } catch (error) {
                 code = error instanceof MediaFailure || error instanceof NetworkFailure ? error.code : 'MEDIA_UNAVAILABLE';
                 const statusCode = { INVALID_REQUEST: 400, PROTOCOL_INCOMPATIBLE: 409, CSRF_REJECTED: 403,
-                    MEDIA_NOT_FOUND: 404, MEDIA_CORRUPT: 503, DERIVED_UNAVAILABLE: 503,
+                    MEDIA_NOT_FOUND: 404, MEDIA_REFERENCED: 409, REFERENCE_ANALYSIS_INCOMPLETE: 503, MEDIA_CORRUPT: 503, DERIVED_UNAVAILABLE: 503,
                     MEDIA_TOO_LARGE: 413, UNSUPPORTED_MEDIA_TYPE: 415, MIME_MISMATCH: 415,
                     ANIMATION_UNSUPPORTED: 415, INVALID_MEDIA: 422, MEDIA_COMPLEXITY_EXCEEDED: 422,
                     QUOTA_EXCEEDED: 507, RESOURCE_BUSY: 429, NETWORK_UNAVAILABLE: 503,
@@ -378,7 +385,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
                     || Buffer.byteLength(JSON.stringify(req.body)) > 4096))
                     throw new BusinessFailure('INVALID_REQUEST');
                 const body = req.body;
-                const keys = { resolve: 'hostId,url', localize: 'displayName,hostId,revision,url',
+                const keys = { bindExisting: 'displayName,hostId,mediaRef,revision,url', resolve: 'hostId,url', localize: 'displayName,hostId,revision,url',
                     unlocalize: 'hostId,revision,url', rebind: 'displayName,hostId,revision,scopeId', forget: 'hostId,revision,scopeId' };
                 if (operation !== 'read' && Object.keys(body).sort().join(',') !== keys[operation]
                     || operation !== 'read' && operation !== 'resolve'
@@ -387,6 +394,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
                 const result = operation === 'read' ? await localization.read(context, req.query?.hostId)
                     : operation === 'resolve' ? await localization.resolve(context, body.hostId, body.url)
                     : operation === 'localize' ? await localization.localize(context, body, controller.signal)
+                    : operation === 'bindExisting' ? await localization.bindExisting(context, body)
                     : operation === 'unlocalize' ? await localization.unlocalize(context, body)
                     : operation === 'forget' ? await localization.forget(context, body)
                     : await localization.rebind(context, body);
@@ -416,6 +424,47 @@ export async function createCore({ policyOptions, registerModules, networkOption
         router.post('/v1/localization/unlocalize', localizationRoute('unlocalize'));
         router.post('/v1/localization/rebind', localizationRoute('rebind'));
         router.post('/v1/localization/forget', localizationRoute('forget'));
+        router.post('/v1/localization/bindExisting', localizationRoute('bindExisting'));
+        const governanceRoute = (operation, mutation = false) => async (req, res) => {
+            const { requestId, context, start } = res.locals.ttbRequest;
+            let code = 'OK';
+            try {
+                if (req.get('X-TTB-Protocol') !== '1.0') throw new MediaFailure('PROTOCOL_INCOMPATIBLE');
+                if (mutation && !mutationGate(req, config.policy.core.allowedOrigins)) throw new MediaFailure('CSRF_REJECTED');
+                if (mutation && (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers?.['content-type'] || '')
+                    || !req.body || typeof req.body !== 'object' || Array.isArray(req.body)
+                    || Buffer.byteLength(JSON.stringify(req.body)) > 8192)) throw new MediaFailure('INVALID_REQUEST');
+                let result;
+                if (operation === 'summary') result = await governance.summary(context);
+                else if (operation === 'assets' || operation === 'groups') result = await governance[operation](context, req.query);
+                else if (operation === 'detail') result = await governance.detail(context, req.params.id, req.query);
+                else if (operation === 'group') result = await governance.group(context, req.params.provider, req.params.group, req.query);
+                else if (operation === 'action') result = await governance.action(context, req.body);
+                else {
+                    if (Object.keys(req.body).join(',') !== 'assetIds') throw new MediaFailure('INVALID_REQUEST');
+                    result = await governance.deleteBatch(context, req.body.assetIds);
+                }
+                return send(res, 200, result, requestId, true, 256 * 1024);
+            } catch (error) {
+                code = error instanceof MediaFailure || error instanceof BusinessFailure ? error.code : 'MEDIA_UNAVAILABLE';
+                const statusCode = { INVALID_REQUEST: 400, PROTOCOL_INCOMPATIBLE: 409, CSRF_REJECTED: 403,
+                    MEDIA_NOT_FOUND: 404, REFERENCE_NOT_FOUND: 404, MEDIA_REFERENCED: 409,
+                    LOCALIZATION_NOT_FOUND: 404, LOCALIZATION_CONFLICT: 409, BUSINESS_CONFLICT: 409,
+                    HOST_IDENTITY_UNAVAILABLE: 409, LOCALIZATION_SCOPE_CONFLICT: 409,
+                    MEDIA_CORRUPT: 422, REFERENCE_ANALYSIS_INCOMPLETE: 503 }[code] || 503;
+                return send(res, statusCode, failure(code, '媒体治理操作未完成'), requestId, true, 4096);
+            } finally {
+                logger.info?.({ service: PRODUCT, time: new Date().toISOString(), severity: 'info', requestId,
+                    moduleId: 'governance', operation, durationMs: now() - start, code, outcome: 'notApplicable' });
+            }
+        };
+        router.get('/v1/governance/summary', governanceRoute('summary'));
+        router.get('/v1/governance/assets', governanceRoute('assets'));
+        router.get('/v1/governance/groups', governanceRoute('groups'));
+        router.get('/v1/governance/assets/:id', governanceRoute('detail'));
+        router.get('/v1/governance/groups/:provider/:group', governanceRoute('group'));
+        router.post('/v1/governance/action', governanceRoute('action', true));
+        router.post('/v1/governance/delete', governanceRoute('deleteBatch', true));
         router.use((req, res) => {
             const knownPath = req.path === '/status' || req.path === '/v1/status' || req.path === '/v1/network/fetch';
             const { requestId } = res.locals.ttbRequest;
