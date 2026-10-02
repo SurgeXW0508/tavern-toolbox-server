@@ -1,5 +1,11 @@
 # Tavern Toolbox Server
 
+## Phase 7 Remote Audio Access Foundation — Candidate
+
+The `stage/phase-7-remote-audio` candidate adds `network.remoteAudio` (Protocol 1.0) with user-scoped, expiring opaque playback access and finite-file Streaming Relay. Native GET/Single Range uses the ST session; creation/release use trusted Origin, CSRF and negotiated protocol. Audio budgets are independent of Image, while destination safety and the server-owned proxy transport are shared. Existing administrator Network configuration needs no edit beyond explicitly allowing the actual source/redirect hosts. Optional top-level `audio` limits are described in [Phase 7 architecture and acceptance](PHASE-7-ACCEPTANCE.md).
+
+Client routing preferences never grant Network permission. No silent direct fallback, Audio localization/assets/cache/transcoding, live streaming or generic URL proxy. Existing Image/Media/Governance behavior and formal versions are unchanged. NAS/device acceptance is pending; do not merge or release this candidate yet.
+
 ## Phase 6 Media Governance & Asset Manager — Release v0.6.0
 
 Release v0.6.0 is paired with Frontend v0.49.0. Phase 6 has completed code review, automated verification and user acceptance of the core experience. Protocol 1.0 and existing Media IDs/Originals/SQLite schemas are preserved; no automatic migration or GC. Future development starts from latest `main`.

@@ -16,11 +16,13 @@ function plainAgent(host, port) {
     return agent;
 }
 
-export function openApproved(target, policy, signal, tlsOptions = {}) {
+export function openApproved(target, policy, signal, tlsOptions = {}, profile = {}) {
     const ip = target.addresses[0]; // Every candidate passed the same policy; never resolve the hostname again.
     const hostname = hostHeader(target);
-    const headers = { Host: hostname, Accept: 'image/png,image/jpeg,image/webp,image/gif',
-        'Accept-Encoding': 'identity', 'User-Agent': 'TavernToolboxServer/remoteFetch' };
+    // Profiles are trusted server code, never browser-supplied headers. Image defaults stay unchanged.
+    const headers = { Host: hostname, Accept: profile.accept || 'image/png,image/jpeg,image/webp,image/gif',
+        'Accept-Encoding': 'identity', 'User-Agent': 'TavernToolboxServer/remoteFetch',
+        ...(profile.range ? { Range: profile.range } : {}) };
     const path = target.url.pathname + target.url.search;
     let request;
     const agents = [];

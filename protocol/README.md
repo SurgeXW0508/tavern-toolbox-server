@@ -52,3 +52,16 @@ The mutation mutex is owned by the OS for the lifetime of the writer (Linux abst
 Character actions: detached `rebind`/`forget`, reference `unlink`/`replace`; active reference mutation requires the matching explicit hostId. Outfit actions: `unlink`/`replace` of reference `image` with Business revision. These actions do not hard-delete Media. Old `/v1/media/assets/:id` DELETE is retained but **reference-aware**. `MEDIA_REFERENCED` returns 409; `REFERENCE_ANALYSIS_INCOMPLETE` returns 503; missing asset/reference, corruption, Consumer conflict and invalid context remain distinct safe codes. Every delete rechecks authoritative current analysis within the per-user write coordinator, including when a stale browser submits an old ID. Batch outcomes can be partial. New reads never expose internal digest, real paths or original source URLs. No cross-user/project/provider query, automatic GC, arbitrary reverse binding or distributed write coordination is added.
 
 Batch deletion obtains the user coordinator once and performs one fresh Reference Analysis for all 1–48 items. Participating reference writes wait until the last item; incomplete analysis retains existing assets. `localization/bindExisting` reports `MEDIA_NOT_FOUND` with HTTP 404 and `MEDIA_CORRUPT` with HTTP 422, preserving the standard error envelope.
+
+## Additive Phase 7 `network.remoteAudio` (contract 1.0)
+
+| Route | Contract |
+| --- | --- |
+| POST `/v1/network/audio/access` | `{profile:"audio",url}` → `{accessId,expiresAt,profile:"audio"}`; exact source bound to current ST user, Origin/CSRF/protocol required |
+| GET `/v1/network/audio/access/:accessId` | Protocol required; `{expiresAt,state:"ready"\|"failed",code,details}`; sanitized failure hostname only |
+| POST `/v1/network/audio/release` | `{accessId}` → `{released:true}`; protected and idempotent, cancels this user's active streams |
+| GET `/v1/network/audio/stream/:accessId` | Native media GET using ST session, no custom header; validated Single Range → real upstream 200/206/416 with finite length |
+
+The published playback URL is the same-origin base plus `/v1/network/audio/stream/` and opaque ID; no source query parameter. `AUDIO_ACCESS_EXPIRED` (410) reveals no foreign-user access existence. Invalid multi-range is `UNSUPPORTED_RANGE` (400); unknown size `REMOTE_SIZE_UNKNOWN` (422), malformed upstream interval `INVALID_REMOTE_RESPONSE` (502), oversize 413, unsupported MIME 415. Network destination failures retain existing safe codes. Partial-transfer errors close the media connection; inspect supplies the last sanitized failure. Normal native candidate fallback is allowed, but a failed routed candidate is never restored to its original URL.
+
+Audio capability/module health is independent of Image. Protocol major, `network.remoteFetch` and storage schemas remain unchanged; old clients ignore this capability and new clients fail only Audio routing on old servers. See [Phase 7 limits, privacy, unsupported scenarios and device acceptance](../PHASE-7-ACCEPTANCE.md).
