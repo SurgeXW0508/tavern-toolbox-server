@@ -122,7 +122,7 @@ function safeView(snapshot, hostId) {
                 detachedAt: scope.detachedAt, bindingCount: scope.bindings.length })) };
 }
 
-export function createLocalization(media) {
+export function createLocalization(media, coordinate = async (_context, work) => work()) {
     let DatabaseSync, unavailable = false, stopped = false;
     const stores = new Map();
     const migrations = new Map();
@@ -186,10 +186,32 @@ export function createLocalization(media) {
         if (!HOST_ID.test(hostId || '') || !current.has(hostId)) fail('HOST_IDENTITY_UNAVAILABLE');
         return current.get(hostId);
     }
-    return {
+    async function changeReference(context, body, replace) {
+        if (!UUID.test(body.groupId || '') || !KEY.test(body.referenceId || '')) fail('INVALID_REQUEST');
+        const { target, current, result } = await snapshot(context);
+        if (result.revision !== body.revision) fail('LOCALIZATION_CONFLICT');
+        const document = structuredClone(result.document);
+        const scope = document.scopes.find(item => item.id === body.groupId);
+        if (!scope) fail('LOCALIZATION_NOT_FOUND');
+        if (scope.hostId) {
+            requireHost(current, body.hostId);
+            if (scope.hostId !== body.hostId) fail('HOST_IDENTITY_UNAVAILABLE');
+        }
+        const binding = scope.bindings.find(item => item.locatorKey === body.referenceId);
+        if (!binding) fail('REFERENCE_NOT_FOUND');
+        if (replace) {
+            if (body.mediaRef?.provider !== 'server' || !UUID.test(body.mediaRef.assetId || '')) fail('INVALID_REQUEST');
+            await media.metadata(context, body.mediaRef.assetId);
+            if ((await media.health(context, body.mediaRef.assetId)).original !== 'healthy') fail('MEDIA_CORRUPT');
+            if (scope.hostId && await hostProof(context.userRoot, body.hostId) !== scope.proof) fail('HOST_IDENTITY_UNAVAILABLE');
+            binding.mediaRef = body.mediaRef;
+        } else scope.bindings = scope.bindings.filter(item => item !== binding);
+        return { revision: target.commit(NAMESPACE, SCHEMA, body.revision, document, validate).revision };
+    }
+    const api = {
         definition: { id: 'localization', version: '0.1.0', dependsOn: ['core', 'media'],
             capabilities: [{ id: 'localization.characters', contract: { major: 1, minMinor: 0, maxMinor: 0 },
-                operations: ['read', 'resolve', 'localize', 'unlocalize', 'rebind', 'forget'].map(id => ({ id, available: true })),
+                operations: ['read', 'resolve', 'localize', 'unlocalize', 'rebind', 'forget', 'bindExisting'].map(id => ({ id, available: true })),
                 constraints: { schemaVersion: SCHEMA, mediaProvider: 'server', identity: 'host-filename-create-date' } }],
             initialize: async () => {
                 try {
@@ -253,6 +275,27 @@ export function createLocalization(media) {
             const committed = after.target.commit(NAMESPACE, SCHEMA, revision, document, validate);
             return { ...safeView(committed, hostId), mediaRef };
         },
+        async bindExisting(context, { hostId, displayName, url, revision, mediaRef }) {
+            if (typeof displayName !== 'string' || displayName.length > 160 || mediaRef?.provider !== 'server'
+                || !UUID.test(mediaRef.assetId || '')) fail('INVALID_REQUEST');
+            const key = locatorKey(url);
+            const { target, current, result } = await snapshot(context);
+            const proof = requireHost(current, hostId);
+            if (result.revision !== revision) fail('LOCALIZATION_CONFLICT');
+            await media.metadata(context, mediaRef.assetId);
+            // Metadata alone does not prove Original is reusable.
+            if ((await media.health(context, mediaRef.assetId)).original !== 'healthy') fail('MEDIA_CORRUPT');
+            if (await hostProof(context.userRoot, hostId) !== proof) fail('HOST_IDENTITY_UNAVAILABLE');
+            const document = structuredClone(result.document);
+            let scope = document.scopes.find(item => item.hostId === hostId);
+            if (!scope) { scope = { id: randomUUID(), hostId, proof, displayName,
+                createdAt: new Date().toISOString(), detachedAt: null, bindings: [] }; document.scopes.push(scope); }
+            const prior = scope.bindings.find(item => item.locatorKey === key);
+            if (prior) prior.mediaRef = mediaRef; else scope.bindings.push({ locatorKey: key, mediaRef });
+            return { ...safeView(target.commit(NAMESPACE, SCHEMA, revision, document, validate), hostId), mediaRef };
+        },
+        async unlinkReference(context, body) { return changeReference(context, body, false); },
+        async replaceReference(context, body) { return changeReference(context, body, true); },
         async unlocalize(context, { hostId, url, revision }) {
             const key = locatorKey(url);
             const { target, current, result } = await snapshot(context);
@@ -294,6 +337,28 @@ export function createLocalization(media) {
             return safeView(committed, hostId);
         },
     };
+    // Reference writes are serialized with hard deletion at the composition root.
+    for (const name of ['localize', 'unlocalize', 'forget', 'rebind', 'bindExisting', 'unlinkReference', 'replaceReference']) {
+        const original = api[name];
+        api[name] = (context, ...args) => coordinate(context, () => original(context, ...args));
+    }
+    api.referenceProvider = { id: 'localization', consumer: 'character', label: '角色本地化',
+        enumerate: async context => {
+            const { result } = await snapshot(context);
+            return result.document.scopes.map(scope => ({ id: scope.id, label: scope.displayName || '未命名角色',
+                lifecycle: scope.detachedAt ? 'detached' : 'active', revision: result.revision,
+                detachedAt: scope.detachedAt, hostId: scope.hostId,
+                actions: scope.detachedAt ? ['rebind', 'forget'] : [],
+                references: scope.bindings.map((binding, index) => ({ id: binding.locatorKey,
+                    label: `图片关联 ${index + 1}`, mediaRef: binding.mediaRef, actions: ['replace', 'unlink'] })),
+            }));
+        },
+        mutate: (context, body) => body.action === 'unlink' ? api.unlinkReference(context, body)
+            : body.action === 'replace' ? api.replaceReference(context, body)
+                : ['rebind', 'forget'].includes(body.action) ? api[body.action](context, { ...body, scopeId: body.groupId })
+                    : fail('INVALID_REQUEST'),
+    };
+    return api;
 }
 
 function locatorKey(url) {

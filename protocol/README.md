@@ -32,3 +32,23 @@ Policy mutation requires trusted administrator, exact permitted Origin and sessi
 An actual allowlist rejection during `network.remoteFetch/fetch` or explicit Character localize may add `{hostname}` to error.details. It identifies the rejected redirect host when applicable and never contains full URL/path/query. Invalid syntax, unsafe DNS and other failure types do not produce a guessed repair target. Existing binary success and older capability compatibility remain unchanged. `media.assets/storage` is reused for `{totalBytes, quotaBytes, ...}` read-only usage; no new Media management API is introduced.
 
 The mutation mutex is owned by the OS for the lifetime of the writer (Linux abstract Unix IPC / Windows named pipe). It is released by process termination, including SIGKILL, without timestamp expiry, PID guessing or stale-file deletion. Legacy `.ttb-lock` artifacts are inert. Unsupported primitives leave mutations unavailable/read-only. This deployment supports one ST instance; it does not coordinate separate container network namespaces sharing a config volume. The frontend labels the policy entry “管理” only when add and remove operations are both available; otherwise a readable policy entry is “查看”.
+
+
+## Phase 6 optional Governance (Protocol 1.0)
+
+`media.governance` contract 1.0 advertises `summary`, `assets`, `groups`, `detail`, `group`, `action`, `deleteBatch`. Query pages have `offset` >= 0, `limit` 1–48 (default 24), `search` <=160 characters, optional `consumer`, `state` (active/detached/unreferenced/unknown), `kind=image`, `sort=newest|oldest|largest|smallest`, and `broken=true` for Groups. Asset and group detail paginate their Reference arrays too. JSON results are bounded to 256 KiB. The browser never submits reference-count/deletion authority.
+
+| Route | Contract |
+| --- | --- |
+| GET `/v1/governance/summary` | authoritative storage, complete/providers, unreferenced count/bytes, broken reference count |
+| GET `/v1/governance/assets` | bounded metadata page with Server-calculated referenceState/referenceCount/consumer identities |
+| GET `/v1/governance/groups` | bounded Reference Group summaries, including detached groups and broken counts |
+| GET `/v1/governance/assets/:id` | asset, separate Original/Thumbnail health, paginated references, completeness |
+| GET `/v1/governance/groups/:provider/:group` | Group and paginated references including missing media |
+| POST `/v1/governance/action` | `{providerId,groupId,action,revision,referenceId?,hostId?,displayName?,mediaRef?}` → Consumer-owned CAS mutation, returns revision only |
+| POST `/v1/governance/delete` | `{assetIds}` of 1–48 unique IDs → per-item deleted/code plus deletedCount/retainedCount |
+| POST `/v1/localization/bindExisting` | `{hostId,displayName,url,revision,mediaRef}` → existing Localization view, without source/network request |
+
+Character actions: detached `rebind`/`forget`, reference `unlink`/`replace`; active reference mutation requires the matching explicit hostId. Outfit actions: `unlink`/`replace` of reference `image` with Business revision. These actions do not hard-delete Media. Old `/v1/media/assets/:id` DELETE is retained but **reference-aware**. `MEDIA_REFERENCED` returns 409; `REFERENCE_ANALYSIS_INCOMPLETE` returns 503; missing asset/reference, corruption, Consumer conflict and invalid context remain distinct safe codes. Every delete rechecks authoritative current analysis within the per-user write coordinator, including when a stale browser submits an old ID. Batch outcomes can be partial. New reads never expose internal digest, real paths or original source URLs. No cross-user/project/provider query, automatic GC, arbitrary reverse binding or distributed write coordination is added.
+
+Batch deletion obtains the user coordinator once and performs one fresh Reference Analysis for all 1–48 items. Participating reference writes wait until the last item; incomplete analysis retains existing assets. `localization/bindExisting` reports `MEDIA_NOT_FOUND` with HTTP 404 and `MEDIA_CORRUPT` with HTTP 422, preserving the standard error envelope.

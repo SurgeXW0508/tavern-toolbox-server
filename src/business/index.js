@@ -1,9 +1,9 @@
 import { BusinessStore, BusinessFailure, MAX_BUSINESS_BYTES } from './store.js';
-import { OUTFIT_NAMESPACE, OUTFIT_BUSINESS_SCHEMA, emptyOutfit, validateOutfit, addedMediaRefs } from './outfit.js';
+import { OUTFIT_NAMESPACE, OUTFIT_BUSINESS_SCHEMA, emptyOutfit, validateOutfit, addedMediaRefs, outfitReferenceGroups } from './outfit.js';
 
 export { BusinessFailure } from './store.js';
 
-export function createBusiness(config, media) {
+export function createBusiness(config, media, coordinate = async (_context, work) => work()) {
     const stores = new Map();
     let DatabaseSync, initializationError = null, stopped = false;
     const failures = new Map();
@@ -36,7 +36,7 @@ export function createBusiness(config, media) {
         return contract;
     }
 
-    return {
+    const api = {
         definition: { id: 'business', version: '0.1.0', dependsOn: ['core'],
             capabilities: [{ id: 'business.collections', contract: { major: 1, minMinor: 0, maxMinor: 0 },
                 operations: ['read', 'commit'].map(id => ({ id, available: true })),
@@ -70,6 +70,7 @@ export function createBusiness(config, media) {
             return result;
         },
         async commit(context, namespace, schemaVersion, revision, document) {
+            return coordinate(context, async () => {
             const contract = consumer(namespace, schemaVersion);
             contract.validate(document);
             const target = await store(context);
@@ -83,6 +84,20 @@ export function createBusiness(config, media) {
                 catch { throw new BusinessFailure('BUSINESS_MEDIA_UNAVAILABLE'); }
             }
             return target.commit(namespace, schemaVersion, revision, document, contract.validate);
+            });
         },
     };
+    api.referenceProvider = { id: 'outfit', consumer: 'outfit', label: '穿搭',
+        enumerate: async context => outfitReferenceGroups(await api.read(context, OUTFIT_NAMESPACE, OUTFIT_BUSINESS_SCHEMA)),
+        mutate: async (context, body) => {
+            if (body.referenceId !== 'image' || !['replace', 'unlink'].includes(body.action)) throw new BusinessFailure('INVALID_REQUEST');
+            const snapshot = await api.read(context, OUTFIT_NAMESPACE, OUTFIT_BUSINESS_SCHEMA);
+            if (snapshot.revision !== body.revision) throw new BusinessFailure('BUSINESS_CONFLICT');
+            const asset = snapshot.document.assets.find(item => item.id === body.groupId);
+            if (!asset || !asset.mediaRef) throw new BusinessFailure('REFERENCE_NOT_FOUND');
+            asset.mediaRef = body.action === 'unlink' ? null : body.mediaRef;
+            if (body.action === 'replace' && !body.mediaRef) throw new BusinessFailure('INVALID_REQUEST');
+            return api.commit(context, OUTFIT_NAMESPACE, OUTFIT_BUSINESS_SCHEMA, body.revision, snapshot.document);
+        } };
+    return api;
 }

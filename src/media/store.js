@@ -93,7 +93,7 @@ export class MediaStore {
         return { mediaRef: { provider: 'server', assetId: row.id },
             mime: row.mime, originalBytes: row.original_size, width: row.width, height: row.height,
             animated: row.frame_count > 1, frameCount: row.frame_count,
-            createdAt: row.created_at, derivedState: row.derived_state };
+            createdAt: row.created_at, derivedState: row.derived_state, derivedBytes: row.derived_size, kind: 'image' };
     }
 
     usage() {
@@ -168,6 +168,22 @@ export class MediaStore {
             if (row.derived_state !== 'ready') throw new MediaFailure('DERIVED_UNAVAILABLE');
             try { return { bytes: await readFile(this.derivedPath(row)), mime: 'image/webp' }; }
             catch { throw new MediaFailure('DERIVED_UNAVAILABLE'); }
+        });
+    }
+
+    async catalog() {
+        return this.locked(async () => this.db.prepare('SELECT * FROM assets').all().map(row => this.info(row)));
+    }
+
+    async health(id) {
+        return this.locked(async () => {
+            const row = this.row(id);
+            try { await this.readOriginal(row); }
+            catch { return { original: 'corrupt', thumbnail: 'unknown' }; }
+            try {
+                const file = await stat(this.derivedPath(row));
+                return { original: 'healthy', thumbnail: row.derived_state === 'ready' && file.size === row.derived_size ? 'ready' : 'unavailable' };
+            } catch { return { original: 'healthy', thumbnail: 'unavailable' }; }
         });
     }
 

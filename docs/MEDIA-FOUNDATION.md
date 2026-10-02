@@ -38,7 +38,7 @@ All paths below are relative to `/api/plugins/tavern-toolbox-server`. JSON reque
 | Original | `GET /v1/media/assets/:id/original` | Exact bytes, authoritative image Content-Type |
 | Thumbnail | `GET /v1/media/assets/:id/thumbnail` | Bounded static WebP preview where available |
 | Storage | `GET /v1/media/storage` | Counts, Original and Derived bytes, quota state |
-| Delete | `DELETE /v1/media/assets/:id` | Explicitly invalidates that asset identity |
+| Delete | `DELETE /v1/media/assets/:id` | Phase 6: rechecks complete reference analysis and zero Active/Detached refs before permanently invalidating identity |
 | Rebuild | `POST /v1/media/assets/:id/rebuild-thumbnail` | Rebuilds Derived from Original without changing MediaRef |
 | Maintenance | `POST /v1/media/maintenance/cleanup` | Removes only physical orphan files and expired staging |
 
@@ -49,3 +49,18 @@ SillyTavern 1.19.0's global JSON/urlencoded body parsers and multer run before t
 ## Acceptance and verification boundary
 
 The installed-host acceptance is recorded in [`PHASE-3-ACCEPTANCE.md`](../PHASE-3-ACCEPTANCE.md). The automated suite covers format validation, animated GIF, malformed/truncated media, bounds, MIME mismatch, same-user concurrent dedupe, quota race, cross-user isolation, immutable Original, explicit deletion, derived rebuild, technical cleanup, unknown newer schema, Network isolation, authenticated HTTP serving, cache policy, the installed-host upload middleware chain and proxy recovery. Individual negative security cases covered by that suite are not claimed as separate NAS observations.
+
+
+## Phase 6 Governance / Reference Provider boundary
+
+The composition root registers expected Consumer-owned Providers (`localization`, `outfit`) regardless of their current availability. `src/governance` knows only the common Group/Reference contract: opaque group and reference IDs, labels, lifecycle, revision, actions and MediaRef. Localization enumerates its reconciled Scopes, including detached bindings; Outfit enumerates its media-bearing business records. Future real Server Consumers register their own adapter; no Governance business-schema scan or physical Consumer directories are needed. Provider failure/timeout is incomplete analysis, never an empty successful scan.
+
+Asset state precedence is Active reference → active, otherwise Detached reference → detached, otherwise complete zero-reference analysis → unreferenced, otherwise unknown. A missing metadata row is a Broken Reference and stays in the Group/detail query. A row with missing/changed Original is corrupt while retaining its reference state. Detail checks Original bytes against the existing internal digest; no digest/path/source URL is exposed. Original and Derived bytes in SQLite remain the authoritative user quota; only complete unreferenced sizes contribute to cleanup estimates.
+
+Reads return bounded pages (default 24, maximum 48), with server-side filtering/search/sort and paginated details. Analysis joins metadata internally without reading all Originals. Only explicit detail health checks read/hash its Original; thumbnail rebuilding keeps identity and Original unchanged. Core health discovery does not trigger full Governance scans. UI opening/refresh/mutation causes on-demand analysis; no persistent reference index, second metadata DB, background poll or automatic GC is introduced.
+
+Per-user Consumer reference writes and both legacy/new HTTP hard deletes share a process-local coordinator. The final reference check and delete cannot overlap another participating write. Business and Localization retain their collection revision CAS. Expected Providers cannot be silently omitted to permit deletion. The deployment must keep **one active ST process per shared user data volume**, as already required; filesystem changes by administrators and multiple independent writers are outside this coordination guarantee. Unknown/newer storage schemas fail closed without resetting data. No storage schema upgrade or Original rewrite is needed.
+
+Character `bindExisting` validates current host identity, exact locator, existing healthy Media and Catalog CAS without contacting Network. Reference unlink/replace is owned by Localization; active groups require the matching current host. Detached Forget/Rebind retain Media and do not require the old source host. Rebind only targets the explicit current host and refuses a nonempty destination Scope. Outfit reference mutation uses its own collection CAS and validates newly added MediaRefs; manager actions never edit its name/category/graph. All authenticated operations remain user-scoped, same-origin and CSRF protected for writes. Local Providers are outside Governance.
+
+Batch deletion holds that per-user coordinator for the whole batch, obtains one fresh Reference Analysis, then checks/deletes each item with partial outcomes. No participating Consumer can add a reference between items. Governance currently loads all asset metadata and filters/sorts/slices in memory; Summary and list independently analyze references. This is bounded at the HTTP/UI page boundary, not indexed storage pagination. Optimizing large catalogs and on-demand analysis reuse is deferred; stale cached analysis must never authorize deletion.

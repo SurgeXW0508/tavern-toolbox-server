@@ -106,6 +106,30 @@ async function request(url, route = '/status', { user = 'alice', method = 'GET',
 
 const quiet = { info() {}, error() {} };
 
+test('bindExisting HTTP reports missing media as 404 and corrupt Original as 422', async t => {
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config',
+        read: async () => JSON.stringify({ schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] } }) } });
+    const app = await sillyTavernHost(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    await mkdir(path.join(app.dataRoot, 'alice', 'characters'), { recursive: true });
+    await card(path.join(app.dataRoot, 'alice', 'characters', 'A.png'), '2026-01-01');
+    const headers = { 'x-test-user': 'alice', 'X-TTB-Protocol': '1.0', Origin: 'https://example.invalid',
+        'X-CSRF-Token': 'fixture-csrf-token', 'Sec-Fetch-Site': 'same-origin' };
+    const bind = mediaRef => request(app.url, '/v1/localization/bindExisting', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hostId: 'A.png', displayName: 'A', url: 'https://blocked.example/image.png', revision: 0, mediaRef }) });
+    const missing = await bind({ provider: 'server', assetId: '12345678-1234-4123-8123-123456789abc' });
+    assert.equal(missing.code, 404); assert.equal(missing.body.error.code, 'MEDIA_NOT_FOUND');
+    const bytes = await sharp({ create: { width: 3, height: 3, channels: 3, background: 'blue' } }).png().toBuffer();
+    const uploaded = await request(app.url, '/v1/media/import/local', { method: 'POST', headers: { ...headers, 'Content-Type': 'image/png' }, body: bytes });
+    assert.equal(uploaded.code, 200);
+    const ref = uploaded.body.data.mediaRef;
+    await writeFile(path.join(app.dataRoot, 'alice', 'tavern-toolbox-server', 'media-v1', 'originals', ref.assetId + '.png'), 'corrupt');
+    const corrupt = await bind(ref);
+    assert.equal(corrupt.code, 422); assert.equal(corrupt.body.error.code, 'MEDIA_CORRUPT');
+    const catalog = await request(app.url, '/v1/localization/catalog?hostId=A.png', { headers });
+    assert.equal(catalog.body.data.revision, 0);
+});
+
 test('Network policy HTTP operations recheck admin, Origin and CSRF and never return secrets', async t => {
     const dataRoot = await mkdtemp(path.join(tmpdir(), 'ttb-policy-http-'));
     await writeFile(path.join(dataRoot, 'tavern-toolbox-server.config.json'), JSON.stringify({ schemaVersion: 1,
@@ -153,10 +177,10 @@ test('real HTTP discovery: exact product, read-only routes, version contract and
     assert.equal(status.body.data.serverVersion, releaseVersion);
     assert.equal(status.body.data.core.version, releaseVersion);
     assert.deepEqual(status.body.meta.protocol, { major: 1, minor: 0 });
-    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'network.policy', 'media.assets', 'business.collections', 'localization.characters']);
+    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'network.policy', 'media.assets', 'business.collections', 'localization.characters', 'media.governance']);
     assert.deepEqual(status.body.data.capabilities[0], fixture.status.data.capabilities[0]);
     assert.deepEqual(status.body.data.effectivePolicy, fixture.status.data.effectivePolicy);
-    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'media', 'business', 'localization']);
+    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'media', 'business', 'localization', 'governance']);
     assert.equal(status.body.data.modules[1].state, 'disabled');
     assert.equal(status.body.data.core.state, 'ready');
     assert.equal(status.body.data.effectivePolicy.unsafeRequestsEnabled, false);
@@ -383,6 +407,7 @@ test('authenticated Media serving is scoped to the current ST user with no brows
     assert.equal(absent.status, other.status);
     const anonymous = await fetch(`${app.url}${original}`);
     assert.equal(anonymous.status, 403);
+    await mkdir(path.join(app.dataRoot, 'alice', 'characters'), { recursive: true });
     const destroy = await fetch(`${app.url}/v1/media/assets/${id}`, { method: 'DELETE',
         headers: { ...headers, 'x-test-user': 'alice' } });
     assert.equal(destroy.status, 200);
@@ -667,4 +692,41 @@ test('slow module health and oversized status fail within bounded budget without
         assert.equal(result.body.error.code, 'CAPABILITY_UNAVAILABLE');
         assert.ok(!JSON.stringify(result.body).includes('sensitive'));
     } finally { await largeApp.close(); await huge.shutdown(); }
+});
+
+test('every external hard delete is reference-aware; Governance is paginated, authenticated and fails closed on provider failure', async t => {
+    const core = await createCore({ logger: quiet, policyOptions: { configPath: '/fixture/config', read: async () => JSON.stringify({
+        schemaVersion: 1, core: { allowedOrigins: ['https://example.invalid'] },
+    }) } });
+    const app = await sillyTavernHost(core);
+    t.after(async () => { await app.close(); await core.shutdown(); });
+    await mkdir(path.join(app.dataRoot, 'alice', 'characters'), { recursive: true });
+    const headers = { Origin: 'https://example.invalid', 'X-CSRF-Token': 'fixture-csrf-token', 'X-TTB-Protocol': '1.0', 'x-test-user': 'alice' };
+    const bytes = await sharp({ create: { width: 8, height: 8, channels: 3, background: 'red' } }).png().toBuffer();
+    const upload = await fetch(app.url + '/v1/media/import/local', { method: 'POST', headers: { ...headers, 'Content-Type': 'image/png' }, body: bytes });
+    const mediaRef = (await upload.json()).data.mediaRef;
+    const asset = { id: 'governance-item', kind: 'item', name: '治理测试', category: '', tags: [], sceneTags: [], ownerPersonId: '',
+        scope: { type: 'global', id: '', label: '全局' }, mediaRef, createdAt: '2026-01-01', updatedAt: '2026-01-01', itemType: 'clothing', wearSlot: 'outer-layer', modelDescription: '' };
+    const commit = (revision, document) => request(app.url, '/v1/business/collections/outfit', { user: 'alice', protocol: '1.0', method: 'PUT',
+        headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ schemaVersion: 1, revision, document }) });
+    assert.equal((await commit(0, { assets: [asset], persons: [], wearStates: [] })).code, 200);
+    const raw = () => request(app.url, '/v1/media/assets/' + mediaRef.assetId, { user: 'alice', protocol: '1.0', method: 'DELETE', headers });
+    assert.equal((await raw()).body.error.code, 'MEDIA_REFERENCED');
+    const batch = csrf => request(app.url, '/v1/governance/delete', { user: 'alice', protocol: '1.0', method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify({ assetIds: [mediaRef.assetId] }) });
+    assert.equal((await batch('wrong')).body.error.code, 'CSRF_REJECTED');
+    assert.equal((await batch('fixture-csrf-token')).body.data.items[0].code, 'MEDIA_REFERENCED');
+    const page = await request(app.url, '/v1/governance/assets?limit=1&search=' + encodeURIComponent('治理'), { user: 'alice', protocol: '1.0' });
+    assert.equal(page.body.data.items.length, 1); assert.equal(page.body.data.total, 1);
+    assert.equal((await request(app.url, '/v1/governance/assets?limit=100000', { user: 'alice', protocol: '1.0' })).code, 400);
+    assert.equal((await request(app.url, '/v1/governance/assets', { user: '', protocol: '1.0' })).code, 403);
+    assert.equal((await request(app.url, '/v1/governance/assets/' + mediaRef.assetId, { user: 'bob', protocol: '1.0' })).code, 404);
+    assert.equal((await commit(1, { assets: [], persons: [], wearStates: [] })).code, 200);
+    await rm(path.join(app.dataRoot, 'alice', 'characters'), { recursive: true });
+    assert.equal((await raw()).body.error.code, 'REFERENCE_ANALYSIS_INCOMPLETE');
+    const incomplete = await request(app.url, '/v1/governance/assets', { user: 'alice', protocol: '1.0' });
+    assert.equal(incomplete.body.data.items[0].referenceState, 'unknown');
+    assert.equal((await fetch(app.url + '/v1/media/assets/' + mediaRef.assetId + '/original', { headers })).status, 200);
+    await mkdir(path.join(app.dataRoot, 'alice', 'characters'));
+    assert.equal((await raw()).code, 200);
 });

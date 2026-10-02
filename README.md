@@ -1,5 +1,15 @@
 # Tavern Toolbox Server
 
+## Phase 6 Media Governance & Asset Manager — Release v0.6.0
+
+Release v0.6.0 is paired with Frontend v0.49.0. Phase 6 has completed code review, automated verification and user acceptance of the core experience. Protocol 1.0 and existing Media IDs/Originals/SQLite schemas are preserved; no automatic migration or GC. Future development starts from latest `main`.
+
+`media.governance` adds bounded Summary, Asset/Reference Group browsers, details, Consumer-owned reference actions and reference-aware batch deletion. Character Localization and Outfit register independent Reference Providers; Governance never parses their business schemas. Active / Detached / Unreferenced / Unknown reference states are separate from Original/Thumbnail health. Broken references survive absent Media rows. Provider failure makes analysis incomplete, preserves known references and prevents deletion; it does not disable Media reads. See [Media Foundation and Governance](docs/MEDIA-FOUNDATION.md), [protocol](protocol/README.md) and [Phase 6 acceptance](PHASE-6-ACCEPTANCE.md).
+
+Every external hard delete, including the existing `DELETE /v1/media/assets/:id`, now rechecks complete provider analysis and zero references under the same per-user coordinator as Business/Localization writes. Active and detached references both prevent deletion. Consumer deletion, unlink, detached forget and replacement retain Media. Batch deletion reports each outcome; no automatic GC or expiry. Existing Originals can be bound to a precise Character locator without Network access and reused in a Server Outfit image slot. No Local IndexedDB Genesis/Worldbook/Outfit data is scanned or migrated.
+
+The frontend global manager replaces the old detached-management panel in Server Status. Thumbnails are lazy/static with no Original fallback; Original is explicit, references are paginated and user changes discard previews. Only one active ST process may use a user data volume: the coordinator is process-local and is not a distributed lock. The user completed core use and UI checks on SillyTavern 1.19.0 Docker / NAS without an obvious blocker. This aggregate report is not a claim that every specialized matrix case was manually exercised; see the evidence categories in PHASE-6-ACCEPTANCE.md.
+
 ## Phase 5 Remote Image Access & Localization Foundation
 
 Release `v0.5.0`, paired with frontend `v0.48.0`, completes Phase 5 and adds `localization.characters` without changing Protocol 1.0. The authenticated per-user Catalog stores Character Scopes, SHA-256 identities of exact remote locators, and standard Server MediaRefs. It does not store source URLs or own character cards. Explicit Localize uses the existing policy-controlled Network remote import, then commits the Binding with a revision check; failed import or commit leaves the old Binding intact. Unlocalize, replacement, and character deletion never hard-delete Media.
@@ -10,16 +20,15 @@ The completed installed-host acceptance and automated evidence boundaries are in
 
 ## Release notes
 
-- Server-backed Remote Image Routing through the existing policy-controlled Network Image route.
-- Explicit Character Image Localization: Remote Import → MediaRef → Catalog revision CAS; update/unlocalize preserve asset ownership.
-- Character Scope / Detached / Manual Rebind, with conservative identity and no implicit URL-based inheritance.
-- Network Allowlist Manager: trusted administrator add/remove, hostname-only input, hot apply and durable policy.
-- MediaRef / Server Media Original and cross-device shared Localization under the same ST user.
-- Operations / responsive UI polish for Desktop / Tablet / Phone, native checkboxes, bounded Host lists and collapsible diagnostics.
-- Image budget: 64 MiB default, configurable to 256 MiB; Media quota: 2 GiB default, configurable to 1 TiB. Existing explicit budgets are retained.
-- No-silent-fallback, Broken Retry, SSRF/egress, administrator/Origin/CSRF, revision/CAS and privacy boundaries remain; Protocol 1.0 is unchanged.
+- Media Governance module with Reference Provider / Reference Group contracts, independent Character Localization and Outfit providers.
+- Reference Analysis completeness separates Active, Detached, Unreferenced, Unknown and Broken Reference from physical Media health; incomplete analysis fails closed.
+- Safe single and batch Hard Delete, including the legacy Media DELETE path, requires complete analysis and zero references.
+- Per-user coordination serializes reference writes and deletion. A batch holds one coordinator, analyzes Providers once and returns partial per-item outcomes.
+- Existing Media binding verifies the target Original and precise Character locator without Network access; Server Outfit slots reuse the same Original through Business CAS.
+- Detached lifecycle supports explicit Rebind / Forget; unlink, replacement and Business deletion retain Media.
+- Protocol 1.0, Media IDs, Originals and existing Media / Business / Localization Schema versions are unchanged. No automatic migration, GC or Local Genesis / Worldbook / Outfit conversion.
 
-The user confirms core capabilities and final three-device UI acceptance on SillyTavern 1.19.0 Docker / NAS. GIF, specialized streaming, artificial Broken Media/SIGKILL and dedicated 16–64 MiB installed-host material have automated evidence but no specialized installed-host pass, and are non-blocking for this release. CSS backgrounds and arbitrary dynamic JS Remote Media are excluded. Media retains a shared Asset Pool; a future Manager must use logical references, not physical Consumer folders.
+The user completed core use and UI checks on SillyTavern 1.19.0 Docker / NAS with no obvious blocker. Automated evidence covers 48-item batch races, Provider incomplete, cross-ST-user negative cases and deletion coordination; artificial Corrupt Original, SQLite damage and high-concurrency installed-host drills were not specifically exercised and remain non-blocking. The release-package NAS sanity check requires a separate user confirmation.
 
 ## Phase 4 Business Provider and Outfit
 
@@ -27,7 +36,7 @@ Release `v0.4.0` adds an independent Business Collection module and the first co
 
 ## Releases and rollback
 
-Phase 3 Media Foundation remains available as `v0.3.0`; Phase 2 Network Foundation is `v0.2.0`. Merging a reviewed version bump to `main` runs `.github/workflows/release.yml`: it verifies privacy and tests, creates an immutable annotated `vX.Y.Z` tag at the exact `main` commit, and publishes a GitHub Release with a source archive and SHA-256 checksum. Re-running the workflow never moves an existing tag. Commits with the same package version do not create another release; bump `package.json` and the two root versions in `package-lock.json` only after the next stage is accepted. Pin an installation to a tag or exact commit to roll back. Back up the user data separately; a code tag does not roll back Business or Media data.
+Phase 3 Media Foundation remains available as `v0.3.0`; Phase 2 Network Foundation is `v0.2.0`. Merging a reviewed version bump to `main` runs `.github/workflows/release.yml`: it verifies privacy and tests, creates an immutable annotated `vX.Y.Z` tag at the exact `main` commit, and publishes a GitHub Release with a source archive and SHA-256 checksum. Re-running the workflow never moves an existing tag. Commits with the same package version do not create another release; bump `package.json` and the two root versions in `package-lock.json` only after the next stage is accepted. Pin an installation to a tag or exact commit to roll back. Back up the user data separately; a code tag does not roll back Business, Localization or Media data. Phase 5 Frontend v0.48.0 / Server v0.5.0 remain code rollback baselines; restore the user's own Server data backup if data rollback is needed.
 
 Phase 3 adds a user-private, versioned SQLite metadata Store and immutable filesystem Originals without migrating Local images. See [Media Foundation and runtime requirements](docs/MEDIA-FOUNDATION.md) and [installed-host acceptance](PHASE-3-ACCEPTANCE.md). The Phase 2 release has Core and Network only; Phase 3 adds Media, but no role-card rewriting or background jobs.
 
