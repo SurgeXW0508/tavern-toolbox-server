@@ -7,6 +7,8 @@ import { createNetwork } from './network/index.js';
 import { createNetworkPolicy } from './network/policy.js';
 import { createAudio } from './network/audio.js';
 import { attachAudioRoutes } from './network/audio-routes.js';
+import { createAudioRoutingPreferences } from './preferences/audio-routing.js';
+import { attachAudioRoutingPreferenceRoutes } from './preferences/audio-routing-routes.js';
 import { NetworkFailure } from './network/destination.js';
 import { createMedia, MediaFailure } from './media/index.js';
 import { createBusiness, BusinessFailure } from './business/index.js';
@@ -63,6 +65,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(network.definition);
     const audio = createAudio(config, audioOptions);
     registry.register(audio.definition);
+    const preferences = createAudioRoutingPreferences(config);
+    registry.register(preferences.definition);
     const media = createMedia(config, network);
     registry.register(media.definition);
     const coordinate = createReferenceCoordinator();
@@ -131,6 +135,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
             serverVersion: SERVER_VERSION, protocols: RANGES, coreState: config.error ? 'degraded' : 'ready' })));
         router.get('/v1/status', route(true, status));
         attachAudioRoutes(router, { audio, registry, config, send, failure, networkFailureDetails, logger, now });
+        attachAudioRoutingPreferenceRoutes(router, { preferences, registry, config, send, failure, logger, now });
         const policyRoute = operation => async (req, res) => {
             const { requestId, context, start } = res.locals.ttbRequest;
             let code = 'OK';

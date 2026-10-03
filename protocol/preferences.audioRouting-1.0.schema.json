@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tavern Toolbox Audio Routing Preferences 1.0",
+  "description": "Fixed per-ST-user hostname scope. Every operation requires Protocol 1.0 and current discovery X-TTB-Context; add/remove also require Origin/CSRF. Never edits Network Allowlist.",
+  "$defs": {
+    "hostname": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 253,
+      "pattern": "^(?![0-9.]+$)(?!.*(?:^|\\.)(?:localhost|local|internal)$)(?!.*\\.home\\.arpa$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
+    },
+    "mutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hosts"
+      ],
+      "properties": {
+        "hosts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/hostname"
+          }
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "revision",
+        "hosts"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "hosts": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/hostname"
+          }
+        }
+      }
+    }
+  }
+}

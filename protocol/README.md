@@ -65,3 +65,17 @@ Batch deletion obtains the user coordinator once and performs one fresh Referenc
 The published playback URL is the same-origin base plus `/v1/network/audio/stream/` and opaque ID; no source query parameter. `AUDIO_ACCESS_EXPIRED` (410) reveals no foreign-user access existence. Invalid multi-range is `UNSUPPORTED_RANGE` (400); unknown size `REMOTE_SIZE_UNKNOWN` (422), malformed upstream interval `INVALID_REMOTE_RESPONSE` (502), oversize 413, unsupported MIME 415. Network destination failures retain existing safe codes. Partial-transfer errors close the media connection; inspect supplies the last sanitized failure. Normal native candidate fallback is allowed, but a failed routed candidate is never restored to its original URL.
 
 Audio capability/module health is independent of Image. Protocol major, `network.remoteFetch` and storage schemas remain unchanged; old clients ignore this capability and new clients fail only Audio routing on old servers. See [Phase 7 limits, privacy, unsupported scenarios and device acceptance](../PHASE-7-ACCEPTANCE.md).
+
+## Additive Phase 7 `preferences.audioRouting` (contract 1.0)
+
+Independent `preferences` module; fixed Audio hostname scope only, not an arbitrary settings/KV interface. Durable storage is isolated in the authenticated ST user directory; never accepts a user ID or filesystem path. Read/add/remove work independently of Network activation, while mutation requires allowed Origin and session CSRF. Every operation requires `X-TTB-Protocol: 1.0` and `X-TTB-Context` equal to the current discovery snapshot's contextId; a stale session/boot returns CONTEXT_CHANGED before any write. GET and JSON envelopes use no-store/nosniff.
+
+| Route | Request / data |
+| --- | --- |
+| GET `/v1/preferences/audio-routing` | `{schemaVersion:1,revision,hosts}` |
+| POST `/v1/preferences/audio-routing/add` | `{hosts:[canonicalHostname,...]}` → same snapshot; atomic union against current database state |
+| POST `/v1/preferences/audio-routing/remove` | `{hosts:[canonicalHostname,...]}` → same snapshot; atomic subtraction |
+
+At most 128 unique hostnames, each at most 253 ASCII characters; empty snapshot allowed, mutation list requires 1–128 entries. Only canonical lowercase DNS hostnames; rejects full URLs, credentials, paths/query/fragment, wildcards, IP and local suffixes. Explicit legacy import uses atomic add, never whole-array replacement. Revision advances only on change. Duplicate add/missing remove is idempotent. Preference mutations never edit Network Allowlist. INVALID_HOST=422, ROUTING_HOSTS_FULL=409, CONTEXT_CHANGED/PROTOCOL_INCOMPATIBLE=409, CSRF_REJECTED=403; unavailable runtime/storage/schema fail explicitly with 503. Client has no local write fallback.
+
+See `preferences.audioRouting-1.0.schema.json` and `preferences.audioRouting-1.0.fixture.json`; Network/Media/Business schemas and formal Protocol major remain unchanged.

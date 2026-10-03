@@ -177,10 +177,10 @@ test('real HTTP discovery: exact product, read-only routes, version contract and
     assert.equal(status.body.data.serverVersion, releaseVersion);
     assert.equal(status.body.data.core.version, releaseVersion);
     assert.deepEqual(status.body.meta.protocol, { major: 1, minor: 0 });
-    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'network.policy', 'network.remoteAudio', 'media.assets', 'business.collections', 'localization.characters', 'media.governance']);
+    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'network.policy', 'network.remoteAudio', 'preferences.audioRouting', 'media.assets', 'business.collections', 'localization.characters', 'media.governance']);
     assert.deepEqual(status.body.data.capabilities[0], fixture.status.data.capabilities[0]);
     assert.deepEqual(status.body.data.effectivePolicy, fixture.status.data.effectivePolicy);
-    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'network-audio', 'media', 'business', 'localization', 'governance']);
+    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'network-audio', 'preferences', 'media', 'business', 'localization', 'governance']);
     assert.equal(status.body.data.modules[1].state, 'disabled');
     assert.equal(status.body.data.core.state, 'ready');
     assert.equal(status.body.data.effectivePolicy.unsafeRequestsEnabled, false);

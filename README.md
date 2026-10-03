@@ -4,7 +4,7 @@
 
 The `stage/phase-7-remote-audio` candidate adds `network.remoteAudio` (Protocol 1.0) with user-scoped, expiring opaque playback access and finite-file Streaming Relay. Native GET/Single Range uses the ST session; creation/release use trusted Origin, CSRF and negotiated protocol. Audio budgets are independent of Image, while destination safety and the server-owned proxy transport are shared. Existing administrator Network configuration needs no edit beyond explicitly allowing the actual source/redirect hosts. Optional top-level `audio` limits are described in [Phase 7 architecture and acceptance](PHASE-7-ACCEPTANCE.md).
 
-Client routing preferences never grant Network permission. No silent direct fallback, Audio localization/assets/cache/transcoding, live streaming or generic URL proxy. Existing Image/Media/Governance behavior and formal versions are unchanged. NAS/device acceptance is pending; do not merge or release this candidate yet.
+The additive `preferences.audioRouting` capability stores hostname-only routing preferences under the authenticated ST user directory, independent of Network policy. Read on initialization/settings open; transactional add/remove merges concurrent client edits. Legacy browser hosts require explicit import, never silent migration. Client routing preferences never grant Network permission. No silent direct fallback, Audio localization/assets/cache/transcoding, live streaming or generic URL proxy. A reproduced HTTPS proxy CONNECT/TLS cancellation leak is fixed without changing Image limits; existing Image/Media/Governance behavior and formal versions are unchanged. NAS/device acceptance is pending; do not merge or release this candidate yet.
 
 ## Phase 6 Media Governance & Asset Manager — Release v0.6.0
 
