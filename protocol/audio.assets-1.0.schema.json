@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tavern Toolbox Audio Assets 1.0",
+  "description": "Private per-ST-user independent Audio Store. Runtime path matches assetId; health/counts/references validated. Local Range never accesses Network. Public DTO has no paths/digest.",
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assetId",
+        "playbackPath",
+        "mime",
+        "byteSize",
+        "createdAt",
+        "health",
+        "referenceCount"
+      ],
+      "properties": {
+        "assetId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{32}$"
+        },
+        "playbackPath": {
+          "type": "string",
+          "pattern": "^/api/plugins/tavern-toolbox-server/v1/audio/assets/[A-Za-z0-9_-]{32}/stream$"
+        },
+        "mime": {
+          "enum": [
+            "audio/mpeg",
+            "audio/mp4",
+            "audio/aac",
+            "audio/ogg",
+            "audio/webm",
+            "audio/wav",
+            "audio/wave",
+            "audio/x-wav"
+          ]
+        },
+        "byteSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "health": {
+          "enum": [
+            "healthy",
+            "missing",
+            "corrupt"
+          ]
+        },
+        "referenceCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 512
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "totalBytes",
+        "healthy",
+        "corrupt",
+        "orphan",
+        "quotaBytes",
+        "maxBytes"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "healthy": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "corrupt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "orphan": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "quotaBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assets",
+        "nextCursor",
+        "summary"
+      ],
+      "properties": {
+        "assets": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/asset"
+          }
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{32}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "$ref": "#/$defs/summary"
+        }
+      }
+    },
+    "emptyRequest": {
+      "type": "object",
+      "maxProperties": 0
+    },
+    "cleanupRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assetIds"
+      ],
+      "properties": {
+        "assetIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{32}$"
+          }
+        }
+      }
+    }
+  }
+}

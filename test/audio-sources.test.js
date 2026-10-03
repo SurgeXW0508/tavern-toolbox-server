@@ -129,7 +129,7 @@ test('invalid sources cannot enter storage, deletion retires old paths and unava
     const db = new DatabaseSync(path.join(h.alice.userRoot, 'tavern-toolbox-server', 'audio-sources-v1', 'sources.sqlite'));
     db.prepare("UPDATE sources SET backend = 'local', local_asset_id = ? WHERE source_id = ?").run('a'.repeat(32), source.sourceId); db.close();
     assert.equal((await h.registry.read(h.alice, source.sourceId)).backend, 'local');
-    await assert.rejects(h.registry.stream(h.alice, source.sourceId, undefined, sink(), signal()), { code: 'AUDIO_SOURCE_BACKEND_UNAVAILABLE' });
+    await assert.rejects(h.registry.stream(h.alice, source.sourceId, undefined, sink(), signal()), { code: 'AUDIO_ASSET_NOT_FOUND' });
     assert.equal(opens, 0); await h.registry.remove(h.alice, source.sourceId);
     await assert.rejects(h.registry.stream(h.alice, source.sourceId, undefined, sink(), signal()), { code: 'AUDIO_SOURCE_NOT_FOUND' });
     const recreated = await h.registry.create(h.alice, url); assert.notEqual(recreated.source.sourceId, source.sourceId);

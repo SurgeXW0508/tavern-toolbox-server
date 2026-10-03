@@ -42,6 +42,21 @@ export const AUDIO_DEFAULTS = Object.freeze({ maxResourceBytes: 256 * 1024 * 102
     connectTimeoutMs: 5000, firstByteTimeoutMs: 10000, idleTimeoutMs: 30000,
     perUserConcurrency: 4, globalConcurrency: 16, requestsPerMinute: 240,
     accessPerMinute: 120, perUserAccess: 64, globalAccess: 1024, accessTtlMs: 30 * 60 * 1000 });
+export const AUDIO_ASSET_DEFAULTS = Object.freeze({ quotaBytes: 4 * 1024 ** 3, maxBytes: 256 * 1024 ** 2,
+    perUserConcurrency: 2, globalConcurrency: 4 });
+const AUDIO_ASSET_CEILINGS = Object.freeze({ ...AUDIO_ASSET_DEFAULTS, quotaBytes: 1024 ** 4, maxBytes: 1024 ** 3 });
+function validateAudioAssets(value) {
+    if (value === undefined) return AUDIO_ASSET_DEFAULTS;
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).some(key => !Object.hasOwn(AUDIO_ASSET_DEFAULTS, key))) throw new Error('INVALID_AUDIO_ASSET_CONFIG');
+    const result = {};
+    for (const [key, fallback] of Object.entries(AUDIO_ASSET_DEFAULTS)) {
+        const supplied = value[key] ?? fallback;
+        if (!Number.isSafeInteger(supplied) || supplied < 1 || supplied > AUDIO_ASSET_CEILINGS[key]) throw new Error('INVALID_AUDIO_ASSET_CONFIG');
+        result[key] = supplied;
+    }
+    return Object.freeze(result);
+}
 const AUDIO_CEILINGS = Object.freeze({ ...AUDIO_DEFAULTS, maxResourceBytes: 1024 * 1024 * 1024,
     accessTtlMs: 60 * 60 * 1000, idleTimeoutMs: 60000 });
 function validateAudio(value) {
@@ -97,7 +112,7 @@ function validateNetwork(value) {
 
 export function validatePolicy(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_CORE_CONFIG');
-    if (Object.keys(value).some(key => !['schemaVersion', 'core', 'network', 'media', 'audio'].includes(key)) || value.schemaVersion !== 1) throw new Error('INVALID_CORE_CONFIG');
+    if (Object.keys(value).some(key => !['schemaVersion', 'core', 'network', 'media', 'audio', 'audioAssets'].includes(key)) || value.schemaVersion !== 1) throw new Error('INVALID_CORE_CONFIG');
     const core = value.core ?? {};
     if (!core || typeof core !== 'object' || Array.isArray(core)
         || Object.keys(core).some(key => !['maxStatusResponseBytes', 'allowedOrigins'].includes(key))) throw new Error('INVALID_CORE_CONFIG');
@@ -119,8 +134,11 @@ export function validatePolicy(value) {
     let audio, audioError = null;
     try { audio = validateAudio(value.audio); }
     catch { audio = AUDIO_DEFAULTS; audioError = 'INVALID_AUDIO_CONFIG'; }
+    let audioAssets, audioAssetsError = null;
+    try { audioAssets = validateAudioAssets(value.audioAssets); }
+    catch { audioAssets = AUDIO_ASSET_DEFAULTS; audioAssetsError = 'INVALID_AUDIO_ASSET_CONFIG'; }
     return Object.freeze({ schemaVersion: 1, core: Object.freeze({ maxStatusResponseBytes, allowedOrigins: Object.freeze([...allowedOrigins]) }),
-        network, networkError, media, mediaError, audio, audioError });
+        network, networkError, media, mediaError, audio, audioError, audioAssets, audioAssetsError });
 }
 
 export async function loadPolicy({ dataRoot = globalThis.DATA_ROOT, configPath = process.env.TAVERN_TOOLBOX_SERVER_CONFIG, read = readFile } = {}) {

@@ -65,7 +65,7 @@ export function createAudio(config, { resolver, open, clock = () => Date.now() }
     // One Audio transport/budget for both temporary accesses and durable
     // Sources. Durable callers resolve a private URL from their user store;
     // this entry point is never exposed as an arbitrary URL HTTP endpoint.
-    async function relay(url, userId, requestRange, downstream, clientSignal, ticket = null, id = null) {
+    async function relay(url, userId, requestRange, downstream, clientSignal, ticket = null, id = null, maximum = limits.maxResourceBytes) {
         ready();
         const user = userFor(userId);
         let connection, reserved = false;
@@ -82,7 +82,7 @@ export function createAudio(config, { resolver, open, clock = () => Date.now() }
             const policy = { ...config.policy.network, ...limits };
             connection = await openRelay(url, policy, { accept: AUDIO_ACCEPT, range }, controller.signal, { resolver, open });
             transportFailed = false;
-            const result = audioResponse(connection.response, range, limits.maxResourceBytes);
+            const result = audioResponse(connection.response, range, Math.min(limits.maxResourceBytes, maximum));
             if (ticket) { ticket.code = null; ticket.details = {}; }
             downstream.statusCode = result.status;
             for (const [key, value] of Object.entries(result.headers)) downstream.setHeader(key, value);
@@ -99,6 +99,11 @@ export function createAudio(config, { resolver, open, clock = () => Date.now() }
         }
     }
     return { create, relay,
+        // Trusted Source localization only: same transport, approval, MIME,
+        // timeout, rate and stream budget. No arbitrary download HTTP API.
+        download(url, userId, downstream, signal, maximum) {
+            return relay(url, userId, undefined, downstream, signal, null, null, maximum);
+        },
         stream(id, userId, requestRange, downstream, clientSignal) {
             ready();
             const ticket = ticketFor(id, userId);

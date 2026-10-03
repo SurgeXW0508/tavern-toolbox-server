@@ -10,7 +10,9 @@
       "localAssetId": null,
       "createdAt": 1770000000000,
       "updatedAt": 1770000000000,
-      "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream"
+      "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream",
+      "revision": 0,
+      "asset": null
     },
     "reused": false
   },
@@ -22,7 +24,9 @@
       "localAssetId": null,
       "createdAt": 1770000000000,
       "updatedAt": 1770000000000,
-      "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream"
+      "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream",
+      "revision": 0,
+      "asset": null
     },
     "reused": true
   },
@@ -35,7 +39,9 @@
         "localAssetId": null,
         "createdAt": 1770000000000,
         "updatedAt": 1770000000000,
-        "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream"
+        "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream",
+        "revision": 0,
+        "asset": null
       }
     ],
     "nextCursor": null
@@ -47,7 +53,9 @@
     "localAssetId": null,
     "createdAt": 1770000000000,
     "updatedAt": 1770000000000,
-    "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream"
+    "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream",
+    "revision": 0,
+    "asset": null
   },
   "deleteRequest": {},
   "deleted": {
@@ -57,7 +65,7 @@
     "ok": false,
     "error": {
       "code": "AUDIO_SOURCE_NOT_FOUND",
-      "message": "音频来源暂不可用",
+      "message": "\u97f3\u9891\u6765\u6e90\u6682\u4e0d\u53ef\u7528",
       "details": {},
       "retryable": false,
       "outcome": "notApplicable"

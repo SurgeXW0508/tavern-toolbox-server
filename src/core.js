@@ -71,6 +71,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(preferences.definition);
     const audioSources = createAudioSources(config, audio);
     registry.register(audioSources.definition);
+    registry.register(audioSources.assets.definition);
     const media = createMedia(config, network);
     registry.register(media.definition);
     const coordinate = createReferenceCoordinator();
