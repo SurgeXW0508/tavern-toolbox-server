@@ -70,5 +70,10 @@
       "retryable": false,
       "outcome": "notApplicable"
     }
+  },
+  "restoreRequest": {},
+  "restoreResult": {
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "url": "https://audio.example.test/music.mp3?signature=fixture"
   }
 }

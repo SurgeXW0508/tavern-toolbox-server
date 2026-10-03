@@ -182,6 +182,15 @@ test('installed-host routes enforce user/session/CSRF/context, keep stream root-
     assert.equal((await call('/v1/audio/sources', { url, path: '/private' })).status, 400);
     assert.equal((await call('/v1/audio/sources', { url }, 'bob', { 'X-TTB-Context': identities.get('alice') })).status, 409);
     assert.equal((await call('/v1/audio/sources', null, 'broken')).status, 503);
+    const restored = await call('/v1/audio/sources/' + source.sourceId + '/restore', {});
+    assert.equal(restored.status, 200); assert.deepEqual((await restored.json()).data, { sourceId: source.sourceId, url: contract.createRequest.url });
+    assert.equal(restored.headers.get('cache-control'), 'no-store');
+    assert.equal((await call('/v1/audio/sources/' + source.sourceId + '/restore', {}, 'bob')).status, 404);
+    assert.equal((await call('/v1/audio/sources/' + source.sourceId + '/restore', {}, 'alice', { 'X-CSRF-Token': 'invalid' })).status, 403);
+    assert.equal((await call('/v1/audio/sources/' + source.sourceId + '/restore', {}, 'alice', { 'X-TTB-Context': identities.get('bob') })).status, 409);
+    assert.equal((await call('/v1/audio/sources/' + source.sourceId + '/restore', { arbitrary: url })).status, 400);
+    assert.equal((await call('/v1/audio/sources/' + source.sourceId + '/restore', null)).status, 404);
+    assert.doesNotMatch(JSON.stringify((await (await call('/v1/audio/sources')).json()).data), /private-fixture|signature|music\.mp3/);
     const native = await fetch(base + source.playbackPath, { headers: { 'X-Test-User': 'alice', 'Sec-Fetch-Site': 'same-origin',
         Cookie: 'private=secret', Authorization: 'private-fixture', Referer: 'https://example.test/chat/private' } });
     assert.equal(native.status, 200); assert.equal(await native.text(), '0123456789');
@@ -191,6 +200,7 @@ test('installed-host routes enforce user/session/CSRF/context, keep stream root-
     assert.equal((await fetch(base + source.playbackPath, { headers: { 'X-Test-User': 'alice', 'Sec-Fetch-Site': 'cross-site' } })).status, 403);
     assert.equal((await call('/v1/audio/sources/' + source.sourceId + '/delete', {})).status, 200);
     assert.equal((await fetch(base + source.playbackPath, { headers: { 'X-Test-User': 'alice' } })).status, 404);
+    assert.equal((await call('/v1/audio/sources/' + source.sourceId + '/restore', {})).status, 404);
     assert.doesNotMatch(JSON.stringify(logs), /signature|private-fixture|music\.mp3|audio\.example|alice|bob|userRoot|sources.sqlite/);
     assert(!JSON.stringify(logs).includes(source.sourceId));
 });

@@ -72,6 +72,9 @@ export function attachAudioSourceRoutes(router, { sources, registry, config, sen
                 const value = await body(req);
                 if (Object.keys(value).join(',') !== 'url' || typeof value.url !== 'string') fail('INVALID_REQUEST');
                 result = await sources[operation](context, value.url);
+            } else if (operation === 'restore') {
+                if (!fields(await body(req), [])) fail('INVALID_REQUEST');
+                result = await sources.restore(context, req.params.sourceId);
             } else if (operation === 'delete') {
                 const value = await body(req);
                 if (!(fields(value, []) || fields(value, ['revision']) && revision(value.revision))) fail('INVALID_REQUEST');
@@ -118,7 +121,7 @@ export function attachAudioSourceRoutes(router, { sources, registry, config, sen
     router.get('/v1/audio/sources/:sourceId', route('read'));
     router.post('/v1/audio/sources/:sourceId/delete', route('delete'));
     router.get('/v1/audio/sources/:sourceId/stream', route('stream'));
-    for (const operation of ['localize', 'repair', 'releaseLocal', 'backend']) router.post('/v1/audio/sources/:sourceId/' + operation, route(operation));
+    for (const operation of ['localize', 'repair', 'releaseLocal', 'backend', 'restore']) router.post('/v1/audio/sources/:sourceId/' + operation, route(operation));
     router.get('/v1/audio/assets', route('list', true));
     router.post('/v1/audio/assets/cleanup', route('cleanup', true));
     router.get('/v1/audio/assets/:assetId', route('read', true));

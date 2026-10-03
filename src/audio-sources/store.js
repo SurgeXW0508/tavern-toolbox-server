@@ -214,8 +214,8 @@ export function createAudioSources(config, audio) {
         assets,
         definition: { id: 'audio-sources', version: '0.1.0', dependsOn: ['core'],
             capabilities: [{ id: 'audio.sources', contract: { major: 1, minMinor: 0, maxMinor: 0 },
-                operations: ['create', 'list', 'read', 'delete', 'stream', 'lookup', 'localize', 'backend', 'releaseLocal', 'repair', 'job', 'cancel'].map(id => ({ id, available: true })),
-                operationAvailability: () => Object.fromEntries(['create', 'delete', 'lookup', 'localize', 'backend', 'releaseLocal', 'repair', 'cancel'].map(id => [id, {
+                operations: ['create', 'list', 'read', 'delete', 'stream', 'lookup', 'restore', 'localize', 'backend', 'releaseLocal', 'repair', 'job', 'cancel'].map(id => ({ id, available: true })),
+                operationAvailability: () => Object.fromEntries(['create', 'delete', 'lookup', 'restore', 'localize', 'backend', 'releaseLocal', 'repair', 'cancel'].map(id => [id, {
                     available: config.policy.core.allowedOrigins.length > 0, reasonCode: 'ORIGIN_POLICY_MISSING' }])),
                 limits: { maxSources: MAX_AUDIO_SOURCES, pageSize: SOURCE_PAGE_SIZE, maxUrlLength: 2048 },
                 constraints: { scope: 'st-user', persistence: 'sqlite', sourceIdentity: 'canonical-url-sha256',
@@ -255,6 +255,8 @@ export function createAudioSources(config, audio) {
         async list(context, cursor = null) { const page = (await store(context)).list(cursor);
             return { ...page, sources: await Promise.all(page.sources.map(source => enrich(context, source))) }; },
         async read(context, id) { const item = await store(context); return enrich(context, item.public(item.get(id))); },
+        // Sensitive recovery metadata, explicit selected Source only. Never in list/read.
+        async restore(context, id) { const row = (await store(context)).get(id); return { sourceId: id, url: row.remote_url }; },
         async remove(context, id, revision) { const item = await store(context);
             return coordinateAudio(context.userRoot, () => item.remove(id, revision)); },
         async backend(context, id, revision, backend, release = false) {

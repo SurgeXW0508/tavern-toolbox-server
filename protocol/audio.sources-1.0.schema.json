@@ -297,6 +297,30 @@
           "$ref": "#/$defs/source"
         }
       }
+    },
+    "restoreRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "restoreResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceId",
+        "url"
+      ],
+      "properties": {
+        "sourceId": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^https?://"
+        }
+      }
     }
   }
 }

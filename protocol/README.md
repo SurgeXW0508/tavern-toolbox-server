@@ -89,6 +89,7 @@ Separate `audio-sources` module and private per-ST-user Registry, not Image Medi
 | POST `/v1/audio/sources` | `{url}` → `{source,reused}`; atomic create/reuse; no original-host fetch or permission grant |
 | GET `/v1/audio/sources?cursor=<sourceId>` | `{sources,nextCursor}`; sorted sourceId keyset, at most 50 items |
 | GET `/v1/audio/sources/:sourceId` | public `source` DTO; foreign/deleted IDs give same safe 404 |
+| POST `/v1/audio/sources/:sourceId/restore` | `{}` → `{sourceId,url}`; explicitly selected current-user sensitive recovery metadata, protected POST/no-store, no backend or Network change |
 | POST `/v1/audio/sources/:sourceId/delete` | `{}` → `{removed:true}`; Source-only deletion; missing ID 404 |
 | GET `/v1/audio/sources/:sourceId/stream` | native ST session, same-origin, no custom protocol headers; current backend uses existing Audio Relay 200/206/416 |
 
@@ -119,3 +120,10 @@ Stage 1 Source IDs/path/controls are compatible. Source DTO adds `revision` and 
 Audio jobs: `jobId,sourceId,state:pending|downloading|committing|completed|failed|cancelled,receivedBytes,totalBytes|null,code|null,details:{hostname?},source?`. Completed includes Source; failed/cancelled never include raw URL/error. Download+cleanup finishes before terminal state is published. Terminal jobs retained 10 minutes with 128/user,1024/global bounds; localization 2/user,4/global,2-hour operation max. UI polls and cancels; abandoned work expires even without a working client. Network error codes remain safe; no Direct fallback. `AUDIO_SOURCE_CONFLICT` and `AUDIO_ASSET_REFERENCED`=409, unknown Source/Asset/job=404, quota/size=413, invalid content=415, unhealthy Local=422, busy=429, storage/runtime failure=503. Schema/fixtures in `audio.sources-1.0.*` and `audio.assets-1.0.*`.
 
 Source/Asset stores are separate. Ready Asset is durable before Source revision binding; failure/crash cannot produce half-Local. Crash or failed Source CAS can leave a known orphan Asset, never auto-remote or automatic cleanup of good assets. Explicit orphan deletion and interrupted-delete recovery check complete current Source references; Remote retained bindings count. Native stream privacy/session requirements are identical to the existing Source stream, but Local does not depend on Network capability state. Image contracts/schemas are unchanged.
+
+
+## Stage 3 selected Source recovery (additive 1.0)
+
+`audio.sources/restore` is available only with the existing trusted control-origin policy. Empty-body POST resolves the selected opaque ID under the authenticated ST user and returns the canonical stored original URL. Protocol/context, Origin and session CSRF remain mandatory; another user or deleted ID receives the same safe 404. Extra fields and GET are rejected. Response is no-store/nosniff; source URL is sensitive recovery metadata, never added to normal Source/list/job DTOs or ordinary errors/logs. Restoring references does not fetch, switch backend, modify Asset binding or authorize a host. Contract definitions/fixture include `restoreRequest` and `restoreResult`.
+
+Canonical wire playbackPath stays `/api/plugins/tavern-toolbox-server/...`; clients validate it before applying the trusted current ST base path for deployment/preview. A stable resource is instance/user bound. Other origins or deployment prefixes must not be resolved as current Source IDs by guessing. No new streaming/store schema or Image contract is introduced.
