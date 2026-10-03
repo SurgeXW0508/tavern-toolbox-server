@@ -6,7 +6,7 @@ import { Writable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { once } from 'node:events';
 import { AUDIO_MIME, singleRange } from '../network/audio-profile.js';
-import { audioSignature } from './validation.js';
+import { audioSignature, canonicalAudioMime } from './validation.js';
 
 export const validAssetId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{32}$/.test(id);
 export const assetPath = id => `/api/plugins/tavern-toolbox-server/v1/audio/assets/${id}/stream`;
@@ -165,7 +165,7 @@ export class AudioAssetStore {
             if (signal.aborted) fail('CLIENT_ABORTED');
             if (sink.statusCode !== 200 || bytes !== length || !audioSignature(mime, prefix, bytes)) fail('AUDIO_ASSET_INVALID_CONTENT');
             await handle.sync(); await handle.close(); handle = null;
-            return { stagingId, file, digest: hash.digest('hex'), mime, byteSize: bytes };
+            return { stagingId, file, digest: hash.digest('hex'), mime: canonicalAudioMime(mime), byteSize: bytes };
         } catch (error) {
             sink?.destroy(); if (handle) await handle.close().catch(() => {});
             try { await safeUnlink(file); } catch { fail('AUDIO_STAGING_CLEANUP_FAILED'); }
@@ -180,7 +180,7 @@ export class AudioAssetStore {
         if (existing) {
             this.validate(existing);
             if (existing.state !== 'ready') fail('AUDIO_ASSET_STORE_UNAVAILABLE');
-            if (existing.mime !== stage.mime || existing.byte_size !== stage.byteSize) fail('AUDIO_ASSET_DATA_INVALID');
+            if (canonicalAudioMime(existing.mime) !== canonicalAudioMime(stage.mime) || existing.byte_size !== stage.byteSize) fail('AUDIO_ASSET_DATA_INVALID');
             if (await this.quick(existing) !== 'healthy' || !await this.digestFile(this.file(existing.asset_id), existing)) {
                 await rename(stage.file, this.file(existing.asset_id)); await syncDirectory(this.originals);
                 this.db.prepare("UPDATE assets SET health = 'healthy' WHERE asset_id = ?").run(existing.asset_id);

@@ -1,4 +1,5 @@
 import { AUDIO_MIME } from '../network/audio-profile.js';
+export const canonicalAudioMime = mime => ['audio/wave', 'audio/x-wav'].includes(mime) ? 'audio/wav' : mime;
 
 // Container/header validation without a decoder or transcoder. Codec support
 // remains the browser's responsibility. Only finite Audio profile files enter.

@@ -132,6 +132,17 @@ test('same Source concurrent clients single-flight; repeated Localize is idempot
     assert.equal((await readdir(h.staging)).length, 0);
 });
 
+test('identical WAV content from valid MIME aliases reuses one digest Asset', async t => {
+    const wav = Buffer.alloc(52); wav.write('RIFF'); wav.writeUInt32LE(44, 4); wav.write('WAVE', 8); wav.write('fmt ', 12);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(44100, 24);
+    wav.writeUInt32LE(88200, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(8, 40);
+    const h = await harness(t, {}, { open: async target => response(wav, { 'content-type': target.url.searchParams.has('alias') ? 'audio/x-wav' : 'audio/wave' }) });
+    const a = (await h.sources.create(h.alice, url)).source, b = (await h.sources.create(h.alice, url + '&alias=1')).source;
+    const al = (await localize(h, a)).source, bl = (await localize(h, b)).source;
+    assert.equal(al.localAssetId, bl.localAssetId); const page = await h.sources.assets.list(h.alice);
+    assert.equal(page.assets.length, 1); assert.equal(page.assets[0].mime, 'audio/wav'); assert.equal(page.assets[0].referenceCount, 2);
+});
+
 test('Local backpressure abort frees file-stream slots without Network; localization concurrency is bounded and recovers', async t => {
     const h = await harness(t, { audioAssets: { perUserConcurrency: 1, globalConcurrency: 1 } });
     const source = (await h.sources.create(h.alice, url)).source; const local = (await localize(h, source)).source;
