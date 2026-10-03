@@ -79,3 +79,21 @@ Independent `preferences` module; fixed Audio hostname scope only, not an arbitr
 At most 128 unique hostnames, each at most 253 ASCII characters; empty snapshot allowed, mutation list requires 1–128 entries. Only canonical lowercase DNS hostnames; rejects full URLs, credentials, paths/query/fragment, wildcards, IP and local suffixes. Explicit legacy import uses atomic add, never whole-array replacement. Revision advances only on change. Duplicate add/missing remove is idempotent. Preference mutations never edit Network Allowlist. INVALID_HOST=422, ROUTING_HOSTS_FULL=409, CONTEXT_CHANGED/PROTOCOL_INCOMPATIBLE=409, CSRF_REJECTED=403; unavailable runtime/storage/schema fail explicitly with 503. Client has no local write fallback.
 
 See `preferences.audioRouting-1.0.schema.json` and `preferences.audioRouting-1.0.fixture.json`; Network/Media/Business schemas and formal Protocol major remain unchanged.
+
+## Additive Phase 7 `audio.sources` (contract 1.0)
+
+Separate `audio-sources` module and private per-ST-user Registry, not Image MediaStore or a generic KV/proxy. Source identity is canonical URL SHA-256, query/order/encoding remain significant; hostname case/default port follow WHATWG canonicalization. No title/filename matching. Original URL and hash remain private; public DTO includes opaque 192-bit `sourceId`, `backend`, `hostname`, nullable `localAssetId`, created/updated milliseconds and exact root-relative `playbackPath`. No URL credentials or fragment; HTTP(S), bounded ports/address validation, max canonical URL 2048 chars. HLS/DASH unsupported.
+
+| Route | Contract |
+| --- | --- |
+| POST `/v1/audio/sources` | `{url}` → `{source,reused}`; atomic create/reuse; no original-host fetch or permission grant |
+| GET `/v1/audio/sources?cursor=<sourceId>` | `{sources,nextCursor}`; sorted sourceId keyset, at most 50 items |
+| GET `/v1/audio/sources/:sourceId` | public `source` DTO; foreign/deleted IDs give same safe 404 |
+| POST `/v1/audio/sources/:sourceId/delete` | `{}` → `{removed:true}`; Source-only deletion; missing ID 404 |
+| GET `/v1/audio/sources/:sourceId/stream` | native ST session, same-origin, no custom protocol headers; current backend uses existing Audio Relay 200/206/416 |
+
+Control requests require `X-TTB-Protocol: 1.0` and current discovery `X-TTB-Context`; mutations also require trusted Origin/session CSRF. Source IDs must be 32 base64url characters; exactly 512 sources maximum per user. Native stable path is `/api/plugins/tavern-toolbox-server/v1/audio/sources/<sourceId>/stream`; not host/URL metadata. GETs are no-store/nosniff with same-origin resource policy. Each Remote stream reapplies current Allowlist, DNS/redirect approval, MIME/finite total size, proxy/TLS and Audio budgets; browser headers are not forwarded. Failure never restores an original URL or chooses another backend.
+
+Only Remote creation/streaming is available now. Optional local binding is reserved for the separate Audio Asset stage; a non-Remote backend currently fails `AUDIO_SOURCE_BACKEND_UNAVAILABLE` (503), never falls back. Backend changes must retain Source ID/path; Asset content digest and Source URL identity remain distinct. No Localize/download endpoint. SQLite Node >=22.13 required independently of Core/other modules. Current storage is `<trusted-user-root>/tavern-toolbox-server/audio-sources-v1/sources.sqlite`, directory 0700/database 0600, version 1, FULL transaction durability. Private database/backup contains original signed URLs: treat it as private user data. No public DTO/log/disk path, client-supplied user ID, source ID or file path.
+
+`AUDIO_SOURCE_NOT_FOUND`=404, `AUDIO_SOURCES_FULL`=409, `INVALID_REQUEST`/`UNSUPPORTED_RANGE`=400; existing Network safe codes retain their 403/413/415/422/429/502/504 status. Store/schema/runtime unavailable=503, `CONTEXT_CHANGED`/`PROTOCOL_INCOMPATIBLE`=409, `CSRF_REJECTED`=403. Public error details are sanitized hostname only when the existing Network policy rejects it. Schema/fixture: `audio.sources-1.0.schema.json`, `audio.sources-1.0.fixture.json`; dynamic playbackPath must additionally equal its sourceId and timestamps must be monotonic. Protocol major and existing Image/Media/Business contracts unchanged.

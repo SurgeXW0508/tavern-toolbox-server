@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tavern Toolbox Stable Audio Sources 1.0",
+  "description": "Per authenticated ST user. Controls require Protocol 1.0 and current X-TTB-Context; mutations also Origin/CSRF. Native stream uses ST session and current Network policy. Only remote creation in stage 1. Source paths contain no remote URL. Runtime also requires playbackPath matches sourceId and updatedAt >= createdAt.",
+  "$defs": {
+    "sourceId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{32}$"
+    },
+    "createRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^https?://"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceId",
+        "backend",
+        "hostname",
+        "localAssetId",
+        "createdAt",
+        "updatedAt",
+        "playbackPath"
+      ],
+      "properties": {
+        "sourceId": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "backend": {
+          "enum": [
+            "remote",
+            "local"
+          ]
+        },
+        "hostname": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "localAssetId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sourceId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "updatedAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "playbackPath": {
+          "type": "string",
+          "pattern": "^/api/plugins/tavern-toolbox-server/v1/audio/sources/[A-Za-z0-9_-]{32}/stream$"
+        }
+      }
+    },
+    "createResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "reused"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "reused": {
+          "type": "boolean"
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sources",
+        "nextCursor"
+      ],
+      "properties": {
+        "sources": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sourceId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "deleteRequest": {
+      "type": "object",
+      "maxProperties": 0
+    },
+    "deleteResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "removed"
+      ],
+      "properties": {
+        "removed": {
+          "const": true
+        }
+      }
+    }
+  }
+}

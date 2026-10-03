@@ -62,9 +62,12 @@ export function createAudio(config, { resolver, open, clock = () => Date.now() }
             return { accessId, expiresAt, profile: 'audio' };
         } finally { user.creating--; creating--; }
     }
-    async function stream(id, userId, requestRange, downstream, clientSignal) {
+    // One Audio transport/budget for both temporary accesses and durable
+    // Sources. Durable callers resolve a private URL from their user store;
+    // this entry point is never exposed as an arbitrary URL HTTP endpoint.
+    async function relay(url, userId, requestRange, downstream, clientSignal, ticket = null, id = null) {
         ready();
-        const ticket = ticketFor(id, userId), user = userFor(userId);
+        const user = userFor(userId);
         let connection, reserved = false;
         const controller = new AbortController();
         const abort = () => controller.abort();
@@ -77,10 +80,10 @@ export function createAudio(config, { resolver, open, clock = () => Date.now() }
             if (user.concurrent >= limits.perUserConcurrency || concurrent >= limits.globalConcurrency) fail('RESOURCE_BUSY');
             user.concurrent++; concurrent++; reserved = true;
             const policy = { ...config.policy.network, ...limits };
-            connection = await openRelay(ticket.url, policy, { accept: AUDIO_ACCEPT, range }, controller.signal, { resolver, open });
+            connection = await openRelay(url, policy, { accept: AUDIO_ACCEPT, range }, controller.signal, { resolver, open });
             transportFailed = false;
             const result = audioResponse(connection.response, range, limits.maxResourceBytes);
-            ticket.code = null; ticket.details = {};
+            if (ticket) { ticket.code = null; ticket.details = {}; }
             downstream.statusCode = result.status;
             for (const [key, value] of Object.entries(result.headers)) downstream.setHeader(key, value);
             if (result.status === 416) { downstream.end(); return; }
@@ -88,14 +91,19 @@ export function createAudio(config, { resolver, open, clock = () => Date.now() }
         } catch (error) {
             const code = error instanceof NetworkFailure ? error.code : 'REMOTE_UNAVAILABLE';
             if (code === 'TRANSPORT_UNAVAILABLE') transportFailed = true;
-            if (code !== 'CLIENT_ABORTED') { ticket.code = code; ticket.details = detail(error); }
+            if (ticket && code !== 'CLIENT_ABORTED') { ticket.code = code; ticket.details = detail(error); }
             throw new NetworkFailure(code, detail(error));
         } finally {
             connection?.close(); clientSignal.removeEventListener('abort', abort); active.delete(running);
             if (reserved) { user.concurrent--; concurrent--; }
         }
     }
-    return { create, stream,
+    return { create, relay,
+        stream(id, userId, requestRange, downstream, clientSignal) {
+            ready();
+            const ticket = ticketFor(id, userId);
+            return relay(ticket.url, userId, requestRange, downstream, clientSignal, ticket, id);
+        },
         inspect(id, userId) { const ticket = ticketFor(id, userId); return { expiresAt: ticket.expiresAt,
             state: ticket.code ? 'failed' : 'ready', code: ticket.code, details: ticket.details }; },
         release(id, userId) {
