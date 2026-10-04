@@ -16,14 +16,17 @@ function plainAgent(host, port) {
     return agent;
 }
 
-export function openApproved(target, policy, signal, tlsOptions = {}) {
+export function openApproved(target, policy, signal, tlsOptions = {}, profile = {}) {
     const ip = target.addresses[0]; // Every candidate passed the same policy; never resolve the hostname again.
     const hostname = hostHeader(target);
-    const headers = { Host: hostname, Accept: 'image/png,image/jpeg,image/webp,image/gif',
-        'Accept-Encoding': 'identity', 'User-Agent': 'TavernToolboxServer/remoteFetch' };
+    // Profiles are trusted server code, never browser-supplied headers. Image defaults stay unchanged.
+    const headers = { Host: hostname, Accept: profile.accept || 'image/png,image/jpeg,image/webp,image/gif',
+        'Accept-Encoding': 'identity', 'User-Agent': 'TavernToolboxServer/remoteFetch',
+        ...(profile.range ? { Range: profile.range } : {}) };
     const path = target.url.pathname + target.url.search;
     let request;
     const agents = [];
+    const pendingConnections = new Set();
     if (policy.transport === 'http-proxy') {
         const proxy = new URL(policy.proxyUrl);
         const auth = proxy.username ? `Basic ${Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString('base64')}` : null;
@@ -45,19 +48,31 @@ export function openApproved(target, policy, signal, tlsOptions = {}) {
                     path: `${ip.includes(':') ? `[${ip}]` : ip}:${target.port}`, signal, agent: proxyAgent,
                     headers: { Host: `${ip.includes(':') ? `[${ip}]` : ip}:${target.port}`,
                         ...(auth ? { 'Proxy-Authorization': auth } : {}) } });
-                let settled = false;
-                const done = (error, value) => { if (!settled) { settled = true; callback(error, value); } };
-                const timer = setTimeout(() => tunnel.destroy(new Error('REMOTE_TIMEOUT')), policy.connectTimeoutMs);
+                let settled = false, secure;
+                const done = (error, value) => {
+                    if (settled) return;
+                    settled = true; clearTimeout(timer); signal.removeEventListener('abort', abort); pendingConnections.delete(abort);
+                    if (error) { secure?.destroy(); tunnel.destroy(); }
+                    callback(error, value);
+                };
+                // Node can defer ClientRequest's error while an async Agent is
+                // still acquiring its socket. Always finish that callback on
+                // timeout/abort, including the TLS phase after CONNECT 200.
+                const abort = () => done(new Error('REMOTE_TIMEOUT'));
+                pendingConnections.add(abort);
+                const timer = setTimeout(abort, policy.connectTimeoutMs);
+                signal.addEventListener('abort', abort, { once: true });
                 tunnel.once('connect', (response, socket) => {
-                    clearTimeout(timer);
+                    if (settled) { socket.destroy(); return; }
                     if (response.statusCode !== 200) { socket.destroy(); done(new NetworkFailure('TRANSPORT_UNAVAILABLE')); return; }
-                    const secure = tls.connect({ socket, ...tlsOptions, servername: target.host,
+                    secure = tls.connect({ socket, ...tlsOptions, servername: target.host,
                         rejectUnauthorized: true, ALPNProtocols: ['http/1.1'] });
                     secure.once('secureConnect', () => done(null, secure));
                     secure.once('error', error => done(error));
-                    signal.addEventListener('abort', () => secure.destroy(), { once: true });
+                    secure.once('close', () => done(new Error('TLS_CONNECTION_CLOSED')));
                 });
-                tunnel.once('error', error => { clearTimeout(timer); done(error); });
+                tunnel.once('error', error => done(error));
+                if (signal.aborted) abort();
                 tunnel.end();
             };
             request = https.request({ hostname: target.host, port: target.port, method: 'GET', path,
@@ -75,8 +90,12 @@ export function openApproved(target, policy, signal, tlsOptions = {}) {
     }
     const destroyAgents = () => { for (const agent of agents) agent.destroy(); };
     return new Promise((resolve, reject) => {
-        const connectTimer = setTimeout(() => request.destroy(new Error('REMOTE_TIMEOUT')), policy.connectTimeoutMs);
-        const timer = setTimeout(() => request.destroy(new Error('REMOTE_TIMEOUT')), policy.firstByteTimeoutMs);
+        const expire = () => {
+            for (const cancel of pendingConnections) cancel();
+            request.destroy(new Error('REMOTE_TIMEOUT'));
+        };
+        const connectTimer = setTimeout(expire, policy.connectTimeoutMs);
+        const timer = setTimeout(expire, policy.firstByteTimeoutMs);
         request.once('socket', socket => {
             if (!socket.connecting && !socket.secureConnecting) clearTimeout(connectTimer);
             else { socket.once('connect', () => { if (!socket.secureConnecting) clearTimeout(connectTimer); });

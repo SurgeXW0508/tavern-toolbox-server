@@ -1,0 +1,79 @@
+{
+  "createRequest": {
+    "url": "https://audio.example.test/music.mp3?signature=fixture"
+  },
+  "created": {
+    "source": {
+      "sourceId": "0123456789abcdef0123456789abcdef",
+      "backend": "remote",
+      "hostname": "audio.example.test",
+      "localAssetId": null,
+      "createdAt": 1770000000000,
+      "updatedAt": 1770000000000,
+      "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream",
+      "revision": 0,
+      "asset": null
+    },
+    "reused": false
+  },
+  "reused": {
+    "source": {
+      "sourceId": "0123456789abcdef0123456789abcdef",
+      "backend": "remote",
+      "hostname": "audio.example.test",
+      "localAssetId": null,
+      "createdAt": 1770000000000,
+      "updatedAt": 1770000000000,
+      "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream",
+      "revision": 0,
+      "asset": null
+    },
+    "reused": true
+  },
+  "listed": {
+    "sources": [
+      {
+        "sourceId": "0123456789abcdef0123456789abcdef",
+        "backend": "remote",
+        "hostname": "audio.example.test",
+        "localAssetId": null,
+        "createdAt": 1770000000000,
+        "updatedAt": 1770000000000,
+        "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream",
+        "revision": 0,
+        "asset": null
+      }
+    ],
+    "nextCursor": null
+  },
+  "read": {
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "backend": "remote",
+    "hostname": "audio.example.test",
+    "localAssetId": null,
+    "createdAt": 1770000000000,
+    "updatedAt": 1770000000000,
+    "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/0123456789abcdef0123456789abcdef/stream",
+    "revision": 0,
+    "asset": null
+  },
+  "deleteRequest": {},
+  "deleted": {
+    "removed": true
+  },
+  "notFound": {
+    "ok": false,
+    "error": {
+      "code": "AUDIO_SOURCE_NOT_FOUND",
+      "message": "\u97f3\u9891\u6765\u6e90\u6682\u4e0d\u53ef\u7528",
+      "details": {},
+      "retryable": false,
+      "outcome": "notApplicable"
+    }
+  },
+  "restoreRequest": {},
+  "restoreResult": {
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "url": "https://audio.example.test/music.mp3?signature=fixture"
+  }
+}

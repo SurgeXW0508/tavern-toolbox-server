@@ -1,0 +1,82 @@
+{
+  "list": {
+    "assets": [
+      {
+        "assetId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/assets/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/stream",
+        "mime": "audio/mpeg",
+        "byteSize": 4096,
+        "createdAt": 1,
+        "health": "healthy",
+        "referenceCount": 1
+      }
+    ],
+    "nextCursor": null,
+    "summary": {
+      "count": 1,
+      "totalBytes": 4096,
+      "healthy": 1,
+      "corrupt": 0,
+      "orphan": 0,
+      "quotaBytes": 4294967296,
+      "maxBytes": 268435456
+    }
+  },
+  "read": {
+    "assetId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/assets/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/stream",
+    "mime": "audio/mpeg",
+    "byteSize": 4096,
+    "createdAt": 1,
+    "health": "healthy",
+    "referenceCount": 1
+  },
+  "localizeRequest": {
+    "revision": 0
+  },
+  "completedJob": {
+    "jobId": "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj",
+    "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "state": "completed",
+    "receivedBytes": 4096,
+    "totalBytes": 4096,
+    "code": null,
+    "details": {},
+    "source": {
+      "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/sources/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/stream",
+      "hostname": "audio.example.test",
+      "backend": "local",
+      "localAssetId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "revision": 1,
+      "createdAt": 1,
+      "updatedAt": 2,
+      "asset": {
+        "assetId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/assets/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/stream",
+        "mime": "audio/mpeg",
+        "byteSize": 4096,
+        "createdAt": 1,
+        "health": "healthy",
+        "referenceCount": 1
+      }
+    }
+  },
+  "backendRequest": {
+    "revision": 1,
+    "backend": "remote"
+  },
+  "releaseRequest": {
+    "revision": 2
+  },
+  "cleanupRequest": {
+    "assetIds": [
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ]
+  },
+  "cleanupResult": {
+    "removed": [
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ]
+  }
+}

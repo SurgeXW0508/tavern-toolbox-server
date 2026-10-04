@@ -5,6 +5,12 @@ import { CapabilityRegistry } from './registry.js';
 import { userContext, mutationGate, setPrivateHeaders } from './security.js';
 import { createNetwork } from './network/index.js';
 import { createNetworkPolicy } from './network/policy.js';
+import { createAudio } from './network/audio.js';
+import { attachAudioRoutes } from './network/audio-routes.js';
+import { createAudioRoutingPreferences } from './preferences/audio-routing.js';
+import { attachAudioRoutingPreferenceRoutes } from './preferences/audio-routing-routes.js';
+import { createAudioSources } from './audio-sources/store.js';
+import { attachAudioSourceRoutes } from './audio-sources/routes.js';
 import { NetworkFailure } from './network/destination.js';
 import { createMedia, MediaFailure } from './media/index.js';
 import { createBusiness, BusinessFailure } from './business/index.js';
@@ -45,7 +51,7 @@ function networkFailureDetails(error) {
         && /^[a-z0-9.-]+$/.test(host) ? { hostname: host } : {};
 }
 
-export async function createCore({ policyOptions, registerModules, networkOptions, logger = console, now = () => Date.now() } = {}) {
+export async function createCore({ policyOptions, registerModules, networkOptions, audioOptions, logger = console, now = () => Date.now() } = {}) {
     const config = await loadPolicy(policyOptions);
     const registry = new CapabilityRegistry();
     const bootId = randomUUID();
@@ -59,6 +65,13 @@ export async function createCore({ policyOptions, registerModules, networkOption
     const networkPolicy = createNetworkPolicy(config, network);
     network.definition.capabilities.push(networkPolicy.capability);
     registry.register(network.definition);
+    const audio = createAudio(config, audioOptions);
+    registry.register(audio.definition);
+    const preferences = createAudioRoutingPreferences(config);
+    registry.register(preferences.definition);
+    const audioSources = createAudioSources(config, audio);
+    registry.register(audioSources.definition);
+    registry.register(audioSources.assets.definition);
     const media = createMedia(config, network);
     registry.register(media.definition);
     const coordinate = createReferenceCoordinator();
@@ -126,6 +139,9 @@ export async function createCore({ policyOptions, registerModules, networkOption
         router.get('/status', route(false, async () => ({ product: PRODUCT, discoveryVersion: 1,
             serverVersion: SERVER_VERSION, protocols: RANGES, coreState: config.error ? 'degraded' : 'ready' })));
         router.get('/v1/status', route(true, status));
+        attachAudioRoutes(router, { audio, registry, config, send, failure, networkFailureDetails, logger, now });
+        attachAudioRoutingPreferenceRoutes(router, { preferences, registry, config, send, failure, logger, now });
+        attachAudioSourceRoutes(router, { sources: audioSources, registry, config, send, failure, networkFailureDetails, logger, now });
         const policyRoute = operation => async (req, res) => {
             const { requestId, context, start } = res.locals.ttbRequest;
             let code = 'OK';

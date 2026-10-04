@@ -1,5 +1,7 @@
 # Protocol 1.0 — Core discovery
 
+Phase 7 release v0.7.0 / Frontend v0.50.0 retains Protocol 1.0. Additive public contracts are [`network.remoteAudio`](#additive-phase-7-networkremoteaudio-contract-10), [`preferences.audioRouting`](#additive-phase-7-preferencesaudiorouting-contract-10), [`audio.sources`](#additive-phase-7-audiosources-contract-10) and [`audio.assets`](#additive-phase-7-audioassets-and-source-binding-operations-10), each with schema/fixture. Selected Source `restore` belongs to audio.sources and returns sensitive metadata only through protected explicit POST.
+
 This directory holds the fixed language-neutral Core fixture and JSON Schema for the two success envelopes. Both are public wire contracts, not internal registry objects. The frontend keeps an independent copy of the fixture in `tests/fixtures/`. On a protocol change, update both fixtures deliberately and keep an older supported version's fixture during the compatibility window.
 
 * `GET /api/plugins/tavern-toolbox-server/status` returns bootstrap discovery. It does not need a version header.
@@ -52,3 +54,78 @@ The mutation mutex is owned by the OS for the lifetime of the writer (Linux abst
 Character actions: detached `rebind`/`forget`, reference `unlink`/`replace`; active reference mutation requires the matching explicit hostId. Outfit actions: `unlink`/`replace` of reference `image` with Business revision. These actions do not hard-delete Media. Old `/v1/media/assets/:id` DELETE is retained but **reference-aware**. `MEDIA_REFERENCED` returns 409; `REFERENCE_ANALYSIS_INCOMPLETE` returns 503; missing asset/reference, corruption, Consumer conflict and invalid context remain distinct safe codes. Every delete rechecks authoritative current analysis within the per-user write coordinator, including when a stale browser submits an old ID. Batch outcomes can be partial. New reads never expose internal digest, real paths or original source URLs. No cross-user/project/provider query, automatic GC, arbitrary reverse binding or distributed write coordination is added.
 
 Batch deletion obtains the user coordinator once and performs one fresh Reference Analysis for all 1–48 items. Participating reference writes wait until the last item; incomplete analysis retains existing assets. `localization/bindExisting` reports `MEDIA_NOT_FOUND` with HTTP 404 and `MEDIA_CORRUPT` with HTTP 422, preserving the standard error envelope.
+
+## Additive Phase 7 `network.remoteAudio` (contract 1.0)
+
+| Route | Contract |
+| --- | --- |
+| POST `/v1/network/audio/access` | `{profile:"audio",url}` → `{accessId,expiresAt,profile:"audio"}`; exact source bound to current ST user, Origin/CSRF/protocol required |
+| GET `/v1/network/audio/access/:accessId` | Protocol required; `{expiresAt,state:"ready"\|"failed",code,details}`; sanitized failure hostname only |
+| POST `/v1/network/audio/release` | `{accessId}` → `{released:true}`; protected and idempotent, cancels this user's active streams |
+| GET `/v1/network/audio/stream/:accessId` | Native media GET using ST session, no custom header; validated Single Range → real upstream 200/206/416 with finite length |
+
+The published playback URL is the same-origin base plus `/v1/network/audio/stream/` and opaque ID; no source query parameter. `AUDIO_ACCESS_EXPIRED` (410) reveals no foreign-user access existence. Invalid multi-range is `UNSUPPORTED_RANGE` (400); unknown size `REMOTE_SIZE_UNKNOWN` (422), malformed upstream interval `INVALID_REMOTE_RESPONSE` (502), oversize 413, unsupported MIME 415. Network destination failures retain existing safe codes. Partial-transfer errors close the media connection; inspect supplies the last sanitized failure. Normal native candidate fallback is allowed, but a failed routed candidate is never restored to its original URL.
+
+Audio capability/module health is independent of Image. Protocol major, `network.remoteFetch` and storage schemas remain unchanged; old clients ignore this capability and new clients fail only Audio routing on old servers. See [Phase 7 limits, privacy, unsupported scenarios and device acceptance](../PHASE-7-ACCEPTANCE.md).
+
+## Additive Phase 7 `preferences.audioRouting` (contract 1.0)
+
+Independent `preferences` module; fixed Audio hostname scope only, not an arbitrary settings/KV interface. Durable storage is isolated in the authenticated ST user directory; never accepts a user ID or filesystem path. Read/add/remove work independently of Network activation, while mutation requires allowed Origin and session CSRF. Every operation requires `X-TTB-Protocol: 1.0` and `X-TTB-Context` equal to the current discovery snapshot's contextId; a stale session/boot returns CONTEXT_CHANGED before any write. GET and JSON envelopes use no-store/nosniff.
+
+| Route | Request / data |
+| --- | --- |
+| GET `/v1/preferences/audio-routing` | `{schemaVersion:1,revision,hosts}` |
+| POST `/v1/preferences/audio-routing/add` | `{hosts:[canonicalHostname,...]}` → same snapshot; atomic union against current database state |
+| POST `/v1/preferences/audio-routing/remove` | `{hosts:[canonicalHostname,...]}` → same snapshot; atomic subtraction |
+
+At most 128 unique hostnames, each at most 253 ASCII characters; empty snapshot allowed, mutation list requires 1–128 entries. Only canonical lowercase DNS hostnames; rejects full URLs, credentials, paths/query/fragment, wildcards, IP and local suffixes. Explicit legacy import uses atomic add, never whole-array replacement. Revision advances only on change. Duplicate add/missing remove is idempotent. Preference mutations never edit Network Allowlist. INVALID_HOST=422, ROUTING_HOSTS_FULL=409, CONTEXT_CHANGED/PROTOCOL_INCOMPATIBLE=409, CSRF_REJECTED=403; unavailable runtime/storage/schema fail explicitly with 503. Client has no local write fallback.
+
+See `preferences.audioRouting-1.0.schema.json` and `preferences.audioRouting-1.0.fixture.json`; Network/Media/Business schemas and formal Protocol major remain unchanged.
+
+## Additive Phase 7 `audio.sources` (contract 1.0)
+
+Separate `audio-sources` module and private per-ST-user Registry, not Image MediaStore or a generic KV/proxy. Source identity is canonical URL SHA-256, query/order/encoding remain significant; hostname case/default port follow WHATWG canonicalization. No title/filename matching. Original URL and hash remain private; public DTO includes opaque 192-bit `sourceId`, `backend`, `hostname`, nullable `localAssetId`, created/updated milliseconds and exact root-relative `playbackPath`. No URL credentials or fragment; HTTP(S), bounded ports/address validation, max canonical URL 2048 chars. HLS/DASH unsupported.
+
+| Route | Contract |
+| --- | --- |
+| POST `/v1/audio/sources` | `{url}` → `{source,reused}`; atomic create/reuse; no original-host fetch or permission grant |
+| GET `/v1/audio/sources?cursor=<sourceId>` | `{sources,nextCursor}`; sorted sourceId keyset, at most 50 items |
+| GET `/v1/audio/sources/:sourceId` | public `source` DTO; foreign/deleted IDs give same safe 404 |
+| POST `/v1/audio/sources/:sourceId/restore` | `{}` → `{sourceId,url}`; explicitly selected current-user sensitive recovery metadata, protected POST/no-store, no backend or Network change |
+| POST `/v1/audio/sources/:sourceId/delete` | `{}` → `{removed:true}`; Source-only deletion; missing ID 404 |
+| GET `/v1/audio/sources/:sourceId/stream` | native ST session, same-origin, no custom protocol headers; current backend uses existing Audio Relay 200/206/416 |
+
+Control requests require `X-TTB-Protocol: 1.0` and current discovery `X-TTB-Context`; mutations also require trusted Origin/session CSRF. Source IDs must be 32 base64url characters; exactly 512 sources maximum per user. Native stable path is `/api/plugins/tavern-toolbox-server/v1/audio/sources/<sourceId>/stream`; not host/URL metadata. GETs are no-store/nosniff with same-origin resource policy. Each Remote stream reapplies current Allowlist, DNS/redirect approval, MIME/finite total size, proxy/TLS and Audio budgets; browser headers are not forwarded. Failure never restores an original URL or chooses another backend.
+
+Stage 1 only had Remote creation/streaming; Stage 2 extends this same additive contract with the operations below. Local uses the independent Audio Asset Store and fails explicitly if unavailable, never falling back. Backend changes retain Source ID/path; Asset content digest and Source URL identity remain distinct. Localization is available through protected Audio job controls below, never a generic URL download endpoint. SQLite Node >=22.13 required independently of Core/other modules. Current storage is `<trusted-user-root>/tavern-toolbox-server/audio-sources-v1/sources.sqlite`, directory 0700/database 0600, version 2 (additive revision migration), FULL transaction durability. Private database/backup contains original signed URLs: treat it as private user data. Private remote URLs, identity hashes and physical file paths are absent from ordinary DTOs/logs. No client-selected user ID or physical path is accepted; opaque Source IDs resolve only within the authenticated user.
+
+`AUDIO_SOURCE_NOT_FOUND`=404, `AUDIO_SOURCES_FULL`=409, `INVALID_REQUEST`/`UNSUPPORTED_RANGE`=400; existing Network safe codes retain their 403/413/415/422/429/502/504 status. Store/schema/runtime unavailable=503, `CONTEXT_CHANGED`/`PROTOCOL_INCOMPATIBLE`=409, `CSRF_REJECTED`=403. Public error details are sanitized hostname only when the existing Network policy rejects it. Schema/fixture: `audio.sources-1.0.schema.json`, `audio.sources-1.0.fixture.json`; dynamic playbackPath must additionally equal its sourceId and timestamps must be monotonic. Protocol major and existing Image/Media/Business contracts unchanged.
+
+## Additive Phase 7 `audio.assets` and Source binding operations (1.0)
+
+Stage 1 Source IDs/path/controls are compatible. Source DTO adds `revision` and nullable public `asset`; old clients can ignore them. Original URL/hash remain private. Asset DTO is opaque `assetId`, exact `/api/plugins/tavern-toolbox-server/v1/audio/assets/<id>/stream`, MIME, byteSize, createdAt, health (`healthy|missing|corrupt`) and exact Source `referenceCount`; no digest/physical path. Source's failed asset inspection is an explicit `{assetId,health:unavailable,code}`; backend is not changed. All controls require protocol/current context; POST also Origin/CSRF. No client user ID or file path.
+
+| Route | Request → result |
+| --- | --- |
+| POST `/v1/audio/sources/lookup` | `{url}` → `{source|null}`; existing canonical identity only, no creation/fetch |
+| POST `/v1/audio/sources/:id/localize` / `repair` | `{revision}` → Audio job; repair explicitly downloads original, healthy Localize reuses |
+| POST `/v1/audio/sources/:id/backend` | `{revision,backend:remote|local}` → Source; Local requires retained healthy binding; Remote retains it |
+| POST `/v1/audio/sources/:id/releaseLocal` | `{revision}` → Remote Source with null binding; URL unchanged |
+| POST `/v1/audio/sources/:id/delete` | legacy `{}` or `{revision}` → removed; external references unknown, no Asset deletion |
+| GET `/v1/audio/jobs/:jobId` | current-user/boot job read + renew 45-second lease |
+| POST `/v1/audio/jobs/:jobId/cancel` | `{}` → job; completed commits remain |
+| GET `/v1/audio/assets?cursor=<id>` / `/:id` | bounded page with storage summary / Asset DTO |
+| GET `/v1/audio/assets/:id/stream` | native session Local 200/206/416; never Network |
+| POST `/v1/audio/assets/:id/check` / `delete` | `{}` → full-digest Asset health / removed; referenced delete rejected |
+| POST `/v1/audio/assets/cleanup` | `{assetIds:[1..50 unique IDs]}` → `{removed:[IDs]}`; exact confirmed set, recheck all refs first |
+
+Audio jobs: `jobId,sourceId,state:pending|downloading|committing|completed|failed|cancelled,receivedBytes,totalBytes|null,code|null,details:{hostname?},source?`. Completed includes Source; failed/cancelled never include raw URL/error. Download+cleanup finishes before terminal state is published. Terminal jobs retained 10 minutes with 128/user,1024/global bounds; localization 2/user,4/global,2-hour operation max. UI polls and cancels; abandoned work expires even without a working client. Network error codes remain safe; no Direct fallback. `AUDIO_SOURCE_CONFLICT` and `AUDIO_ASSET_REFERENCED`=409, unknown Source/Asset/job=404, quota/size=413, invalid content=415, unhealthy Local=422, busy=429, storage/runtime failure=503. Schema/fixtures in `audio.sources-1.0.*` and `audio.assets-1.0.*`.
+
+Source/Asset stores are separate. Ready Asset is durable before Source revision binding; failure/crash cannot produce half-Local. Crash or failed Source CAS can leave a known orphan Asset, never auto-remote or automatic cleanup of good assets. Explicit orphan deletion and interrupted-delete recovery check complete current Source references; Remote retained bindings count. Native stream privacy/session requirements are identical to the existing Source stream, but Local does not depend on Network capability state. Image contracts/schemas are unchanged.
+
+
+## Phase 7 selected Source recovery (additive 1.0)
+
+`audio.sources/restore` is available only with the existing trusted control-origin policy. Empty-body POST resolves the selected opaque ID under the authenticated ST user and returns the canonical stored original URL. Protocol/context, Origin and session CSRF remain mandatory; another user or deleted ID receives the same safe 404. Extra fields and GET are rejected. Response is no-store/nosniff; source URL is sensitive recovery metadata, never added to normal Source/list/job DTOs or ordinary errors/logs. Restoring references does not fetch, switch backend, modify Asset binding or authorize a host. Contract definitions/fixture include `restoreRequest` and `restoreResult`.
+
+Canonical wire playbackPath stays `/api/plugins/tavern-toolbox-server/...`; clients validate it before applying the trusted current ST base path for deployment/preview. A stable resource is instance/user bound. Other origins or deployment prefixes must not be resolved as current Source IDs by guessing. No new streaming/store schema or Image contract is introduced.

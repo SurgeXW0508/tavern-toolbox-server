@@ -1,0 +1,34 @@
+{
+  "addRequest": {
+    "hosts": [
+      "audio.example.test"
+    ]
+  },
+  "added": {
+    "schemaVersion": 1,
+    "revision": 1,
+    "hosts": [
+      "audio.example.test"
+    ]
+  },
+  "removeRequest": {
+    "hosts": [
+      "audio.example.test"
+    ]
+  },
+  "removed": {
+    "schemaVersion": 1,
+    "revision": 2,
+    "hosts": []
+  },
+  "failure": {
+    "ok": false,
+    "error": {
+      "code": "PREFERENCE_STORE_UNAVAILABLE",
+      "message": "音频来源同步失败",
+      "details": {},
+      "retryable": false,
+      "outcome": "notApplicable"
+    }
+  }
+}
