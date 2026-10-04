@@ -1,6 +1,28 @@
-# Phase 7 — Stable Audio Source & Remote Audio Foundation
+# Phase 7 — Remote Audio Access, Stable Audio Source, Local Assets & Character Reference Bridge
 
-Status: **Stages 1 and 2 real-device pass confirmed by user; Stage 3 current-character Reference Bridge implemented, pending mandatory NAS acceptance**. Both repos continue `stage/phase-7-audio-source`, based originally on pre-Adapter Frontend `83cdb90d94b92e2edf695fa8fc732062dff7b35c` / Server `2d590c67e1be5a38dade3af9e12581599c357b07`. Adapter experiment history is separate. Formal Frontend v0.49.0 / Server v0.6.0 / Protocol 1.0 unchanged. No main/tag/release before the third gate.
+Status: **Phase 7 real-device core accepted; Release Closeout approved** (user confirmation 2026-10-04). Formal versions Frontend v0.50.0 / Server v0.7.0 / Protocol 1.0. The original phase gates below are historical; they no longer block release. Final artifact NAS smoke remains pending and independently gates branch cleanup.
+
+## Final evidence classification
+
+### Installed-host Evidence
+
+Environment: SillyTavern 1.19.0, Docker / NAS. User confirmed:
+
+- Stage 1 Stable Remote: Desktop/Phone Browser Proxy OFF, NAS Proxy ON; original player/spectrum/Seek/pause/resume; Docker restart preserves Stable Source; no Character Audio Adapter.
+- Stage 2 Local Asset: Remote→Local Stable URL unchanged; Local plays with NAS Proxy OFF; Source/Asset survive Docker restart; release/orphan/cleanup normal.
+- Stage 3 Character Reference Bridge: real-character Script scan, Existing Source/Stable Local/Stable Remote recognition, current-character TavernHelper direct governance without Stable JSON export/reimport, existing Local reuse. Expired author iTunes Preview returning JSON Not Found fails localization explicitly, preserves Remote backend and creates no erroneous Audio Asset.
+
+### Automated Evidence
+
+The detailed contracts, lifecycle tests and three-viewport original-player browser fixtures below cover user isolation, Source/Asset identity/CAS, Range, proxy/abort recovery, crash/staging, quota, reference-safe deletion, protected restore, metadata losslessness and occurrence writeback. These are separate from actual installed-host evidence. All final CI and Privacy/Core checks must pass before merge/release.
+
+### Not specifically exercised / non-blocking
+
+High-concurrency Script/Regex conflicts, cross-user negatives, crash races, damaged SQLite and the entire standard-HTML/WebKit/device matrix are not claimed as installed-host Passed. Existing tests and compatibility limits remain; no weakened kernel locks or skipped tests to accommodate a restricted local IPC environment. Jobs still have a 45-second polling lease.
+
+### Formal release-package smoke and branch cleanup
+
+After publishing, update NAS Server to v0.7.0, restart Docker and install Frontend v0.50.0 Release JSON. Confirm audio.sources/audio.assets, scan the existing character once, play one accepted Local track with NAS Proxy OFF, and confirm old Image Manager assets. Do not relocalize all tracks or rerun the entire candidate matrix. Only after user confirmation, correct tags/assets/checksums and stage ancestry in main may both phase-7-audio-source and obsolete phase-7-remote-audio branches be deleted. No new features during closeout; Phase 8 starts separately from formal main.
 
 ## Behavior and architecture
 
@@ -41,7 +63,7 @@ Network/Media/Localization/Governance schemas and existing Image semantics are u
 
 ## Image RESOURCE_BUSY investigation
 
-The cancellation defect already exists in the current Phase 6 main transport; it is not caused by Audio sharing Image budgets. A real HTTP proxy fixture reproduced a permanent Image slot leak: CONNECT returns 200, then TLS never completes. The connect timer was cleared at CONNECT; `signal.abort` destroyed the pending TLS socket without completing the async Agent callback. Node can defer the outer request error until that callback completes, so `fetchImage` remained awaiting `openApproved` and never reached its counter-release `finally`, even after total timeout/client cancellation. Once slots were exhausted, later Image tests returned RESOURCE_BUSY until restart.
+The cancellation defect existed in the historical Phase 6 main transport; it is not caused by Audio sharing Image budgets. A real HTTP proxy fixture reproduced a permanent Image slot leak: CONNECT returns 200, then TLS never completes. The connect timer was cleared at CONNECT; `signal.abort` destroyed the pending TLS socket without completing the async Agent callback. Node can defer the outer request error until that callback completes, so `fetchImage` remained awaiting `openApproved` and never reached its counter-release `finally`, even after total timeout/client cancellation. Once slots were exhausted, later Image tests returned RESOURCE_BUSY until restart.
 
 The shared transport now covers the entire CONNECT/TLS acquisition with the existing connect timeout and completes the callback exactly once on timeout, abort, TLS error or premature close, removing its listener/timer and destroying failed connections. No limit, policy, header, certificate verification, IP pinning or fallback change. The real proxy regression fails before the fix (still pending past total timeout), passes after it, and confirms recovery for Desktop/Phone/Tablet clients without restart. The same fixture also exercises actual browser HTTP disconnect through the installed-host route and recovers before connect/total timeout. Existing tests cover real HTTP disconnect, pending DNS, body idle/total timeouts, redirects/validation, shutdown and released per-user/global slots. Audio owns separate counters/rate budgets; its streaming and first-byte/idle lifecycle cannot occupy Image slots. Frontend Image cancellation still reaches Server's response-close controller; Blob, localization, MediaRef and Asset Manager code is unchanged.
 
@@ -53,7 +75,7 @@ This is a confirmed code defect consistent with the reported incident, not proof
 
 Local environments that prohibit abstract Unix sockets cannot complete existing Network policy lock tests. Do not weaken the kernel-lock implementation or mark those tests passed; the normal Ubuntu CI must complete full `npm run check` and privacy audit. Browser simulation is not real ST/NAS acceptance.
 
-Real acceptance on SillyTavern 1.19.0 Docker/NAS:
+Historical standard-Audio acceptance matrix on SillyTavern 1.19.0 Docker/NAS (not all cases claimed as manual Passed):
 
 1. Update Server to this branch, install dependencies, restart ST; import the current hashed Frontend candidate with the stable script ID (overwrite).
 2. On Desktop in Server settings → Remote Audio, explicitly import legacy browser hosts or add the failing audio URL. Phone/Tablet refresh or open settings: identical hosts must appear without manual addition, and new Audio renders must use Server. Phone deletes a host; Desktop refresh sees removal. Another ST user sees only its own hosts. Verify only hostname persists. Separately authorize that host in Network if necessary, including any redirected host only after a visible refusal and explicit approval.
@@ -68,7 +90,7 @@ No MediaRef/full audio governance, automatic downloads/cache, FFmpeg/transcoding
 
 Future consumers must register explicitly. Future localization resolves source identity before choosing transport; future video can add a concrete profile on the Streaming Relay without duplicating destination safety. The synchronized preference adapter remains independent of Formatter, UI and localStorage; real-time pushes are not required. None of these future systems is implemented here.
 
-## Stable Source first-stage gate
+## Stable Source first-stage gate (historical, core accepted)
 
 Independent `audio.sources` private SQLite Registry persists canonical Source identity, random opaque ID and backend separately from future Assets; does not reuse Image MediaStore. Same-user concurrent creates atomically reuse the exact canonical URL; title/filename never establish identity. Source metadata creation does not fetch or allow a host. Stable root-relative native GET authenticates the current user, resolves backend, and uses the existing Audio Relay/budget (shared with standard Audio, independent of Image), with current Network policy and safe headers on every GET/Range. Restart preserves sources/paths. Delete yields future 404 and does not delete Assets. Source URL/identity hash never enters public DTO or logs. Original URL does live in private Source DB, so its user data backup must remain private. Stage 1 initially implemented only Remote; Stage 2 adds the independent Local backend below, with explicit failure and no fallback.
 
@@ -82,9 +104,9 @@ First installed-host validation:
 4. NAS Proxy ON, Desktop and Phone proxy OFF: loading/play/spectrum/pause/resume must work with original player functions. Stable path only in DevTools; no original-host Audio media request. Use available original seek controls or the Toolbox native Source preview to verify Seek; original library API has no added seek method. Tablet basic play/seek too.
 5. Denied host/stopped proxy/server must fail with no direct request; restore then retry/rerender. Restart Server and reuse the same media copy. Standard audio/source Relay and Remote Image smoke must remain intact.
 
-**Historical first gate: user has confirmed** Desktop/Phone proxy-off playback and spectrum, phone reselect and Docker restart preserving the same Stable URL. If relative URL/iframe assumptions fail on the real card, solve that before adding Assets. After pass, implement separate Audio Asset staging/digest/quota/atomic binding and local file Range; stop a second time using the exact same stable-media JSON. Only after that pass complete generic inert JSON string URL scanning/UX. No Runtime Adapter, global interceptor, Image schema changes or release closeout in the first stage.
+**Historical first gate: user has confirmed** Desktop/Phone proxy-off playback and spectrum, phone reselect and Docker restart preserving the same Stable URL. This gate required validating relative URL/iframe behavior before Local Assets; it is now complete. The original sequence did not permit Runtime Adapter, global interception, Image schema changes or early release.
 
-## Audio Local Asset second-stage gate
+## Audio Local Asset second-stage gate (historical, core accepted)
 
 Stable Source identity (canonical URL hash) and Asset identity (whole content digest) remain distinct. Per-user `audio-assets-v1` has independent metadata/files/staging and no image fields. Protected localize/repair creates a bounded Audio-only job, shares the existing Audio Network Core (destination/DNS/redirect/proxy/TLS/MIME/finite-size/timeout/abort/rate/stream budgets), hashes streamed staging, syncs complete files, commits recognized pending→ready Asset, then updates Source by revision in the Audio reference critical section. Download runs outside that lock. Failure before final binding preserves backend/URL. Crash after Asset commit but before Source binding yields a known orphan. Equal content reuses one Asset, even when quota is full; Source URL does not change. Cancel stops queued/current work, retains prior successful items. No generic URL download/job service.
 
@@ -103,10 +125,10 @@ Second real-device validation (do not regenerate the accepted media library):
 5. Throwaway Source: localize, switch Remote (retain reference), release copy (remove binding), confirm orphan cleanup. If a shared Asset still has another Source, deletion must be refused. No dangling binding or stale staging accumulation.
 6. Optional throwaway corruption/health check must fail locally without Remote request; explicit repair with proxy/policy restored keeps the same Source path. Standard audio/source relay, hostname sync, Remote Image, one Image localization/Manager, Worldbook and existing Backup smoke remain correct.
 
-**Stop after this candidate**. Stage 3 generic scanning, source batches/groups/update UX and final release closeout require user confirmation of the second device gate. No main merge/tag/release or experiment-branch deletion now.
+**Historical second-stage stop is complete**: the user confirmed the Local device gate before Stage 3 implementation. Final closeout is now approved; experiment branch deletion still waits for formal-package smoke.
 
 
-## Character Reference Bridge third-stage gate
+## Character Reference Bridge third-stage gate (historical, core accepted)
 
 User-confirmed Stages 1/2: ST 1.19.0/NAS, Desktop/Phone client proxy OFF with NAS proxy ON Stable Remote, original player/spectrum/Seek, restart persistence, Remote→Local same URL, NAS proxy OFF Local, Assets/release/orphan/cleanup. Stage 3 does not redesign Source/Asset/Network/Image. Server only adds selected Source sensitive recovery metadata via protected restore POST; ordinary DTOs/logs remain private.
 
@@ -114,7 +136,7 @@ Frontend management plane separates Script/Regex/File Providers, media-neutral o
 
 Automated Source HTTP regression covers restore current-user/no-store, wrong-user/deleted safe 404, CSRF/Origin/context, invalid body/GET and URL-free ordinary DTO/logs. Existing Source/Asset/Relay lifecycle tests are retained. Frontend lifecycle tests cover conflicts/cancel/disabled/occurrences/readback/partial writes/old Local reuse/broken foreign refs/Restore/File malformed/metadata losslessness. Actual Chromium public-host fixture runs the user's entire unchanged library and Runtime, scans/applies via actual UI, plays with spectrum using real Source Relay, then author-update reuse and selected Restore. Desktop root, Phone `/st/` srcdoc, Tablet `/st/` blob and screenshots pass without base injection, Runtime transform, Adapter or original-host media requests. This does not prove actual installed TavernHelper persistence/runtime refresh or physical-device behavior.
 
-**Mandatory stop for Stage 3 installed-host acceptance:**
+**Historical Stage 3 acceptance matrix (core now accepted):**
 
 1. Back up the character and retain upstream originals; update both stage repos, restart ST, overwrite-load matching TTB candidate. Use original media library and original Runtime, with no Adapter or Stable Script copy workflow.
 2. Toolbox → Current Character Audio → scan. Check current character, enabled/disabled, each occurrence, uncertain default-off and metadata-readonly warnings if applicable. Confirm apply in place; verify Script ID/name/enabled/folder/order/button/data/export_with and Regex find_regex/config unchanged. No export/reimport or manual script toggling should be required by the main workflow.
@@ -123,4 +145,4 @@ Automated Source HTTP regression covers restore current-user/no-store, wrong-use
 5. Explicit Restore Remote selected valid Stable occurrences, then export/share; IDs/metadata/new author edits remain. Broken/foreign refs fail visibly, never guessed/recreated. Exercise Script/Regex conflict/partial failure and helper unavailable File copy as feasible; original files never overwritten.
 6. Standard Audio/Host Sync/Network deny, Remote Image/Image Localization/Manager, Worldbook/Backup smoke. Third-stage scan results are not an authoritative permanent character→Source reference database; no automatic cleanup or SourceRebind.
 
-Stop after delivering this candidate; no further Image Handler, Provenance Index, Audio Collection, Runtime Adapter, global interceptors or Release Closeout until user confirms this real gate.
+The user has confirmed this core gate and approved Release Closeout. Untested matrix negatives remain automated/non-blocking evidence. No Image Handler, Provenance Index, Audio Collection, Runtime Adapter or global interceptors are included; Phase 8 is not started.
