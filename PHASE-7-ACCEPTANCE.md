@@ -1,6 +1,6 @@
 # Phase 7 — Remote Audio Access, Stable Audio Source, Local Assets & Character Reference Bridge
 
-Status: **Phase 7 real-device core accepted; Release Closeout approved** (user confirmation 2026-10-04). Formal versions Frontend v0.50.0 / Server v0.7.0 / Protocol 1.0. The original phase gates below are historical; they no longer block release. Final artifact NAS smoke remains pending and independently gates branch cleanup.
+Status: **Phase 7 real-device core accepted; Release Closeout approved** (user confirmation 2026-10-04). Formal versions Frontend v0.50.0 / Server v0.7.0 / Protocol 1.0. The original phase gates below are historical; they no longer block release. The user confirmed the formal artifact NAS smoke passed on 2026-10-04; branch cleanup is now authorized after ancestry verification.
 
 ## Final evidence classification
 
@@ -22,7 +22,7 @@ High-concurrency Script/Regex conflicts, cross-user negatives, crash races, dama
 
 ### Formal release-package smoke and branch cleanup
 
-After publishing, update NAS Server to v0.7.0, restart Docker and install Frontend v0.50.0 Release JSON. Confirm audio.sources/audio.assets, scan the existing character once, play one accepted Local track with NAS Proxy OFF, and confirm old Image Manager assets. Do not relocalize all tracks or rerun the entire candidate matrix. Only after user confirmation, correct tags/assets/checksums and stage ancestry in main may both phase-7-audio-source and obsolete phase-7-remote-audio branches be deleted. No new features during closeout; Phase 8 starts separately from formal main.
+The user confirmed the formal Frontend v0.50.0 / Server v0.7.0 NAS package smoke passed on 2026-10-04. The smoke scope was Audio capabilities, one existing-character scan, accepted Local playback with NAS Proxy OFF and old Image Manager assets; this aggregate confirmation does not turn specialized negative cases into manual evidence. Tags/assets/checksums were verified at publication. Fresh comparisons confirm both official stage heads are main ancestors with ahead_by=0; the Server experiment branch is also covered, while the Frontend experiment-only Adapter commits are intentionally discarded. All four branches qualify for deletion; do not record deletion as complete until the remote refs are gone. Phase 8 starts separately from formal main.
 
 ## Behavior and architecture
 
@@ -125,7 +125,7 @@ Second real-device validation (do not regenerate the accepted media library):
 5. Throwaway Source: localize, switch Remote (retain reference), release copy (remove binding), confirm orphan cleanup. If a shared Asset still has another Source, deletion must be refused. No dangling binding or stale staging accumulation.
 6. Optional throwaway corruption/health check must fail locally without Remote request; explicit repair with proxy/policy restored keeps the same Source path. Standard audio/source relay, hostname sync, Remote Image, one Image localization/Manager, Worldbook and existing Backup smoke remain correct.
 
-**Historical second-stage stop is complete**: the user confirmed the Local device gate before Stage 3 implementation. Final closeout is now approved; experiment branch deletion still waits for formal-package smoke.
+**Historical second-stage stop is complete**: the user confirmed the Local device gate before Stage 3 implementation. Final closeout is now approved; formal-package smoke is now user-confirmed and experiment branch cleanup is authorized.
 
 
 ## Character Reference Bridge third-stage gate (historical, core accepted)
