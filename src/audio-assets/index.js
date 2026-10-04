@@ -5,7 +5,7 @@ import { coordinateAudio } from './coordination.js';
 export function createAudioAssets(config, references) {
     const policy = config.policy.audioAssets || AUDIO_ASSET_DEFAULTS;
     const limits = { ...policy, maxBytes: Math.min(policy.maxBytes, (config.policy.audio || AUDIO_DEFAULTS).maxResourceBytes) };
-    const stores = new Map(), streams = new Set(); let DatabaseSync, stopped = false, runtimeError;
+    const stores = new Map(), streams = new Set(), deletionObservers = new Set(); let DatabaseSync, stopped = false, runtimeError;
     const streamLimits = { localStreamsPerUser: 4, localStreamsGlobal: 16 };
     async function store(context) {
         if (stopped || !DatabaseSync || config.policy.audioAssetsError || !context?.userRoot)
@@ -19,6 +19,7 @@ export function createAudioAssets(config, references) {
     }
     const service = {
         limits, store,
+        onDelete(observer) { deletionObservers.add(observer); return () => deletionObservers.delete(observer); },
         definition: { id: 'audio-assets', version: '0.1.0', dependsOn: ['core'],
             capabilities: [{ id: 'audio.assets', contract: { major: 1, minMinor: 0, maxMinor: 0 },
                 operations: ['list', 'read', 'stream', 'check', 'delete', 'cleanup'].map(id => ({ id, available: true })),
@@ -36,7 +37,7 @@ export function createAudioAssets(config, references) {
         async list(context, cursor) { const item = await store(context); return coordinateAudio(context.userRoot, () => item.list(cursor)); },
         async read(context, id) { const item = await store(context); return coordinateAudio(context.userRoot, () => item.view(item.get(id))); },
         async check(context, id, signal) { const item = await store(context); return coordinateAudio(context.userRoot, () => item.check(id, signal)); },
-        async remove(context, id) { const item = await store(context); return coordinateAudio(context.userRoot, () => item.remove(id)); },
+        async remove(context, id) { const item = await store(context); return coordinateAudio(context.userRoot, async () => { const result = await item.remove(id); for (const observer of deletionObservers) await observer(context, id); return result; }); },
         async cleanup(context, ids) {
             const item = await store(context);
             return coordinateAudio(context.userRoot, async () => {
@@ -44,7 +45,7 @@ export function createAudioAssets(config, references) {
                 // appearing after confirmation is never silently included.
                 for (const id of ids) { item.get(id); if (await references(context, id)) throw new AudioAssetFailure('AUDIO_ASSET_REFERENCED'); }
                 const removed = [];
-                for (const id of ids) { await item.remove(id); removed.push(id); }
+                for (const id of ids) { await item.remove(id); for (const observer of deletionObservers) await observer(context, id); removed.push(id); }
                 return { removed };
             });
         },

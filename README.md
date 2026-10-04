@@ -1,5 +1,19 @@
 # Tavern Toolbox Server
 
+## Phase 8 — Audio Library candidate
+
+Current candidate branch: `stage/phase-8-audio-library`, based on latest released `main`. Package versions remain Frontend v0.50.0 / Server v0.7.0 / Protocol 1.0; this is not a release or installed-host acceptance.
+
+Additive `audio.library` consumes the existing Audio Asset Store and stores only per-ST-user music metadata in a separate `audio-library-v1/library.sqlite` (schema 1, directory 0700/database 0600, SQLite FULL durability, Node >=22.13). Asset identity produces one music row even with multiple Sources. Existing healthy Assets appear with unnamed/uncategorized defaults without migration, import, character scanning or Source/backend changes. Titles use user > first valid automatic > unnamed priority. Static current-character observations cannot overwrite a user or previously inferred title.
+
+A track has at most one flat category and visible/hidden state. Track and category writes use revision CAS; deleting a category atomically resets affected tracks to uncategorized and increments their revisions. Hidden/unhealthy tracks are excluded from the normal playback pool. Metadata is not a Source reference or retention lock; explicit Foundation Asset deletion emits a generic notification for metadata cleanup under the same per-user Audio coordinator. Interrupted deletion is also reconciled when listing. Orphan and reference-safe deletion rules stay unchanged.
+
+[Library routes, schemas and fixtures](protocol/README.md) describe bounded 50-item natural-title pages with stable tie order and snapshot cursors. Frontend playback independently reads the entire selected category, without UI search or page state; streaming continues through existing session-bound Asset GET/Range and never Remote fallback. Server does not store player state, queue, volume or history. Settings/media navigation changes are frontend product work; Image/Media/Governance/Business/Localization contracts and schemas remain unchanged.
+
+Code/HTTP tests cover legacy Assets, dedup, title priority, persistence/isolation, concurrent CAS, categories, health/visibility, 230-item paging and deletion coordination. Existing Candidate CI runs complete tests, syntax and privacy audit. Local execution retains the existing abstract-IPC Network lock EPERM limitation. Real ST 1.19.0 Docker/NAS multi-device metadata, current-character automatic titles, audio coexistence and interface checks remain pending; see the frontend TESTING/HANDOFF. Continue this same branch after device feedback; no main merge/version/tag/release before acceptance.
+
+Backup/restore: with ST stopped, preserve `audio-library-v1` together with `audio-assets-v1` and `audio-sources-v1` under each trusted user directory. Source/Asset backups remain authoritative for audio data; library database contains private user titles/categories only, and does not retain files. A code rollback does not roll back user metadata.
+
 ## Phase 7 — Remote / Stable / Local Audio & Character Reference Bridge (v0.7.0)
 
 Release v0.7.0, paired with Frontend v0.50.0, adds `network.remoteAudio` (Protocol 1.0) with user-scoped, expiring opaque playback access and finite-file Streaming Relay. Native GET/Single Range uses the ST session; creation/release use trusted Origin, CSRF and negotiated protocol. Audio budgets are independent of Image, while destination safety and the server-owned proxy transport are shared. Existing administrator Network configuration needs no edit beyond explicitly allowing the actual source/redirect hosts. Optional top-level `audio` limits are described in [Phase 7 architecture and acceptance](PHASE-7-ACCEPTANCE.md).

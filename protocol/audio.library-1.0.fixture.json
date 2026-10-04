@@ -1,0 +1,86 @@
+{
+  "list": {
+    "revision": 1,
+    "categories": [
+      {
+        "categoryId": "cccccccccccccccccccccc",
+        "name": "治愈日常"
+      }
+    ],
+    "items": [
+      {
+        "assetId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displayTitle": "夜晚治愈",
+        "titleSource": "user",
+        "category": "cccccccccccccccccccccc",
+        "libraryVisibility": "visible",
+        "revision": 2,
+        "health": "healthy",
+        "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/assets/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/stream",
+        "mime": "audio/mpeg"
+      }
+    ],
+    "total": 1,
+    "nextCursor": null,
+    "snapshot": "0123456789abcdef"
+  },
+  "read": {
+    "assetId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "displayTitle": "夜晚治愈",
+    "titleSource": "user",
+    "category": "cccccccccccccccccccccc",
+    "libraryVisibility": "visible",
+    "revision": 2,
+    "health": "healthy"
+  },
+  "updateRequest": {
+    "revision": 1,
+    "displayTitle": "夜晚治愈",
+    "category": "cccccccccccccccccccccc",
+    "libraryVisibility": "visible"
+  },
+  "updateResult": {
+    "assetId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "displayTitle": "夜晚治愈",
+    "titleSource": "user",
+    "category": "cccccccccccccccccccccc",
+    "libraryVisibility": "visible",
+    "revision": 2
+  },
+  "observeRequest": {
+    "title": "green to blue"
+  },
+  "observeResult": {
+    "assetId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "displayTitle": "夜晚治愈",
+    "titleSource": "user",
+    "category": "cccccccccccccccccccccc",
+    "libraryVisibility": "visible",
+    "revision": 2
+  },
+  "categoryCreateRequest": {
+    "operation": "create",
+    "revision": 0,
+    "name": "治愈日常"
+  },
+  "categoryRenameRequest": {
+    "operation": "rename",
+    "revision": 1,
+    "categoryId": "cccccccccccccccccccccc",
+    "name": "日常"
+  },
+  "categoryDeleteRequest": {
+    "operation": "delete",
+    "revision": 2,
+    "categoryId": "cccccccccccccccccccccc"
+  },
+  "categories": {
+    "revision": 1,
+    "categories": [
+      {
+        "categoryId": "cccccccccccccccccccccc",
+        "name": "治愈日常"
+      }
+    ]
+  }
+}
