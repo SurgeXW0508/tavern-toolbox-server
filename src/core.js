@@ -9,6 +9,8 @@ import { createAudio } from './network/audio.js';
 import { attachAudioRoutes } from './network/audio-routes.js';
 import { createAudioRoutingPreferences } from './preferences/audio-routing.js';
 import { attachAudioRoutingPreferenceRoutes } from './preferences/audio-routing-routes.js';
+import { createAudioLibrary } from './audio-library/store.js';
+import { attachAudioLibraryRoutes } from './audio-library/routes.js';
 import { createAudioSources } from './audio-sources/store.js';
 import { attachAudioSourceRoutes } from './audio-sources/routes.js';
 import { NetworkFailure } from './network/destination.js';
@@ -72,6 +74,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
     const audioSources = createAudioSources(config, audio);
     registry.register(audioSources.definition);
     registry.register(audioSources.assets.definition);
+    const audioLibrary = createAudioLibrary(config, audioSources.assets);
+    registry.register(audioLibrary.definition);
     const media = createMedia(config, network);
     registry.register(media.definition);
     const coordinate = createReferenceCoordinator();
@@ -142,6 +146,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
         attachAudioRoutes(router, { audio, registry, config, send, failure, networkFailureDetails, logger, now });
         attachAudioRoutingPreferenceRoutes(router, { preferences, registry, config, send, failure, logger, now });
         attachAudioSourceRoutes(router, { sources: audioSources, registry, config, send, failure, networkFailureDetails, logger, now });
+        attachAudioLibraryRoutes(router, { library: audioLibrary, registry, config, send, failure, logger, now });
         const policyRoute = operation => async (req, res) => {
             const { requestId, context, start } = res.locals.ttbRequest;
             let code = 'OK';

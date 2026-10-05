@@ -1,0 +1,452 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tavern Toolbox Audio Library 1.0",
+  "description": "Additive per-user product metadata keyed by existing Audio Asset. Runtime additionally checks trim/control-free text, unique IDs, category membership, exact playbackPath and snapshot paging. Metadata never retains Assets.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "list",
+    "read",
+    "updateRequest",
+    "updateResult",
+    "observeRequest",
+    "observeResult",
+    "categoryCreateRequest",
+    "categoryRenameRequest",
+    "categoryDeleteRequest",
+    "categories"
+  ],
+  "properties": {
+    "list": {
+      "$ref": "#/$defs/list"
+    },
+    "read": {
+      "$ref": "#/$defs/read"
+    },
+    "updateRequest": {
+      "$ref": "#/$defs/updateRequest"
+    },
+    "updateResult": {
+      "$ref": "#/$defs/track"
+    },
+    "observeRequest": {
+      "$ref": "#/$defs/observeRequest"
+    },
+    "observeResult": {
+      "$ref": "#/$defs/track"
+    },
+    "categoryCreateRequest": {
+      "$ref": "#/$defs/categoryCreateRequest"
+    },
+    "categoryRenameRequest": {
+      "$ref": "#/$defs/categoryRenameRequest"
+    },
+    "categoryDeleteRequest": {
+      "$ref": "#/$defs/categoryDeleteRequest"
+    },
+    "categories": {
+      "$ref": "#/$defs/categories"
+    }
+  },
+  "$defs": {
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740990
+    },
+    "categoryId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}$"
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assetId",
+        "displayTitle",
+        "titleSource",
+        "category",
+        "libraryVisibility",
+        "revision"
+      ],
+      "properties": {
+        "assetId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{32}$"
+        },
+        "displayTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "titleSource": {
+          "enum": [
+            "none",
+            "automatic",
+            "user"
+          ]
+        },
+        "category": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/categoryId"
+            }
+          ]
+        },
+        "libraryVisibility": {
+          "enum": [
+            "visible",
+            "hidden"
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        }
+      }
+    },
+    "read": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assetId",
+        "displayTitle",
+        "titleSource",
+        "category",
+        "libraryVisibility",
+        "revision",
+        "health"
+      ],
+      "properties": {
+        "assetId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{32}$"
+        },
+        "displayTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "titleSource": {
+          "enum": [
+            "none",
+            "automatic",
+            "user"
+          ]
+        },
+        "category": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/categoryId"
+            }
+          ]
+        },
+        "libraryVisibility": {
+          "enum": [
+            "visible",
+            "hidden"
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "health": {
+          "enum": [
+            "healthy",
+            "missing",
+            "corrupt",
+            "unavailable"
+          ]
+        }
+      }
+    },
+    "category": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "categoryId",
+        "name"
+      ],
+      "properties": {
+        "categoryId": {
+          "$ref": "#/$defs/categoryId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        }
+      }
+    },
+    "categories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "categories"
+      ],
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "categories": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/category"
+          }
+        }
+      }
+    },
+    "playable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assetId",
+        "displayTitle",
+        "titleSource",
+        "category",
+        "libraryVisibility",
+        "revision",
+        "health",
+        "playbackPath",
+        "mime"
+      ],
+      "properties": {
+        "assetId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{32}$"
+        },
+        "displayTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "titleSource": {
+          "enum": [
+            "none",
+            "automatic",
+            "user"
+          ]
+        },
+        "category": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/categoryId"
+            }
+          ]
+        },
+        "libraryVisibility": {
+          "enum": [
+            "visible",
+            "hidden"
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "health": {
+          "enum": [
+            "healthy",
+            "missing",
+            "corrupt",
+            "unavailable"
+          ]
+        },
+        "playbackPath": {
+          "type": "string",
+          "pattern": "^/api/plugins/tavern-toolbox-server/v1/audio/assets/[A-Za-z0-9_-]{32}/stream$"
+        },
+        "mime": {
+          "enum": [
+            "audio/mpeg",
+            "audio/mp4",
+            "audio/aac",
+            "audio/ogg",
+            "audio/webm",
+            "audio/wav",
+            "audio/wave",
+            "audio/x-wav"
+          ]
+        }
+      }
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "categories",
+        "items",
+        "total",
+        "snapshot",
+        "nextCursor"
+      ],
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "categories": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/category"
+          }
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/playable"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4096
+        },
+        "snapshot": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{16}$"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9]{1,4}~[a-f0-9]{16}$"
+            }
+          ]
+        }
+      }
+    },
+    "updateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "displayTitle",
+        "category",
+        "libraryVisibility"
+      ],
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "displayTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "category": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/categoryId"
+            }
+          ]
+        },
+        "libraryVisibility": {
+          "enum": [
+            "visible",
+            "hidden"
+          ]
+        }
+      }
+    },
+    "observeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        }
+      }
+    },
+    "categoryCreateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "revision",
+        "name"
+      ],
+      "properties": {
+        "operation": {
+          "const": "create"
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        }
+      }
+    },
+    "categoryRenameRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "revision",
+        "categoryId",
+        "name"
+      ],
+      "properties": {
+        "operation": {
+          "const": "rename"
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "categoryId": {
+          "$ref": "#/$defs/categoryId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        }
+      }
+    },
+    "categoryDeleteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "revision",
+        "categoryId"
+      ],
+      "properties": {
+        "operation": {
+          "const": "delete"
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "categoryId": {
+          "$ref": "#/$defs/categoryId"
+        }
+      }
+    }
+  }
+}

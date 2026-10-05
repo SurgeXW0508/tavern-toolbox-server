@@ -85,6 +85,17 @@ export class AudioAssetStore {
         return { assetId: row.asset_id, mime: row.mime, byteSize: row.byte_size, createdAt: row.created_at,
             health: await this.quick(row), referenceCount: referenceCount ?? await this.references(row.asset_id), playbackPath: assetPath(row.asset_id) };
     }
+    async inventory() {
+        // Read-only Asset inventory for product consumers. Keep SQL, health and
+        // transport ownership here; callers hold the existing Audio coordinator.
+        const records = this.db.prepare("SELECT * FROM assets WHERE state = 'ready' ORDER BY asset_id LIMIT 4097").all();
+        if (records.length > 4096) fail('AUDIO_ASSET_DATA_INVALID');
+        const items = [];
+        for (const row of records) {
+            items.push({ assetId: row.asset_id, mime: row.mime, health: await this.quick(row), playbackPath: assetPath(row.asset_id) });
+        }
+        return items;
+    }
     async digestFile(file, row, signal) {
         const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
         try {
