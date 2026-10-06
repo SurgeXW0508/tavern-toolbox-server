@@ -107,5 +107,30 @@
     "total": 1,
     "nextCursor": null,
     "snapshot": "0123456789abcdef"
+  },
+  "browse": {
+    "revision": 1,
+    "categories": [
+      {
+        "categoryId": "cccccccccccccccccccccc",
+        "name": "治愈日常"
+      }
+    ],
+    "items": [
+      {
+        "assetId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displayTitle": "夜晚治愈",
+        "titleSource": "user",
+        "category": "cccccccccccccccccccccc",
+        "libraryVisibility": "visible",
+        "revision": 2,
+        "health": "healthy",
+        "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/assets/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/stream",
+        "mime": "audio/mpeg"
+      }
+    ],
+    "total": 1,
+    "nextCursor": null,
+    "snapshot": "0123456789abcdef"
   }
 }

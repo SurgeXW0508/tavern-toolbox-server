@@ -116,6 +116,13 @@ test('native Library controls require authenticated user, exact context/protocol
   async function call(route, body, user = 'alice', extra = {}) { const response = await fetch(base + route, { method: body ? 'POST' : 'GET', headers: { 'X-Test-User': user, 'X-TTB-Protocol': '1.0', 'X-TTB-Context': contexts[user], 'X-CSRF-Token': 'fixture', Origin: origin, 'Content-Type': 'application/json', ...extra }, ...(body ? { body: JSON.stringify(body) } : {}) }); return { status: response.status, value: await response.json(), headers: response.headers }; }
   const list = await call('/v1/audio/library'); assert.equal(list.status, 200); assert.equal(list.value.data.total, 0); assert.match(list.headers.get('cache-control'), /no-store/);
   assert.equal((await call('/v1/audio/library/playback-pool')).value.data.total, 0);
+  for (const route of ['/v1/audio/library/browse', '/v1/audio/assets/browse']) {
+    assert.equal((await call(route)).status, 200);
+    assert.equal((await call(route + '?cursor=bad')).status, 400);
+    assert.equal((await call(route, undefined, 'alice', { 'X-TTB-Context': contexts.bob })).status, 409);
+    assert.equal((await call(route, undefined, 'alice', { 'X-TTB-Protocol': '2.0' })).status, 409);
+    assert.equal((await call(route, undefined, 'alice', { 'X-Test-User': '' })).status, 403);
+  }
   assert.equal((await call('/v1/audio/library/playback-pool?search=x')).status, 400);
   assert.equal((await call('/v1/audio/library/playback-pool', undefined, 'alice', { 'X-TTB-Context': contexts.bob })).status, 409);
   assert.equal((await call('/v1/audio/library/playback-pool', undefined, 'alice', { 'X-Test-User': '' })).status, 403);
@@ -164,4 +171,89 @@ test('playback pool category scope and edits use the same coordinator, without r
   await new Promise(resolve => setImmediate(resolve));
   const removal = h.sources.assets.remove(h.alice, a), pool = h.library.playbackPool(h.alice, { category });
   unlock(); await hold; await removal; assert.equal((await pool).total, 0);
+});
+
+test('browse traverses 1000 Assets with 1950 file checks, same ordering, bounded page work and separate query scope', async t => {
+  const h = await harness(t);
+  for (let n = 0; n < 1000; n++) await h.asset(h.alice, n);
+  const store = await h.sources.assets.store(h.alice), quick = store.quick.bind(store); let checks = 0;
+  store.quick = row => { checks++; return quick(row); };
+  const expected = await h.library.playbackPool(h.alice); checks = 0;
+  const first = await h.library.browse(h.alice); assert.equal(checks, 1000);
+  const rows = [...first.items]; let cursor = first.nextCursor;
+  while (cursor) {
+    const before = checks, page = await h.library.browse(h.alice, { cursor });
+    assert.equal(checks - before, page.items.length); assert.equal(page.snapshot, first.snapshot);
+    rows.push(...page.items); cursor = page.nextCursor;
+  }
+  assert.equal(checks, 1950); assert.deepEqual(rows, expected.items);
+  await assert.rejects(h.library.browse(h.bob, { cursor: first.nextCursor }), { code: 'AUDIO_BROWSE_EXPIRED' });
+  await assert.rejects(h.library.browse({ ...h.alice, contextId: 'new-login' }, { cursor: first.nextCursor }), { code: 'AUDIO_BROWSE_EXPIRED' });
+  await assert.rejects(h.library.browse(h.alice, { search: 'different', cursor: first.nextCursor }), { code: 'AUDIO_BROWSE_EXPIRED' });
+  checks = 0; assert.equal((await h.library.browse(h.alice, { search: 'absent' })).total, 0); assert.equal(checks, 0);
+  const assetFirst = await h.sources.assets.browse(h.alice); checks = 0;
+  const assetNext = await h.sources.assets.browse(h.alice, assetFirst.nextCursor);
+  assert.equal(checks, 50); assert.deepEqual(assetNext.summary, assetFirst.summary);
+  assert.equal(assetNext.summary.orphan, 1000);
+});
+
+test('browse snapshots reject metadata edits, on-page external damage, expiry and eviction; refresh sees off-page changes', async t => {
+  const h = await harness(t); for (let n = 0; n < 101; n++) await h.asset(h.alice, n);
+  const store = await h.sources.assets.store(h.alice), sessions = h.sources.assets.readSessions;
+  let now = 0; sessions.now = () => now;
+  const first = await h.library.browse(h.alice);
+  await h.library.update(h.alice, first.items[0].assetId, change(first.items[0], { displayTitle: 'edit' }));
+  await assert.rejects(h.library.browse(h.alice, { cursor: first.nextCursor }), { code: 'AUDIO_BROWSE_EXPIRED' });
+  const fresh = await h.library.browse(h.alice), page = await h.library.browse(h.alice, { cursor: fresh.nextCursor });
+  await unlink(store.file(page.items[0].assetId));
+  await assert.rejects(h.library.browse(h.alice, { cursor: fresh.nextCursor }), { code: 'AUDIO_BROWSE_EXPIRED' });
+  assert.equal((await h.library.browse(h.alice)).total, 100);
+  const expires = await h.library.browse(h.alice); now = 60000;
+  await assert.rejects(h.library.browse(h.alice, { cursor: expires.nextCursor }), { code: 'AUDIO_BROWSE_EXPIRED' });
+  const evicted = await h.library.browse(h.alice);
+  await h.sources.assets.browse(h.alice); await h.library.browse(h.alice);
+  assert.equal(sessions.sessions.size, 2);
+  await assert.rejects(h.library.browse(h.alice, { cursor: evicted.nextCursor }), { code: 'AUDIO_BROWSE_EXPIRED' });
+});
+
+for (const operation of ['browse', 'playbackPool', 'assets']) test(`${operation} does not hold mutation lock during file I/O and rejects concurrent deletion`, async t => {
+  const h = await harness(t), id = await h.asset(); const store = await h.sources.assets.store(h.alice);
+  const quick = store.quick.bind(store); let release, started;
+  const entered = new Promise(resolve => { started = resolve; }), hold = new Promise(resolve => { release = resolve; });
+  store.quick = async row => { started(); await hold; return quick(row); };
+  const pending = operation === 'assets' ? h.sources.assets.browse(h.alice) : h.library[operation](h.alice);
+  const rejected = assert.rejects(pending, { code: 'AUDIO_BROWSE_EXPIRED' });
+  await entered;
+  // If enumeration still owns the write coordinator this deletion cannot finish.
+  let timeout;
+  try { await Promise.race([h.sources.assets.remove(h.alice, id), new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('read blocked deletion')), 2000); })]); }
+  finally { clearTimeout(timeout); release(); }
+  await rejected; assert.throws(() => store.get(id), { code: 'AUDIO_ASSET_NOT_FOUND' });
+});
+
+test('browse cancellation drains bounded workers, denies another same-user scan and shutdown clears snapshots', async t => {
+  const h = await harness(t); for (let n = 0; n < 60; n++) await h.asset(h.alice, n);
+  const store = await h.sources.assets.store(h.alice), quick = store.quick.bind(store);
+  let count = 0, release, started; const entered = new Promise(resolve => { started = resolve; });
+  const hold = new Promise(resolve => { release = resolve; });
+  store.quick = async row => { count++; if (count === 4) started(); await hold; return quick(row); };
+  const controller = new AbortController(), pending = h.library.browse(h.alice, {}, controller.signal);
+  const rejected = assert.rejects(pending, { code: 'CLIENT_ABORTED' }); await entered;
+  await assert.rejects(h.sources.assets.browse(h.alice), { code: 'RESOURCE_BUSY' });
+  assert.equal((await h.library.browse(h.bob)).total, 0);
+  controller.abort(); release(); await rejected; assert.equal(count, 4); assert.equal(h.sources.assets.readSessions.active.size, 0);
+  store.quick = quick; await h.library.browse(h.alice); assert.equal(h.sources.assets.readSessions.sessions.size, 1);
+  await h.library.definition.shutdown(); assert.equal(h.sources.assets.readSessions.sessions.size, 0);
+  await assert.rejects(h.library.browse(h.alice), { code: 'AUDIO_LIBRARY_UNAVAILABLE' });
+});
+
+test('cached orphan summary cannot authorize deletion after a new binding', async t => {
+  const h = await harness(t), id = await h.asset();
+  const page = await h.sources.assets.browse(h.alice); assert.equal(page.assets[0].referenceCount, 0);
+  const source = (await h.sources.create(h.alice, 'https://audio.example.com/reference.mp3')).source;
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(path.join(h.alice.userRoot, 'tavern-toolbox-server/audio-sources-v1/sources.sqlite'));
+  db.prepare('UPDATE sources SET local_asset_id=? WHERE source_id=?').run(id, source.sourceId); db.close();
+  await assert.rejects(h.sources.assets.cleanup(h.alice, [id]), { code: 'AUDIO_ASSET_REFERENCED' });
+  assert.equal((await h.sources.assets.browse(h.alice)).summary.orphan, 0);
 });

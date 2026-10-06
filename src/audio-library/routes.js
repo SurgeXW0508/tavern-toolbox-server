@@ -29,6 +29,9 @@ export function attachAudioLibraryRoutes(router, { library, registry, config, se
     const route = (operation) => async (req, res) => {
         const { context, requestId, start } = res.locals.ttbRequest;
         let code = 'OK';
+        const controller = new AbortController();
+        const disconnected = () => { if (!res.writableEnded) controller.abort(); };
+        res.once('close', disconnected);
         try {
             if (req.get('X-TTB-Protocol') !== '1.0') fail('PROTOCOL_INCOMPATIBLE');
             if (req.get('X-TTB-Context') !== context.contextId) fail('CONTEXT_CHANGED');
@@ -41,7 +44,8 @@ export function attachAudioLibraryRoutes(router, { library, registry, config, se
             )
                 fail(cap?.reasonCode || 'AUDIO_LIBRARY_UNAVAILABLE');
             let result;
-            if (operation === 'playbackPool') result = await library.playbackPool(context, req.query);
+            if (operation === 'playbackPool') result = await library.playbackPool(context, req.query, controller.signal);
+            else if (operation === 'browse') result = await library.browse(context, req.query, controller.signal);
             else if (operation === 'list') result = await library.list(context, req.query);
             else if (operation === 'read') result = await library.read(context, req.params.assetId);
             else if (operation === 'categories') result = await library.categories(context);
@@ -56,7 +60,7 @@ export function attachAudioLibraryRoutes(router, { library, registry, config, se
                             ? await library.category(context, value)
                             : await library.update(context, req.params.assetId, value);
             }
-            send(res, 200, result, requestId, true, operation === 'playbackPool' ? 4 * 1024 * 1024 : 131072);
+            if (!res.destroyed && !controller.signal.aborted) send(res, 200, result, requestId, true, operation === 'playbackPool' ? 4 * 1024 * 1024 : 131072);
         } catch (error) {
             code =
                 error instanceof AudioLibraryFailure || error instanceof AudioAssetFailure
@@ -69,12 +73,14 @@ export function attachAudioLibraryRoutes(router, { library, registry, config, se
                     PROTOCOL_INCOMPATIBLE: 409,
                     CONTEXT_CHANGED: 409,
                     AUDIO_LIBRARY_CONFLICT: 409,
+                    AUDIO_BROWSE_EXPIRED: 409,
+                    RESOURCE_BUSY: 429,
                     AUDIO_CATEGORY_EXISTS: 409,
                     AUDIO_CATEGORIES_FULL: 409,
                     AUDIO_CATEGORY_NOT_FOUND: 404,
                     AUDIO_ASSET_NOT_FOUND: 404,
                 }[code] || 503;
-            send(
+            if (!res.destroyed) send(
                 res,
                 status,
                 failure(
@@ -88,6 +94,7 @@ export function attachAudioLibraryRoutes(router, { library, registry, config, se
                 4096,
             );
         } finally {
+            res.off('close', disconnected);
             logger.info?.({
                 service: 'tavern-toolbox-server',
                 time: new Date().toISOString(),
@@ -105,6 +112,7 @@ export function attachAudioLibraryRoutes(router, { library, registry, config, se
     router.get('/v1/audio/library/categories', route('categories'));
     router.post('/v1/audio/library/categories', route('category'));
     router.get('/v1/audio/library/playback-pool', route('playbackPool'));
+    router.get('/v1/audio/library/browse', route('browse'));
     router.get('/v1/audio/library/:assetId', route('read'));
     router.post('/v1/audio/library/:assetId/update', route('update'));
     router.post('/v1/audio/library/:assetId/observe', route('observe'));

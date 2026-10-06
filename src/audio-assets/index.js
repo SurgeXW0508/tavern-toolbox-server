@@ -1,3 +1,5 @@
+import { AudioReadSessions, BROWSE_TTL_MS } from './read-sessions.js';
+import { scanAudioRows } from './scan.js';
 import { AUDIO_ASSET_DEFAULTS, AUDIO_DEFAULTS } from '../config.js';
 import { AudioAssetStore, AudioAssetFailure } from './store.js';
 import { coordinateAudio } from './coordination.js';
@@ -17,15 +19,16 @@ export function createAudioAssets(config, references) {
         try { return await stores.get(context.userRoot); }
         catch (error) { stores.delete(context.userRoot); throw error; }
     }
+    const readSessions = new AudioReadSessions();
     const service = {
-        limits, store,
+        limits, store, readSessions,
         onDelete(observer) { deletionObservers.add(observer); return () => deletionObservers.delete(observer); },
         definition: { id: 'audio-assets', version: '0.1.0', dependsOn: ['core'],
             capabilities: [{ id: 'audio.assets', contract: { major: 1, minMinor: 0, maxMinor: 0 },
-                operations: ['list', 'read', 'stream', 'check', 'delete', 'cleanup'].map(id => ({ id, available: true })),
+                operations: ['list', 'browse', 'read', 'stream', 'check', 'delete', 'cleanup'].map(id => ({ id, available: true })),
                 operationAvailability: () => Object.fromEntries(['check', 'delete', 'cleanup'].map(id => [id, {
                     available: config.policy.core.allowedOrigins.length > 0, reasonCode: 'ORIGIN_POLICY_MISSING' }])),
-                limits: { ...limits, ...streamLimits, pageSize: 50, maxAssets: 4096 }, constraints: { scope: 'st-user', persistence: 'sqlite-files',
+                limits: { ...limits, ...streamLimits, pageSize: 50, maxAssets: 4096, browseTtlMs: BROWSE_TTL_MS }, constraints: { scope: 'st-user', persistence: 'sqlite-files',
                     assetIdentity: 'content-sha256', referenceScope: 'audio-sources', localOnly: true, singleRangeOnly: true } }],
             initialize: async () => { try { ({ DatabaseSync } = await import('node:sqlite')); }
                 catch { runtimeError = 'AUDIO_ASSET_RUNTIME_UNAVAILABLE'; throw new Error(runtimeError); } },
@@ -35,6 +38,25 @@ export function createAudioAssets(config, references) {
             // either SQLite store. This module has no independent network work.
         },
         async list(context, cursor) { const item = await store(context); return coordinateAudio(context.userRoot, () => item.list(cursor)); },
+        async browse(context, cursor = null, signal) {
+            const item = await store(context);
+            return readSessions.read(context, {
+                key: 'assets', cursor, signal,
+                capture: async () => ({ records: item.records(), stamp: item.readStamp(),
+                    references: [...await item.references(null)].sort(([a], [b]) => a.localeCompare(b)) }),
+                build: async (data, signal) => {
+                    const references = new Map(data.references);
+                    const rows = await scanAudioRows(data.records, row => item.view(row, references.get(row.asset_id) || 0), signal);
+                    return { rows, summary: { count: rows.length, totalBytes: rows.reduce((sum, row) => sum + row.byteSize, 0),
+                        healthy: rows.filter(row => row.health === 'healthy').length,
+                        corrupt: rows.filter(row => row.health !== 'healthy').length,
+                        orphan: rows.filter(row => row.referenceCount === 0).length,
+                        quotaBytes: limits.quotaBytes, maxBytes: limits.maxBytes } };
+                },
+                checkPage: (rows, signal, data) => item.sameHealth(rows, data.records, signal),
+                view: (entry, offset, nextCursor) => ({ assets: entry.rows.slice(offset, offset + 50), nextCursor, summary: entry.summary }),
+            });
+        },
         async read(context, id) { const item = await store(context); return coordinateAudio(context.userRoot, () => item.view(item.get(id))); },
         async check(context, id, signal) { const item = await store(context); return coordinateAudio(context.userRoot, () => item.check(id, signal)); },
         async remove(context, id) { const item = await store(context); return coordinateAudio(context.userRoot, async () => { const result = await item.remove(id); for (const observer of deletionObservers) await observer(context, id); return result; }); },
@@ -66,7 +88,7 @@ export function createAudioAssets(config, references) {
             } finally { signal.removeEventListener('abort', abort); streams.delete(entry); release(); }
         },
         async close() {
-            stopped = true; for (const entry of streams) entry.controller.abort(); await Promise.all([...streams].map(entry => entry.done));
+            stopped = true; await readSessions.close(); for (const entry of streams) entry.controller.abort(); await Promise.all([...streams].map(entry => entry.done));
             for (const [root, pending] of stores) { try { await coordinateAudio(root, async () => (await pending).close()); } catch {} } stores.clear();
         },
     };

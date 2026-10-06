@@ -78,5 +78,28 @@
     "removed": [
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     ]
+  },
+  "browse": {
+    "assets": [
+      {
+        "assetId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "playbackPath": "/api/plugins/tavern-toolbox-server/v1/audio/assets/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/stream",
+        "mime": "audio/mpeg",
+        "byteSize": 4096,
+        "createdAt": 1,
+        "health": "healthy",
+        "referenceCount": 1
+      }
+    ],
+    "nextCursor": null,
+    "summary": {
+      "count": 1,
+      "totalBytes": 4096,
+      "healthy": 1,
+      "corrupt": 0,
+      "orphan": 0,
+      "quotaBytes": 4294967296,
+      "maxBytes": 268435456
+    }
   }
 }

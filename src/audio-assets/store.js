@@ -1,3 +1,4 @@
+import { AudioAssetFailure } from './errors.js';
 import path from 'node:path';
 import { constants } from 'node:fs';
 import { mkdir, chmod, lstat, open, rename, unlink, readdir } from 'node:fs/promises';
@@ -5,6 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { once } from 'node:events';
+import { scanAudioRows } from './scan.js';
 import { AUDIO_MIME, singleRange } from '../network/audio-profile.js';
 import { audioSignature, canonicalAudioMime } from './validation.js';
 
@@ -14,7 +16,7 @@ export const STAGING_MAX_AGE = 24 * 60 * 60 * 1000;
 // Shared by instances in this process. Recovery must not remove another live
 // localization operation's staging file. A second ST process is unsupported.
 const activeStaging = new Set();
-export class AudioAssetFailure extends Error { constructor(code) { super(code); this.code = code; } }
+export { AudioAssetFailure } from './errors.js';
 const fail = code => { throw new AudioAssetFailure(code); };
 const missing = error => error?.code === 'ENOENT';
 async function directory(file) {
@@ -85,16 +87,25 @@ export class AudioAssetStore {
         return { assetId: row.asset_id, mime: row.mime, byteSize: row.byte_size, createdAt: row.created_at,
             health: await this.quick(row), referenceCount: referenceCount ?? await this.references(row.asset_id), playbackPath: assetPath(row.asset_id) };
     }
-    async inventory() {
-        // Read-only Asset inventory for product consumers. Keep SQL, health and
-        // transport ownership here; callers hold the existing Audio coordinator.
-        const records = this.db.prepare("SELECT * FROM assets WHERE state = 'ready' ORDER BY asset_id LIMIT 4097").all();
-        if (records.length > 4096) fail('AUDIO_ASSET_DATA_INVALID');
-        const items = [];
-        for (const row of records) {
-            items.push({ assetId: row.asset_id, mime: row.mime, health: await this.quick(row), playbackPath: assetPath(row.asset_id) });
-        }
-        return items;
+    records() {
+        const rows = this.db.prepare("SELECT * FROM assets WHERE state = 'ready' ORDER BY asset_id LIMIT 4097").all();
+        if (rows.length > 4096) fail('AUDIO_ASSET_DATA_INVALID');
+        return rows.map(row => this.validate(row));
+    }
+    readStamp() {
+        return [this.db.prepare('SELECT total_changes() AS n').get().n,
+            this.db.prepare('PRAGMA data_version').get().data_version];
+    }
+    async inventory(records = this.records(), signal) {
+        return scanAudioRows(records, async row => ({ assetId: row.asset_id, mime: row.mime,
+            health: await this.quick(row), playbackPath: assetPath(row.asset_id) }), signal);
+    }
+    async sameHealth(items, records, signal) {
+        const byId = new Map(records.map(row => [row.asset_id, row]));
+        return (await scanAudioRows(items, async item => {
+            const row = byId.get(item.assetId);
+            return Boolean(row) && await this.quick(row) === item.health;
+        }, signal)).every(Boolean);
     }
     async digestFile(file, row, signal) {
         const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -218,16 +229,18 @@ export class AudioAssetStore {
     }
     async list(cursor = null) {
         if (cursor !== null && !validAssetId(cursor)) fail('INVALID_REQUEST');
-        const all = this.db.prepare("SELECT * FROM assets WHERE state = 'ready' ORDER BY asset_id").all();
+        const all = this.records(), health = new Map();
         let totalBytes = 0, healthy = 0, corrupt = 0, orphan = 0;
         const references = await this.references(null);
         for (const row of all) {
             this.validate(row); totalBytes += row.byte_size;
-            if (await this.quick(row) === 'healthy') healthy++; else corrupt++;
+            const state = await this.quick(row); health.set(row.asset_id, state);
+            if (state === 'healthy') healthy++; else corrupt++;
             if (!references.get(row.asset_id)) orphan++;
         }
         const page = all.filter(row => row.asset_id > (cursor || '')).slice(0, 51);
-        const assets = await Promise.all(page.slice(0, 50).map(row => this.view(row, references.get(row.asset_id) || 0)));
+        const assets = page.slice(0, 50).map(row => ({ assetId: row.asset_id, mime: row.mime, byteSize: row.byte_size,
+            createdAt: row.created_at, health: health.get(row.asset_id), referenceCount: references.get(row.asset_id) || 0, playbackPath: assetPath(row.asset_id) }));
         return { assets, nextCursor: page.length > 50 ? page[49].asset_id : null,
             summary: { count: all.length, totalBytes, healthy, corrupt, orphan, quotaBytes: this.limits.quotaBytes, maxBytes: this.limits.maxBytes } };
     }

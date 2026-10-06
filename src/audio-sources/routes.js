@@ -10,7 +10,7 @@ const statuses = { INVALID_REQUEST: 400, UNSUPPORTED_RANGE: 400, PROTOCOL_INCOMP
     UNSUPPORTED_MEDIA_TYPE: 415, REMOTE_SIZE_UNKNOWN: 422, INVALID_REMOTE_RESPONSE: 502, DNS_UNRESOLVED: 502,
     TOO_MANY_REDIRECTS: 502, REMOTE_UNAVAILABLE: 502, REMOTE_TIMEOUT: 504, RESOURCE_BUSY: 429, RATE_LIMITED: 429,
     CAPABILITY_UNAVAILABLE: 503, TRANSPORT_UNAVAILABLE: 503 };
-Object.assign(statuses, { AUDIO_SOURCE_CONFLICT: 409, AUDIO_JOB_NOT_FOUND: 404, AUDIO_ASSET_NOT_FOUND: 404,
+Object.assign(statuses, { AUDIO_SOURCE_CONFLICT: 409, AUDIO_BROWSE_EXPIRED: 409, AUDIO_JOB_NOT_FOUND: 404, AUDIO_ASSET_NOT_FOUND: 404,
     AUDIO_ASSET_REFERENCED: 409, AUDIO_ASSET_UNHEALTHY: 422, AUDIO_ASSET_INVALID_CONTENT: 415, AUDIO_QUOTA_EXCEEDED: 413 });
 const fields = (value, keys) => Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 const revision = value => Number.isSafeInteger(value) && value >= 0;
@@ -43,15 +43,16 @@ export function attachAudioSourceRoutes(router, { sources, registry, config, sen
                 if (req.get('X-TTB-Protocol') !== '1.0') fail('PROTOCOL_INCOMPATIBLE');
                 if (req.get('X-TTB-Context') !== context.contextId) fail('CONTEXT_CHANGED');
             }
-            if (!['list', 'read', 'stream', 'job'].includes(operation) && !mutationGate(req, config.policy.core.allowedOrigins)) fail('CSRF_REJECTED');
+            if (!['list', 'browse', 'read', 'stream', 'job'].includes(operation) && !mutationGate(req, config.policy.core.allowedOrigins)) fail('CSRF_REJECTED');
             const capability = (await registry.snapshot(context)).capabilities.find(item => item.id === (asset ? 'audio.assets' : 'audio.sources'));
             if (capability?.moduleId !== (asset ? 'audio-assets' : 'audio-sources') || capability.operations.find(op => op.id === operation)?.available !== true)
                 fail(capability?.reasonCode || 'AUDIO_SOURCE_UNAVAILABLE');
             let result;
             if (asset) {
-                if (operation === 'list') {
+                if (operation === 'list' || operation === 'browse') {
                     if (Object.keys(req.query).some(key => key !== 'cursor') || req.query.cursor !== undefined && typeof req.query.cursor !== 'string') fail('INVALID_REQUEST');
-                    result = await sources.assets.list(context, req.query.cursor ?? null);
+                    result = operation === 'browse' ? await sources.assets.browse(context, req.query.cursor ?? null, controller.signal)
+                        : await sources.assets.list(context, req.query.cursor ?? null);
                 } else if (operation === 'read') result = await sources.assets.read(context, req.params.assetId);
                 else if (operation === 'stream') {
                     setPrivateHeaders(res); res.setHeader('Cross-Origin-Resource-Policy', 'same-origin'); res.setHeader('Referrer-Policy', 'no-referrer');
@@ -124,6 +125,7 @@ export function attachAudioSourceRoutes(router, { sources, registry, config, sen
     for (const operation of ['localize', 'repair', 'releaseLocal', 'backend', 'restore']) router.post('/v1/audio/sources/:sourceId/' + operation, route(operation));
     router.get('/v1/audio/assets', route('list', true));
     router.post('/v1/audio/assets/cleanup', route('cleanup', true));
+    router.get('/v1/audio/assets/browse', route('browse', true));
     router.get('/v1/audio/assets/:assetId', route('read', true));
     router.get('/v1/audio/assets/:assetId/stream', route('stream', true));
     router.post('/v1/audio/assets/:assetId/check', route('check', true));

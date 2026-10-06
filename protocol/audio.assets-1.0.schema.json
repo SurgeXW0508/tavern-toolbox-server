@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Tavern Toolbox Audio Assets 1.0",
-  "description": "Private per-ST-user independent Audio Store. Runtime path matches assetId; health/counts/references validated. Local Range never accesses Network. Public DTO has no paths/digest.",
+  "description": "Private per-ST-user independent Audio Store. Runtime path matches assetId; health/counts/references validated. Local Range never accesses Network. Public DTO has no paths/digest. Optional browse uses offset~snapshot cursors and scan-time summary; live reference/deletion and stream checks never use the snapshot.",
   "$defs": {
     "asset": {
       "type": "object",
@@ -162,6 +162,38 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{32}$"
           }
+        }
+      }
+    },
+    "browsePage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assets",
+        "nextCursor",
+        "summary"
+      ],
+      "properties": {
+        "assets": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/asset"
+          }
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,3}~[a-f0-9]{16}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "$ref": "#/$defs/summary"
         }
       }
     }
