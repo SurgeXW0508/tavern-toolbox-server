@@ -277,6 +277,85 @@ export function createAudioLibrary(config, assets) {
     async function ready(context) {
         return [await store(context), await assets.store(context)];
     }
+    async function list(context, query = {}, complete = false) {
+        if (
+            Object.keys(query).some((key) => !['category', 'search', 'hidden', 'cursor'].includes(key)) ||
+            Object.values(query).some((value) => typeof value !== 'string') ||
+            (query.category &&
+                !['all', 'uncategorized'].includes(query.category) &&
+                !validCategoryId(query.category)) ||
+            (query.search && query.search.length > 120) ||
+            (query.hidden && !['true', 'false'].includes(query.hidden)) ||
+            (query.cursor && !/^\d{1,4}~[a-f0-9]{16}$/.test(query.cursor))
+        )
+            fail('INVALID_REQUEST');
+        const [item, assetStore] = await ready(context);
+        return coordinateAudio(context.userRoot, async () => {
+            const metadata = item.metadata(),
+                cats = item.categories();
+            if (
+                query.category &&
+                !['all', 'uncategorized'].includes(query.category) &&
+                !cats.categories.some((c) => c.categoryId === query.category)
+            )
+                fail('AUDIO_CATEGORY_NOT_FOUND');
+            const records = await assetStore.inventory();
+            const all = records.map((row) => ({
+                ...row,
+                ...item.view(metadata.get(row.assetId) || defaultTrack(row.assetId)),
+            }));
+            // Recover harmless dangling metadata after interrupted deletion. Never retain an Asset.
+            const ids = new Set(records.map((row) => row.assetId));
+            for (const id of metadata.keys()) if (!ids.has(id)) item.remove(id);
+            const selected = all
+                .filter(
+                    (row) =>
+                        query.hidden === 'true' || (row.health === 'healthy' && row.libraryVisibility !== 'hidden'),
+                )
+                .filter(
+                    (row) =>
+                        !query.category ||
+                        query.category === 'all' ||
+                        row.category === (query.category === 'uncategorized' ? null : query.category),
+                )
+                .filter(
+                    (row) =>
+                        !query.search ||
+                        row.displayTitle.toLocaleLowerCase().includes(query.search.toLocaleLowerCase()),
+                )
+                .sort(
+                    (a, b) =>
+                        collator.compare(a.displayTitle, b.displayTitle) ||
+                        a.assetId.localeCompare(b.assetId, 'en'),
+                );
+            const snapshot = createHash('sha256')
+                .update(
+                    JSON.stringify([
+                        cats,
+                        query.category || 'all',
+                        query.search || '',
+                        query.hidden || 'false',
+                        selected,
+                    ]),
+                )
+                .digest('hex')
+                .slice(0, 16);
+            let offset = 0;
+            if (query.cursor) {
+                const [position, stamp] = query.cursor.split('~');
+                if (stamp !== snapshot) fail('AUDIO_LIBRARY_CONFLICT');
+                offset = Number(position);
+                if (offset >= selected.length) fail('INVALID_REQUEST');
+            }
+            return {
+                items: selected.slice(offset, offset + (complete ? 4096 : 50)),
+                total: selected.length,
+                nextCursor: !complete && offset + 50 < selected.length ? `${offset + 50}~${snapshot}` : null,
+                snapshot,
+                ...cats,
+            };
+        });
+    }
     const mutations = ['update', 'observe', 'category'];
     return {
         definition: {
@@ -287,7 +366,7 @@ export function createAudioLibrary(config, assets) {
                 {
                     id: 'audio.library',
                     contract: { major: 1, minMinor: 0, maxMinor: 0 },
-                    operations: ['list', 'read', 'categories', ...mutations].map((id) => ({ id, available: true })),
+                    operations: ['list', 'playbackPool', 'read', 'categories', ...mutations].map((id) => ({ id, available: true })),
                     operationAvailability: () =>
                         Object.fromEntries(
                             mutations.map((id) => [
@@ -300,6 +379,7 @@ export function createAudioLibrary(config, assets) {
                         ),
                     limits: {
                         pageSize: 50,
+                        maxPlaybackPoolBytes: 4 * 1024 * 1024,
                         maxAssets: 4096,
                         maxCategories: 128,
                         maxTitleLength: 120,
@@ -368,84 +448,12 @@ export function createAudioLibrary(config, assets) {
                 return item.observe(id, title);
             });
         },
-        async list(context, query = {}) {
-            if (
-                Object.keys(query).some((key) => !['category', 'search', 'hidden', 'cursor'].includes(key)) ||
-                Object.values(query).some((value) => typeof value !== 'string') ||
-                (query.category &&
-                    !['all', 'uncategorized'].includes(query.category) &&
-                    !validCategoryId(query.category)) ||
-                (query.search && query.search.length > 120) ||
-                (query.hidden && !['true', 'false'].includes(query.hidden)) ||
-                (query.cursor && !/^\d{1,4}~[a-f0-9]{16}$/.test(query.cursor))
-            )
-                fail('INVALID_REQUEST');
-            const [item, assetStore] = await ready(context);
-            return coordinateAudio(context.userRoot, async () => {
-                const metadata = item.metadata(),
-                    cats = item.categories();
-                if (
-                    query.category &&
-                    !['all', 'uncategorized'].includes(query.category) &&
-                    !cats.categories.some((c) => c.categoryId === query.category)
-                )
-                    fail('AUDIO_CATEGORY_NOT_FOUND');
-                const records = await assetStore.inventory();
-                const all = records.map((row) => ({
-                    ...row,
-                    ...item.view(metadata.get(row.assetId) || defaultTrack(row.assetId)),
-                }));
-                // Recover harmless dangling metadata after interrupted deletion. Never retain an Asset.
-                const ids = new Set(records.map((row) => row.assetId));
-                for (const id of metadata.keys()) if (!ids.has(id)) item.remove(id);
-                const selected = all
-                    .filter(
-                        (row) =>
-                            query.hidden === 'true' || (row.health === 'healthy' && row.libraryVisibility !== 'hidden'),
-                    )
-                    .filter(
-                        (row) =>
-                            !query.category ||
-                            query.category === 'all' ||
-                            row.category === (query.category === 'uncategorized' ? null : query.category),
-                    )
-                    .filter(
-                        (row) =>
-                            !query.search ||
-                            row.displayTitle.toLocaleLowerCase().includes(query.search.toLocaleLowerCase()),
-                    )
-                    .sort(
-                        (a, b) =>
-                            collator.compare(a.displayTitle, b.displayTitle) ||
-                            a.assetId.localeCompare(b.assetId, 'en'),
-                    );
-                const snapshot = createHash('sha256')
-                    .update(
-                        JSON.stringify([
-                            cats,
-                            query.category || 'all',
-                            query.search || '',
-                            query.hidden || 'false',
-                            selected,
-                        ]),
-                    )
-                    .digest('hex')
-                    .slice(0, 16);
-                let offset = 0;
-                if (query.cursor) {
-                    const [position, stamp] = query.cursor.split('~');
-                    if (stamp !== snapshot) fail('AUDIO_LIBRARY_CONFLICT');
-                    offset = Number(position);
-                    if (offset >= selected.length) fail('INVALID_REQUEST');
-                }
-                return {
-                    items: selected.slice(offset, offset + 50),
-                    total: selected.length,
-                    nextCursor: offset + 50 < selected.length ? `${offset + 50}~${snapshot}` : null,
-                    snapshot,
-                    ...cats,
-                };
-            });
+        list,
+        async playbackPool(context, query = {}) {
+            // One bounded, coherent read for the complete category playback pool.
+            // Browsing retains its existing 50-row fresh-health pagination.
+            if (Object.keys(query).some(key => key !== 'category')) fail('INVALID_REQUEST');
+            return list(context, query, true);
         },
     };
 }

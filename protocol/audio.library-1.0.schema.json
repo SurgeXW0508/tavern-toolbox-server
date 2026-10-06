@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Tavern Toolbox Audio Library 1.0",
-  "description": "Additive per-user product metadata keyed by existing Audio Asset. Runtime additionally checks trim/control-free text, unique IDs, category membership, exact playbackPath and snapshot paging. Metadata never retains Assets.",
+  "description": "Additive per-user product metadata keyed by existing Audio Asset. Runtime additionally checks trim/control-free text, unique IDs, category membership, exact playbackPath and snapshot paging. Metadata never retains Assets. Optional playbackPool is capability-negotiated, category-only, complete (total equals items length), healthy/visible only, maximum 4096 items and 4 MiB envelope. Existing list stays 50 items.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -46,6 +46,9 @@
     },
     "categories": {
       "$ref": "#/$defs/categories"
+    },
+    "playbackPool": {
+      "$ref": "#/$defs/playbackPool"
     }
   },
   "$defs": {
@@ -445,6 +448,49 @@
         },
         "categoryId": {
           "$ref": "#/$defs/categoryId"
+        }
+      }
+    },
+    "playbackPool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "categories",
+        "items",
+        "total",
+        "snapshot",
+        "nextCursor"
+      ],
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "categories": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/category"
+          }
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/playable"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4096
+        },
+        "snapshot": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{16}$"
+        },
+        "nextCursor": {
+          "type": "null"
         }
       }
     }

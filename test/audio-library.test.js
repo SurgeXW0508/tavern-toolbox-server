@@ -115,6 +115,10 @@ test('native Library controls require authenticated user, exact context/protocol
   for (const user of ['alice', 'bob']) contexts[user] = (await (await fetch(base + '/v1/status', { headers: { 'X-Test-User': user, 'X-TTB-Protocol': '1.0' } })).json()).data.contextId;
   async function call(route, body, user = 'alice', extra = {}) { const response = await fetch(base + route, { method: body ? 'POST' : 'GET', headers: { 'X-Test-User': user, 'X-TTB-Protocol': '1.0', 'X-TTB-Context': contexts[user], 'X-CSRF-Token': 'fixture', Origin: origin, 'Content-Type': 'application/json', ...extra }, ...(body ? { body: JSON.stringify(body) } : {}) }); return { status: response.status, value: await response.json(), headers: response.headers }; }
   const list = await call('/v1/audio/library'); assert.equal(list.status, 200); assert.equal(list.value.data.total, 0); assert.match(list.headers.get('cache-control'), /no-store/);
+  assert.equal((await call('/v1/audio/library/playback-pool')).value.data.total, 0);
+  assert.equal((await call('/v1/audio/library/playback-pool?search=x')).status, 400);
+  assert.equal((await call('/v1/audio/library/playback-pool', undefined, 'alice', { 'X-TTB-Context': contexts.bob })).status, 409);
+  assert.equal((await call('/v1/audio/library/playback-pool', undefined, 'alice', { 'X-Test-User': '' })).status, 403);
   const body = { operation: 'create', revision: 0, name: '音乐分类' };
   assert.equal((await call('/v1/audio/library/categories', body, 'alice', { Origin: 'https://other.example.com' })).status, 403);
   assert.equal((await call('/v1/audio/library/categories', body, 'alice', { 'X-CSRF-Token': '' })).status, 403);
@@ -127,4 +131,37 @@ test('native Library controls require authenticated user, exact context/protocol
   assert.equal((await call('/v1/audio/library', undefined, 'alice', { 'X-Test-User': '' })).status, 403);
   assert.equal((await call('/v1/audio/library?hidden=maybe')).status, 400);
   const publicData = JSON.stringify(created.value); assert(!publicData.includes(root)); assert(!JSON.stringify(logs).includes('音乐分类'));
+});
+
+test('complete playback pool checks N files once instead of N times every page; results and live health remain authoritative', async t => {
+  const h = await harness(t), count = 1000;
+  for (let n = 0; n < count; n++) await h.asset(h.alice, n);
+  const store = await h.sources.assets.store(h.alice), quick = store.quick.bind(store); let checks = 0;
+  store.quick = row => { checks++; return quick(row); };
+  const expected = []; let cursor;
+  do { const page = await h.library.list(h.alice, cursor ? { cursor } : {}); expected.push(...page.items); cursor = page.nextCursor; } while (cursor);
+  assert.equal(checks, 20000); checks = 0;
+  const pool = await h.library.playbackPool(h.alice, { category: 'all' });
+  assert.equal(checks, count); assert.equal(pool.total, count); assert.equal(pool.nextCursor, null); assert.deepEqual(pool.items, expected);
+  assert.equal((await h.library.playbackPool(h.bob)).total, 0);
+  const first = pool.items[0]; await h.library.update(h.alice, first.assetId, change(first, { libraryVisibility: 'hidden' }));
+  await unlink(store.file(pool.items[1].assetId));
+  const fresh = await h.library.playbackPool(h.alice); assert.equal(fresh.total, count - 2);
+  assert(!fresh.items.some(row => [first.assetId, pool.items[1].assetId].includes(row.assetId)));
+  assert.notEqual(fresh.snapshot, pool.snapshot);
+  for (const query of [{ search: 'x' }, { hidden: 'true' }, { cursor: '50~' + pool.snapshot }])
+    await assert.rejects(h.library.playbackPool(h.alice, query), { code: 'INVALID_REQUEST' });
+});
+
+test('playback pool category scope and edits use the same coordinator, without retaining deleted Assets', async t => {
+  const h = await harness(t), a = await h.asset(), b = await h.asset();
+  const categories = await h.library.category(h.alice, { operation: 'create', revision: 0, name: '分类' });
+  const category = categories.categories[0].categoryId;
+  await h.library.update(h.alice, a, change(await h.library.read(h.alice, a), { category }));
+  assert.deepEqual((await h.library.playbackPool(h.alice, { category })).items.map(row => row.assetId), [a]);
+  assert.deepEqual((await h.library.playbackPool(h.alice, { category: 'uncategorized' })).items.map(row => row.assetId), [b]);
+  let unlock; const hold = coordinateAudio(h.alice.userRoot, () => new Promise(resolve => { unlock = resolve; }));
+  await new Promise(resolve => setImmediate(resolve));
+  const removal = h.sources.assets.remove(h.alice, a), pool = h.library.playbackPool(h.alice, { category });
+  unlock(); await hold; await removal; assert.equal((await pool).total, 0);
 });

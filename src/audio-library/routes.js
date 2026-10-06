@@ -41,7 +41,8 @@ export function attachAudioLibraryRoutes(router, { library, registry, config, se
             )
                 fail(cap?.reasonCode || 'AUDIO_LIBRARY_UNAVAILABLE');
             let result;
-            if (operation === 'list') result = await library.list(context, req.query);
+            if (operation === 'playbackPool') result = await library.playbackPool(context, req.query);
+            else if (operation === 'list') result = await library.list(context, req.query);
             else if (operation === 'read') result = await library.read(context, req.params.assetId);
             else if (operation === 'categories') result = await library.categories(context);
             else {
@@ -55,7 +56,7 @@ export function attachAudioLibraryRoutes(router, { library, registry, config, se
                             ? await library.category(context, value)
                             : await library.update(context, req.params.assetId, value);
             }
-            send(res, 200, result, requestId, true, 131072);
+            send(res, 200, result, requestId, true, operation === 'playbackPool' ? 4 * 1024 * 1024 : 131072);
         } catch (error) {
             code =
                 error instanceof AudioLibraryFailure || error instanceof AudioAssetFailure
@@ -103,6 +104,7 @@ export function attachAudioLibraryRoutes(router, { library, registry, config, se
     router.get('/v1/audio/library', route('list'));
     router.get('/v1/audio/library/categories', route('categories'));
     router.post('/v1/audio/library/categories', route('category'));
+    router.get('/v1/audio/library/playback-pool', route('playbackPool'));
     router.get('/v1/audio/library/:assetId', route('read'));
     router.post('/v1/audio/library/:assetId/update', route('update'));
     router.post('/v1/audio/library/:assetId/observe', route('observe'));
