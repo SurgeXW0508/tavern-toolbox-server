@@ -61,7 +61,24 @@ For future lifecycle/performance changes compare a pinned baseline and candidate
 
 At documentation commit `de01009a13197f384a4929ca9fe4afd38d93561b`, [Privacy and Core checks](https://github.com/SurgeXW0508/tavern-toolbox-server/actions/runs/37349335345) passed. The first [Candidate CI attempt](https://github.com/SurgeXW0508/tavern-toolbox-server/actions/runs/37349335269/attempts/1) passed 126 of 127 tests; the shared-reference deletion case in `test/audio-assets.test.js` stopped with `localization did not finish`. All eight locally blocked policy/lock cases passed there. One rerun of the unchanged commit passed `npm run check`; this indicates an intermittent test failure, not a demonstrated product regression or a completed fix. That checkpoint's fixture waited at most 10,000 `setImmediate` iterations. The current helper uses a 5-second elapsed-time deadline and reports terminal state/code on timeout; do not hide repeated failures through retries or weaken deletion/reference assertions.
 
-The same CI install reported seven dependency advisories (one low, one moderate, five high). This review has not classified their affected versions, exploitability or production reachability. Track dependency triage separately: distinguish shipped runtime dependencies from development host fixtures and host-owned dependencies, review upstream advisories, and validate compatible upgrades. The install summary alone does not establish seven production vulnerabilities; do not apply forced bulk upgrades without compatibility checks.
+Dependency triage is now recorded below. The earlier CI install summary is historical evidence, not the current runtime audit result.
+
+## Product dependencies and host fixtures
+
+On 2026-10-07, the product runtime dependency `sharp` was updated from 0.35.4 to exact 0.35.5, with matching platform packages and libvips packages in the lockfile. This resolves the affected dependency version in [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w); existing JPEG/PNG/WebP/GIF signature checks still reject SVG before Sharp. No format-policy workaround or schema change was introduced. The paired Frontend locks `source-map-js` 1.2.2 for [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q).
+
+Both repositories passed `npm ci --ignore-scripts`. The actual Linux Sharp load reports sharp 0.35.5 / vips 8.18.7 / rsvg 2.63.2; PNG encode/read and the existing Media/HTTP/Governance regressions pass locally. Frontend's complete `npm audit` and Server's `npm audit --omit=dev` report zero advisories at this checkpoint. This result is scoped to these lockfiles and the audit database at that time; it does not assess the installed ST host or prove future versions safe.
+
+Server's complete development audit still reports seven affected package nodes (one low, one moderate, five high). They are development-only host compatibility fixtures, absent from an `--omit=dev` plugin installation:
+
+| Fixture path | Current advisory scope | Maintenance direction |
+| --- | --- | --- |
+| `body-parser` 1.20.4 | Low: invalid limit configuration may disable enforcement | Retain the pinned ST middleware baseline; fixture configuration uses an explicit valid limit. Upgrade the host baseline in a separate compatibility change |
+| `multer` 2.1.1 | High: multipart parsing, aborted upload cleanup and limit handling | Preserve the real raw-upload fixture for the reviewed host; a future baseline update must retain malformed/aborted upload and multipart-stream regressions |
+| `qs` 6.14.2 via host middleware | Moderate: parsing/stringification DoS advisories | Review with the middleware dependency tree when updating the compatibility baseline |
+| `proxy-agent` → `pac-proxy-agent` → `get-uri` → `basic-ftp` | Four high package nodes from the same FTP-listing parser advisory | Do not accept audit's proposed major downgrade to proxy-agent 5 merely to remove warnings. Validate the actual ST proxy stack and HTTPS/CONNECT behavior before changing this chain |
+
+The fixture uses SillyTavern 1.19.0's proxy initialization at commit `7e8663cd9c184a550b37238218bdd32c6efc68e9` and pinned middleware versions within that host's dependency ranges. Keeping this baseline preserves compatibility evidence; it does not declare those libraries safe. Do not expose test fixtures as a server, copy these dev pins into product runtime, or use `npm audit fix --force` as an acceptance criterion. Host-owned middleware/proxy upgrades require host-level validation and cannot be achieved by changing the plugin's devDependencies alone.
 
 ## Implemented Audio read hardening (candidate)
 
