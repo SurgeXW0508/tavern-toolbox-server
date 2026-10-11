@@ -94,7 +94,8 @@ test('broken reference survives missing catalog row; corruption is separate from
     await f.media.delete(f.context, asset.mediaRef.assetId); // Simulate pre-Phase-6 restore damage via internal primitive.
     const group = (await f.governance.groups(f.context, { broken: 'true' })).items[0];
     assert.equal(group.brokenCount, 1); assert.equal((await f.governance.summary(f.context)).brokenCount, 1);
-    assert.equal((await f.governance.group(f.context, 'outfit', 'coat')).references.items[0].broken, true);
+    const missing = await f.governance.group(f.context, 'outfit', 'coat');
+    assert.equal(missing.references.items[0].broken, true); assert.equal(missing.group.brokenCount, 1);
     await assert.rejects(f.governance.action(f.context, { providerId: 'outfit', groupId: 'coat', referenceId: 'image',
         action: 'replace', revision: 0, mediaRef: replacement.mediaRef }), { code: 'BUSINESS_CONFLICT' });
     await f.governance.action(f.context, { providerId: 'outfit', groupId: 'coat', referenceId: 'image',
@@ -324,4 +325,24 @@ test('Group-owned host maintenance retains Server checks against another existin
     assert.equal((await f.media.metadata(f.context, asset.mediaRef.assetId)).mediaRef.assetId, asset.mediaRef.assetId);
     const detached = (await f.governance.group(f.context, group.providerId, group.id)).group;
     assert.equal(detached.lifecycle, 'detached'); assert.equal(detached.referenceCount, 1);
+});
+
+test('Consumer overview analyzes inventory once, bounds previews and preserves empty/unavailable identities', async () => {
+    let catalogs = 0, storage = 0; const reads = new Map();
+    const governance = createGovernance({ async catalog() { catalogs++; return []; }, async storage() { storage++; throw Error('unexpected storage'); } }, (_context, work) => work());
+    for (const [consumer, count] of [['character', 100], ['outfit', 4], ['worldbook', 26], ['empty', 0], ['offline', null]]) governance.register({ id: consumer, consumer, label: consumer, async enumerate() {
+        reads.set(consumer, (reads.get(consumer) || 0) + 1); if (count === null) throw Error('private');
+        return Array.from({ length: count }, (_, n) => ({ id: `${consumer}-${n}`, label: `Group ${n}`, lifecycle: n % 2 ? 'detached' : 'active', revision: 1, references: [{ id: 'ref', mediaRef: { provider: 'server', assetId: '12345678-1234-4123-8123-123456789012' } }] }));
+    } });
+    const result = await governance.groupOverview({}, { previewLimit: '6' });
+    assert.equal(catalogs, 1); assert.equal(storage, 0); assert([...reads.values()].every(value => value === 1));
+    assert.equal(result.complete, false); assert.deepEqual(result.sections.map(section => section.total), [100, 4, 26, 0, null]);
+    assert.deepEqual(result.sections.map(section => section.items.length), [6, 4, 6, 0, 0]);
+    assert(result.sections[0].items.every(group => group.brokenCount === 1));
+    assert(!JSON.stringify(result).includes('mediaRef')); assert(!JSON.stringify(result).includes('private'));
+    const filtered = await governance.groupOverview({}, { search: 'Group 99', broken: 'true', previewLimit: 3 });
+    assert.equal(filtered.sections[0].total, 1); assert.equal(filtered.sections[0].items[0].id, 'character-99');
+    assert.equal(filtered.sections[1].total, 0); assert.equal(filtered.sections[4].total, null);
+    assert.equal((await governance.groups({}, { provider: 'outfit', limit: 24 })).total, 4);
+    for (const query of [{ previewLimit: 7 }, { previewLimit: 0 }, { offset: 1 }, { provider: {} }, { consumer: 'x'.repeat(161) }]) await assert.rejects(governance.groupOverview({}, query), { code: 'INVALID_REQUEST' });
 });

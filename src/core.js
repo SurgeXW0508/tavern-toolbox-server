@@ -458,7 +458,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
                     || Buffer.byteLength(JSON.stringify(req.body)) > 8192)) throw new MediaFailure('INVALID_REQUEST');
                 let result;
                 if (operation === 'summary') result = await governance.summary(context);
-                else if (operation === 'assets' || operation === 'groups') result = await governance[operation](context, req.query);
+                else if (operation === 'assets' || operation === 'groups' || operation === 'groupOverview') result = await governance[operation](context, req.query);
                 else if (operation === 'detail') result = await governance.detail(context, req.params.id, req.query);
                 else if (operation === 'group') result = await governance.group(context, req.params.provider, req.params.group, req.query);
                 else if (operation === 'action') result = await governance.action(context, req.body);
@@ -484,6 +484,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
         router.get('/v1/governance/summary', governanceRoute('summary'));
         router.get('/v1/governance/assets', governanceRoute('assets'));
         router.get('/v1/governance/groups', governanceRoute('groups'));
+        router.get('/v1/governance/groupOverview', governanceRoute('groupOverview'));
         router.get('/v1/governance/assets/:id', governanceRoute('detail'));
         router.get('/v1/governance/groups/:provider/:group', governanceRoute('group'));
         router.post('/v1/governance/action', governanceRoute('action', true));

@@ -6,6 +6,7 @@ function page(query) {
     const offset = Number(query.offset ?? 0), limit = Number(query.limit ?? 24);
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 48
         || typeof (query.search ?? '') !== 'string' || (query.search || '').length > 160
+        || ['consumer', 'provider'].some(key => typeof (query[key] ?? '') !== 'string' || (query[key] || '').length > 160)
         || query.state && !states.includes(query.state)
         || query.kind && query.kind !== 'image'
         || query.sort && !['newest', 'oldest', 'largest', 'smallest'].includes(query.sort)
@@ -83,7 +84,7 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
         register, analysis,
         definition: { id: 'governance', version: '0.1.0', dependsOn: ['core', 'media'],
             capabilities: [{ id: 'media.governance', contract: { major: 1, minMinor: 0, maxMinor: 0 },
-                operations: ['summary', 'assets', 'groups', 'detail', 'group', 'action', 'groupAction', 'deleteBatch'].map(id => ({ id, available: true })),
+                operations: ['summary', 'assets', 'groups', 'groupOverview', 'detail', 'group', 'action', 'groupAction', 'deleteBatch'].map(id => ({ id, available: true })),
                 operationAvailability: () => ({ action: { available: mutations, reasonCode: 'ORIGIN_POLICY_MISSING' },
                     groupAction: { available: mutations, reasonCode: 'ORIGIN_POLICY_MISSING' },
                     deleteBatch: { available: mutations, reasonCode: 'ORIGIN_POLICY_MISSING' } }),
@@ -112,11 +113,26 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
             const bounds = page(query), { refs, ids } = await catalog(context);
             const groups = refs.groups.map(({ references, ...group }) => ({ ...group,
                 brokenCount: references.filter(ref => !ids.has(ref.mediaRef.assetId)).length }));
-            return { ...slice(groups.filter(group => (!query.consumer || group.consumer === query.consumer)
+            return { ...slice(groups.filter(group => (!query.provider || group.providerId === query.provider) && (!query.consumer || group.consumer === query.consumer)
                 && (!query.state || group.lifecycle === query.state)
                 && (query.broken !== 'true' || group.brokenCount > 0)
                 && (!bounds.search || [group.label, group.consumerLabel].some(value => value.toLocaleLowerCase().includes(bounds.search)))), bounds),
                 complete: refs.complete, providers: refs.providers };
+        },
+        async groupOverview(context, query = {}) {
+            const bounds = page(query), previewLimit = Number(query.previewLimit ?? 6);
+            if (!Number.isSafeInteger(previewLimit) || previewLimit < 1 || previewLimit > 6 || bounds.offset) fail('INVALID_REQUEST');
+            const { refs, ids } = await catalog(context);
+            const matches = refs.groups.filter(group => (!query.consumer || group.consumer === query.consumer)
+                && (!query.state || group.lifecycle === query.state)
+                && (query.broken !== 'true' || group.references.some(ref => !ids.has(ref.mediaRef.assetId)))
+                && (!bounds.search || [group.label, group.consumerLabel].some(value => value.toLocaleLowerCase().includes(bounds.search))));
+            return { complete: refs.complete, sections: refs.providers.map(provider => {
+                const groups = matches.filter(group => group.providerId === provider.id);
+                return { ...provider, total: provider.state === 'complete' ? groups.length : null,
+                    items: groups.slice(0, previewLimit).map(({ references, ...group }) => ({ ...group,
+                        brokenCount: references.filter(ref => !ids.has(ref.mediaRef.assetId)).length })) };
+            }) };
         },
         async detail(context, id, query = {}) {
             const bounds = page(query), { items, refs, byAsset } = await catalog(context);
@@ -133,7 +149,7 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
             const candidates = new Set(references.map(ref => ref.mediaRef.assetId));
             const shared = new Set(refs.references.filter(ref => ref.providerId !== providerId || ref.groupId !== groupId).map(ref => ref.mediaRef.assetId));
             const assets = new Map(items.map(asset => [asset.mediaRef.assetId, asset]));
-            return { group: info, references: slice(references.map(ref => ({ ...ref, broken: !ids.has(ref.mediaRef.assetId), asset: assets.get(ref.mediaRef.assetId) || null })), bounds), complete: refs.complete,
+            return { group: { ...info, brokenCount: references.filter(ref => !ids.has(ref.mediaRef.assetId)).length }, references: slice(references.map(ref => ({ ...ref, broken: !ids.has(ref.mediaRef.assetId), asset: assets.get(ref.mediaRef.assetId) || null })), bounds), complete: refs.complete,
                 usage: { assetCount: candidates.size, exclusiveCount: refs.complete ? [...candidates].filter(id => !shared.has(id) && ids.has(id)).length : null,
                     sharedCount: refs.complete ? [...candidates].filter(id => shared.has(id) && ids.has(id)).length : null,
                     missingCount: [...candidates].filter(id => !ids.has(id)).length } };

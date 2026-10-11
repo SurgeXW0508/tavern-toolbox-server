@@ -716,6 +716,11 @@ test('every external hard delete is reference-aware; Governance is paginated, au
         headers: { ...headers, 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify({ assetIds: [mediaRef.assetId] }) });
     assert.equal((await batch('wrong')).body.error.code, 'CSRF_REJECTED');
     assert.equal((await batch('fixture-csrf-token')).body.data.items[0].code, 'MEDIA_REFERENCED');
+    const overview = await request(app.url, '/v1/governance/groupOverview?previewLimit=6', { user: 'alice', protocol: '1.0' });
+    assert.equal(overview.code, 200); assert.equal(overview.body.data.sections.find(section => section.id === 'outfit').total, 1);
+    assert.equal((await request(app.url, '/v1/governance/groupOverview', { user: 'bob', protocol: '1.0' })).body.data.sections.find(section => section.id === 'outfit').total, 0);
+    assert.equal((await request(app.url, '/v1/governance/groupOverview?previewLimit=7', { user: 'alice', protocol: '1.0' })).code, 400);
+    assert.equal((await request(app.url, '/v1/governance/groupOverview', { user: '', protocol: '1.0' })).code, 403);
     const page = await request(app.url, '/v1/governance/assets?limit=1&search=' + encodeURIComponent('治理'), { user: 'alice', protocol: '1.0' });
     assert.equal(page.body.data.items.length, 1); assert.equal(page.body.data.total, 1);
     assert.equal((await request(app.url, '/v1/governance/assets?limit=100000', { user: 'alice', protocol: '1.0' })).code, 400);
