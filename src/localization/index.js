@@ -296,6 +296,25 @@ export function createLocalization(media, coordinate = async (_context, work) =>
         },
         async unlinkReference(context, body) { return changeReference(context, body, false); },
         async replaceReference(context, body) { return changeReference(context, body, true); },
+        async maintainGroup(context, body) {
+            if (!UUID.test(body.groupId || '')) fail('INVALID_REQUEST');
+            const { target, current, result } = await snapshot(context);
+            if (result.revision !== body.revision) fail('LOCALIZATION_CONFLICT');
+            const document = structuredClone(result.document), scope = document.scopes.find(item => item.id === body.groupId);
+            if (!scope) fail('LOCALIZATION_NOT_FOUND');
+            if (body.action === 'forgetGroup') {
+                if (!scope.detachedAt) fail('LOCALIZATION_NOT_FOUND');
+                document.scopes = document.scopes.filter(item => item !== scope);
+            } else if (body.action === 'unlinkGroup') {
+                if (scope.hostId) {
+                    requireHost(current, body.hostId);
+                    if (scope.hostId !== body.hostId || await hostProof(context.userRoot, body.hostId) !== scope.proof) fail('HOST_IDENTITY_UNAVAILABLE');
+                }
+            } else fail('INVALID_REQUEST');
+            const assetIds = scope.bindings.map(item => item.mediaRef.assetId), unlinkedCount = scope.bindings.length;
+            scope.bindings = [];
+            return { revision: target.commit(NAMESPACE, SCHEMA, body.revision, document, validate).revision, assetIds, unlinkedCount };
+        },
         async unlocalize(context, { hostId, url, revision }) {
             const key = locatorKey(url);
             const { target, current, result } = await snapshot(context);
@@ -338,7 +357,7 @@ export function createLocalization(media, coordinate = async (_context, work) =>
         },
     };
     // Reference writes are serialized with hard deletion at the composition root.
-    for (const name of ['localize', 'unlocalize', 'forget', 'rebind', 'bindExisting', 'unlinkReference', 'replaceReference']) {
+    for (const name of ['localize', 'unlocalize', 'forget', 'rebind', 'bindExisting', 'unlinkReference', 'replaceReference', 'maintainGroup']) {
         const original = api[name];
         api[name] = (context, ...args) => coordinate(context, () => original(context, ...args));
     }
@@ -348,11 +367,12 @@ export function createLocalization(media, coordinate = async (_context, work) =>
             return result.document.scopes.map(scope => ({ id: scope.id, label: scope.displayName || '未命名角色',
                 lifecycle: scope.detachedAt ? 'detached' : 'active', revision: result.revision,
                 detachedAt: scope.detachedAt, hostId: scope.hostId,
-                actions: scope.detachedAt ? ['rebind', 'forget'] : [],
+                actions: scope.detachedAt ? ['rebind', 'forget', 'forgetGroup'] : ['unlinkGroup'],
                 references: scope.bindings.map((binding, index) => ({ id: binding.locatorKey,
                     label: `图片关联 ${index + 1}`, mediaRef: binding.mediaRef, actions: ['replace', 'unlink'] })),
             }));
         },
+        mutateGroup: (context, body) => api.maintainGroup(context, body),
         mutate: (context, body) => body.action === 'unlink' ? api.unlinkReference(context, body)
             : body.action === 'replace' ? api.replaceReference(context, body)
                 : ['rebind', 'forget'].includes(body.action) ? api[body.action](context, { ...body, scopeId: body.groupId })

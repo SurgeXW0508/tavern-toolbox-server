@@ -721,7 +721,15 @@ test('every external hard delete is reference-aware; Governance is paginated, au
     assert.equal((await request(app.url, '/v1/governance/assets?limit=100000', { user: 'alice', protocol: '1.0' })).code, 400);
     assert.equal((await request(app.url, '/v1/governance/assets', { user: '', protocol: '1.0' })).code, 403);
     assert.equal((await request(app.url, '/v1/governance/assets/' + mediaRef.assetId, { user: 'bob', protocol: '1.0' })).code, 404);
-    assert.equal((await commit(1, { assets: [], persons: [], wearStates: [] })).code, 200);
+    const groupAction = (csrf, body) => request(app.url, '/v1/governance/groupAction', { user: 'alice', protocol: '1.0', method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(body) });
+    const whole = { providerId: 'outfit', groupId: asset.id, revision: 1, action: 'unlinkGroup', cleanup: false };
+    assert.equal((await groupAction('wrong', whole)).body.error.code, 'CSRF_REJECTED');
+    assert.equal((await groupAction('fixture-csrf-token', { ...whole, cleanup: 'true' })).body.error.code, 'INVALID_REQUEST');
+    const maintained = await groupAction('fixture-csrf-token', whole);
+    assert.equal(maintained.code, 200); assert.equal(maintained.body.data.unlinkedCount, 1); assert.equal(maintained.body.data.retainedCount, 1);
+    assert.equal((await commit(2, { assets: [asset], persons: [], wearStates: [] })).code, 200);
+    assert.equal((await commit(3, { assets: [], persons: [], wearStates: [] })).code, 200);
     await rm(path.join(app.dataRoot, 'alice', 'characters'), { recursive: true });
     assert.equal((await raw()).body.error.code, 'REFERENCE_ANALYSIS_INCOMPLETE');
     const incomplete = await request(app.url, '/v1/governance/assets', { user: 'alice', protocol: '1.0' });

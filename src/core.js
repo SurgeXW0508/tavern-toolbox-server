@@ -462,6 +462,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
                 else if (operation === 'detail') result = await governance.detail(context, req.params.id, req.query);
                 else if (operation === 'group') result = await governance.group(context, req.params.provider, req.params.group, req.query);
                 else if (operation === 'action') result = await governance.action(context, req.body);
+                else if (operation === 'groupAction') result = await governance.groupAction(context, req.body);
                 else {
                     if (Object.keys(req.body).join(',') !== 'assetIds') throw new MediaFailure('INVALID_REQUEST');
                     result = await governance.deleteBatch(context, req.body.assetIds);
@@ -486,6 +487,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
         router.get('/v1/governance/assets/:id', governanceRoute('detail'));
         router.get('/v1/governance/groups/:provider/:group', governanceRoute('group'));
         router.post('/v1/governance/action', governanceRoute('action', true));
+        router.post('/v1/governance/groupAction', governanceRoute('groupAction', true));
         router.post('/v1/governance/delete', governanceRoute('deleteBatch', true));
         router.use((req, res) => {
             const knownPath = req.path === '/status' || req.path === '/v1/status' || req.path === '/v1/network/fetch';

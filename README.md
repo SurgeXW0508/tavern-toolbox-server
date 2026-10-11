@@ -6,6 +6,12 @@ Current architecture, scalability findings, lifecycle and future development rul
 
 Paired with Frontend v0.51.1. See Release notes for maintenance changes and verification limits. Successful Release verification triggers guarded cleanup only for its unchanged, merged PR head.
 
+## Phase 9 — Image Domain candidate
+
+Current development branch: `stage/phase-9-image-domain`, paired with the same Frontend branch. Main v0.8.1 / Protocol 1.0 remain the formal baseline. Additive Governance group reads expose unique asset usage and safe metadata for reference cards; `groupAction` performs one Consumer-owned CAS unlink/forget and optional fresh reference-safe cleanup. Shared assets and incomplete analysis remain protected, with explicit partial-result counts. No Media/Localization/Outfit schema, identity, Network policy or Audio changes.
+
+Frontend now owns the formal Image library, associations and management routes, unified picker and explicit Original viewer. Current implementation/verification limits: [Protocol](protocol/README.md), [Engineering](docs/ENGINEERING.md), paired Frontend HANDOFF.md / TESTING.md. Installed TauriTavern / SillyTavern acceptance is pending; this branch is not a release or approval to merge.
+
 ## Phase 8 — Audio Library foundation (v0.8.0)
 
 Release v0.8.0, paired with Frontend v0.51.0 / Protocol 1.0. The user has completed the paired Media Center / Audio Library / Final Cutover core real-device acceptance on SillyTavern 1.19.0 Docker / NAS. Server race, privacy, paging and specialized failure coverage remain principally automated evidence; see [Phase 8 acceptance](PHASE-8-ACCEPTANCE.md). Future development starts from latest main.

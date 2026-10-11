@@ -144,7 +144,7 @@ export function addedMediaRefs(document, previous) {
 export function outfitReferenceGroups(snapshot) {
     return snapshot.document.assets.filter(asset => asset.mediaRef).map(asset => ({
         id: asset.id, label: asset.name, lifecycle: 'active', revision: snapshot.revision,
-        description: [asset.kind, asset.scope.label].filter(Boolean).join(' · '), actions: [],
+        description: [asset.kind, asset.scope.label].filter(Boolean).join(' · '), actions: ['unlinkGroup'],
         references: [{ id: 'image', label: '图片', mediaRef: asset.mediaRef, actions: ['replace', 'unlink'] }],
     }));
 }

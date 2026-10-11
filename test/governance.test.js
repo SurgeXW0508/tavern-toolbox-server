@@ -194,3 +194,66 @@ test('incomplete batch analysis retains all existing items and scans the failed 
     assert.ok(result.items.every(item => item.code === 'REFERENCE_ANALYSIS_INCOMPLETE'));
     assert.equal((await f.media.storage(f.context)).assetCount, 2);
 });
+
+test('group analysis counts unique exclusive/shared/missing assets; atomic unlink retains all files', async t => {
+    const f = await fixture(t), first = await f.image(), shared = await f.image('blue');
+    let revision = 0;
+    for (const [n, mediaRef] of [first.mediaRef, first.mediaRef, shared.mediaRef].entries()) {
+        revision = (await f.localization.bindExisting(f.context, { hostId: 'A.png', displayName: '角色 A', url: `https://example.com/${n}.png`, revision, mediaRef })).revision;
+    }
+    await f.business.commit(f.context, 'outfit', 1, 0, outfit(shared.mediaRef));
+    const group = (await f.governance.groups(f.context)).items.find(item => item.consumer === 'character');
+    const plan = await f.governance.group(f.context, group.providerId, group.id);
+    assert.deepEqual(plan.usage, { assetCount: 2, exclusiveCount: 1, sharedCount: 1, missingCount: 0 });
+    assert.equal(plan.references.items[0].asset.mime, 'image/png');
+    await assert.rejects(f.governance.groupAction(f.context, { providerId: group.providerId, groupId: group.id, revision: 0, action: 'unlinkGroup', cleanup: false, hostId: 'A.png' }), { code: 'LOCALIZATION_CONFLICT' });
+    const result = await f.governance.groupAction(f.context, { providerId: group.providerId, groupId: group.id, revision: group.revision, action: 'unlinkGroup', cleanup: false, hostId: 'A.png' });
+    assert.equal(result.unlinkedCount, 3); assert.equal(result.deletedCount, 0); assert.equal(result.retainedCount, 2);
+    assert.equal((await f.governance.group(f.context, group.providerId, group.id)).references.total, 0);
+    assert.equal((await f.media.storage(f.context)).assetCount, 2);
+});
+
+test('group cleanup preserves shared assets and handles concurrent reference introduced after unlink', async t => {
+    const f = await fixture(t), free = await f.image(), raced = await f.image('blue');
+    let revision = 0;
+    for (const [n, mediaRef] of [free.mediaRef, raced.mediaRef].entries()) revision = (await f.localization.bindExisting(f.context, { hostId: 'A.png', displayName: 'A', url: `https://example.com/${n}.png`, revision, mediaRef })).revision;
+    const group = (await f.governance.groups(f.context)).items[0];
+    const mutate = f.localization.referenceProvider.mutateGroup;
+    f.localization.referenceProvider.mutateGroup = async (...args) => {
+        const result = await mutate(...args);
+        await f.business.commit(f.context, 'outfit', 1, 0, outfit(raced.mediaRef));
+        return result;
+    };
+    const result = await f.governance.groupAction(f.context, { providerId: group.providerId, groupId: group.id, revision: group.revision, action: 'unlinkGroup', cleanup: true, hostId: 'A.png' });
+    assert.equal(result.unlinkedCount, 2); assert.equal(result.deletedCount, 1); assert.equal(result.sharedCount, 1); assert.equal(result.retainedCount, 1);
+    await assert.rejects(f.media.metadata(f.context, free.mediaRef.assetId), { code: 'MEDIA_NOT_FOUND' });
+    assert.equal((await f.media.metadata(f.context, raced.mediaRef.assetId)).mediaRef.assetId, raced.mediaRef.assetId);
+});
+
+test('detached forget keeps originals; forget-cleanup is fail closed with unavailable Provider and reports partial deletion', async t => {
+    const f = await fixture(t), first = await f.image(), second = await f.image('blue');
+    let revision = 0;
+    for (const [n, mediaRef] of [first.mediaRef, second.mediaRef].entries()) revision = (await f.localization.bindExisting(f.context, { hostId: 'A.png', displayName: 'A', url: `https://example.com/${n}.png`, revision, mediaRef })).revision;
+    await unlink(path.join(f.context.userRoot, 'characters', 'A.png'));
+    const group = (await f.governance.groups(f.context)).items[0];
+    assert.equal(group.lifecycle, 'detached');
+    f.governance.register({ id: 'future', consumer: 'worldbook', label: '世界书', enumerate: async () => { throw new Error('private'); } });
+    assert.equal((await f.governance.group(f.context, group.providerId, group.id)).usage.exclusiveCount, null);
+    const result = await f.governance.groupAction(f.context, { providerId: group.providerId, groupId: group.id, revision: group.revision, action: 'forgetGroup', cleanup: true });
+    assert.equal(result.unlinkedCount, 2); assert.equal(result.deletedCount, 0); assert.equal(result.failedCount, 2); assert.equal(result.complete, false);
+    assert.equal((await f.media.storage(f.context)).assetCount, 2);
+    assert.equal((await f.governance.groups(f.context)).total, 0);
+});
+
+test('whole-group cleanup reports deletion failure separately and cannot cross users or changed host identity', async t => {
+    const f = await fixture(t), first = await f.image(), second = await f.image('blue');
+    let revision = 0;
+    for (const [n, mediaRef] of [first.mediaRef, second.mediaRef].entries()) revision = (await f.localization.bindExisting(f.context, { hostId: 'A.png', displayName: 'A', url: `https://example.com/${n}.png`, revision, mediaRef })).revision;
+    const group = (await f.governance.groups(f.context)).items[0], body = { providerId: group.providerId, groupId: group.id, revision: group.revision, action: 'unlinkGroup', cleanup: true, hostId: 'A.png' };
+    await assert.rejects(f.governance.groupAction(f.other, body), { code: 'LOCALIZATION_CONFLICT' });
+    await assert.rejects(f.governance.groupAction(f.context, { ...body, hostId: 'wrong.png' }), { code: 'HOST_IDENTITY_UNAVAILABLE' });
+    const remove = f.media.delete; f.media.delete = async (owner, id) => { if (id === first.mediaRef.assetId) throw new Error('disk error'); return remove(owner, id); };
+    const result = await f.governance.groupAction(f.context, body);
+    assert.equal(result.unlinkedCount, 2); assert.equal(result.deletedCount, 1); assert.equal(result.failedCount, 1); assert.equal(result.retainedCount, 1);
+    assert.equal((await f.governance.detail(f.context, first.mediaRef.assetId)).asset.referenceState, 'unreferenced');
+});

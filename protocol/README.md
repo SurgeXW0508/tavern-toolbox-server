@@ -55,6 +55,16 @@ Character actions: detached `rebind`/`forget`, reference `unlink`/`replace`; act
 
 Batch deletion obtains the user coordinator once and performs one fresh Reference Analysis for all 1–48 items. Participating reference writes wait until the last item; incomplete analysis retains existing assets. `localization/bindExisting` reports `MEDIA_NOT_FOUND` with HTTP 404 and `MEDIA_CORRUPT` with HTTP 422, preserving the standard error envelope.
 
+## Additive Phase 9 Image group maintenance (contract 1.0)
+
+Optional `media.governance.groupAction` is advertised separately and unavailable when origin-protected mutations are disabled. Old clients/routes remain valid; old Servers without the operation still support browsing and individual reference maintenance.
+
+- GET group adds `usage:{assetCount,exclusiveCount,sharedCount,missingCount}`. Counts deduplicate Asset IDs across all group references. Exclusive/shared counts are `null` when analysis is incomplete; missing assets are separate. Each paginated reference adds existing safe catalog `asset` metadata or `null`, without source URL/digest/path. Group/provider revision remains Consumer-owned.
+- POST `/v1/governance/groupAction` accepts `{providerId,groupId,revision,action,cleanup,hostId?}`, with action `unlinkGroup|forgetGroup` and required boolean cleanup. Unknown keys/actions fail. It returns `{revision,unlinkedCount,deletedCount,retainedCount,sharedCount,failedCount,cleanup,complete?}`; unlinked counts occurrences, resource counts unique removed Asset candidates. Without cleanup, all candidates are retained. With cleanup, incomplete analysis retains candidates and reports failures; already-missing resources report cleanup failure rather than apparent successful deletion.
+- Character active group supports `unlinkGroup`, matching hostId/proof/current single-character context and Localization revision. Detached supports `forgetGroup`; rebind still uses existing action, target nonempty is rejected. Outfit supports `unlinkGroup`, clearing its image reference while preserving the record under Business revision. Providers implement optional `mutateGroup` for one atomic Consumer CAS, returning removed IDs internally. No per-reference loop masquerades as an atomic group write.
+
+The unlink/forget commit and cleanup are intentionally separate. Cleanup reacquires the same per-user reference coordinator and performs one new analysis of every current Provider; it only deletes the exact unique candidates returned by the committed Consumer operation. A new reference created between the two phases protects the asset. The coordinator stays held through the final delete, preventing participating reference writers from entering. No precomputed browser count or Group preview authorizes deletion, no distributed transaction/rollback or global orphan sweep is implied. Partial cleanup does not undo successful unlink. Origin/CSRF/context checks remain identical to existing mutations.
+
 ## Additive Phase 7 `network.remoteAudio` (contract 1.0)
 
 | Route | Contract |
