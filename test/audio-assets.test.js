@@ -59,12 +59,14 @@ async function harness(t, override = {}, options = {}) {
         staging: path.join(alice.userRoot, 'tavern-toolbox-server/audio-assets-v1/staging') };
 }
 async function finish(sources, context, job) {
-    for (let i = 0; i < 10000; i++) {
-        const current = sources.job(context, job.jobId);
+    const deadline = performance.now() + 5000;
+    let current;
+    do {
+        current = sources.job(context, job.jobId);
         if (['completed', 'failed', 'cancelled'].includes(current.state)) return current;
-        await new Promise(resolve => setImmediate(resolve));
-    }
-    assert.fail('localization did not finish');
+        await new Promise(resolve => setTimeout(resolve, 1));
+    } while (performance.now() < deadline);
+    assert.fail(`localization did not finish within 5s (state=${current.state}, code=${current.code || 'none'})`);
 }
 async function localize(h, source, context = h.alice, repair = false) {
     return finish(h.sources, context, await h.sources.localize(context, source.sourceId, source.revision, repair));

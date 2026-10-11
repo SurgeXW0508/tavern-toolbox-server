@@ -1,3 +1,4 @@
+import { BROWSE_TTL_MS } from '../audio-assets/read-sessions.js';
 import path from 'node:path';
 import { mkdir, lstat, chmod } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
@@ -277,6 +278,124 @@ export function createAudioLibrary(config, assets) {
     async function ready(context) {
         return [await store(context), await assets.store(context)];
     }
+    function selectRows(item, records, metadata, query) {
+        const all = records.map((row) => ({
+            ...row,
+            ...item.view(metadata.get(row.assetId) || defaultTrack(row.assetId)),
+        }));
+        return all
+            .filter(
+                (row) =>
+                    query.hidden === 'true' || (row.health === 'healthy' && row.libraryVisibility !== 'hidden'),
+            )
+            .filter(
+                (row) =>
+                    !query.category ||
+                    query.category === 'all' ||
+                    row.category === (query.category === 'uncategorized' ? null : query.category),
+            )
+            .filter(
+                (row) =>
+                    !query.search ||
+                    row.displayTitle.toLocaleLowerCase().includes(query.search.toLocaleLowerCase()),
+            )
+            .sort(
+                (a, b) =>
+                    collator.compare(a.displayTitle, b.displayTitle) ||
+                    a.assetId.localeCompare(b.assetId, 'en'),
+            );
+    }
+    function validateQuery(query) {
+        if (
+            Object.keys(query).some((key) => !['category', 'search', 'hidden', 'cursor'].includes(key)) ||
+            Object.values(query).some((value) => typeof value !== 'string') ||
+            (query.category &&
+                !['all', 'uncategorized'].includes(query.category) &&
+                !validCategoryId(query.category)) ||
+            (query.search && query.search.length > 120) ||
+            (query.hidden && !['true', 'false'].includes(query.hidden)) ||
+            (query.cursor && !/^\d{1,4}~[a-f0-9]{16}$/.test(query.cursor))
+        )
+            fail('INVALID_REQUEST');
+    }
+    async function list(context, query = {}) {
+        validateQuery(query);
+        const [item, assetStore] = await ready(context);
+        return coordinateAudio(context.userRoot, async () => {
+            const metadata = item.metadata(),
+                cats = item.categories();
+            if (
+                query.category &&
+                !['all', 'uncategorized'].includes(query.category) &&
+                !cats.categories.some((c) => c.categoryId === query.category)
+            )
+                fail('AUDIO_CATEGORY_NOT_FOUND');
+            const records = await assetStore.inventory();
+            // Recover harmless dangling metadata after interrupted deletion. Never retain an Asset.
+            const ids = new Set(records.map((row) => row.assetId));
+            for (const id of metadata.keys()) if (!ids.has(id)) item.remove(id);
+            const selected = selectRows(item, records, metadata, query);
+            const snapshot = createHash('sha256')
+                .update(
+                    JSON.stringify([
+                        cats,
+                        query.category || 'all',
+                        query.search || '',
+                        query.hidden || 'false',
+                        selected,
+                    ]),
+                )
+                .digest('hex')
+                .slice(0, 16);
+            let offset = 0;
+            if (query.cursor) {
+                const [position, stamp] = query.cursor.split('~');
+                if (stamp !== snapshot) fail('AUDIO_LIBRARY_CONFLICT');
+                offset = Number(position);
+                if (offset >= selected.length) fail('INVALID_REQUEST');
+            }
+            return {
+                items: selected.slice(offset, offset + 50),
+                total: selected.length,
+                nextCursor: offset + 50 < selected.length ? `${offset + 50}~${snapshot}` : null,
+                snapshot,
+                ...cats,
+            };
+        });
+    }
+    async function browse(context, query = {}, signal, complete = false) {
+        validateQuery(query);
+        const [item, assetStore] = await ready(context);
+        if (stopped) fail('AUDIO_LIBRARY_UNAVAILABLE');
+        const scope = { category: query.category || 'all', search: query.search || '', hidden: query.hidden || 'false' };
+        return assets.readSessions.read(context, {
+            key: 'library:' + JSON.stringify(scope), cursor: query.cursor || null, signal, complete,
+            capture: () => {
+                const records = assetStore.records(), metadata = item.metadata(), cats = item.categories();
+                if (!['all', 'uncategorized'].includes(scope.category) && !cats.categories.some(c => c.categoryId === scope.category)) fail('AUDIO_CATEGORY_NOT_FOUND');
+                const ids = new Set(records.map(row => row.asset_id));
+                for (const id of metadata.keys()) if (!ids.has(id)) { item.remove(id); metadata.delete(id); }
+                return { records, metadata: [...metadata].sort(([a], [b]) => a.localeCompare(b)), cats,
+                    stamp: [assetStore.readStamp(), item.db.prepare('SELECT total_changes() AS n').get().n,
+                        item.db.prepare('PRAGMA data_version').get().data_version] };
+            },
+            build: async (data, signal) => {
+                const metadata = new Map(data.metadata);
+                // Eliminate files outside the query before touching the filesystem.
+                const candidates = data.records.filter(row => {
+                    const track = item.view(metadata.get(row.asset_id) || defaultTrack(row.asset_id));
+                    return (scope.hidden === 'true' || track.libraryVisibility !== 'hidden')
+                        && (scope.category === 'all' || track.category === (scope.category === 'uncategorized' ? null : scope.category))
+                        && (!scope.search || track.displayTitle.toLocaleLowerCase().includes(scope.search.toLocaleLowerCase()));
+                });
+                const records = await assetStore.inventory(candidates, signal);
+                return { rows: selectRows(item, records, metadata, scope), cats: data.cats };
+            },
+            checkPage: (rows, signal, data) => assetStore.sameHealth(rows, data.records, signal),
+            view: (entry, offset, nextCursor, snapshot, complete) => ({ items: entry.rows.slice(offset, offset + (complete ? 4096 : 50)),
+                total: entry.rows.length, nextCursor, snapshot, ...entry.cats }),
+        });
+    }
     const mutations = ['update', 'observe', 'category'];
     return {
         definition: {
@@ -287,7 +406,7 @@ export function createAudioLibrary(config, assets) {
                 {
                     id: 'audio.library',
                     contract: { major: 1, minMinor: 0, maxMinor: 0 },
-                    operations: ['list', 'read', 'categories', ...mutations].map((id) => ({ id, available: true })),
+                    operations: ['list', 'browse', 'playbackPool', 'read', 'categories', ...mutations].map((id) => ({ id, available: true })),
                     operationAvailability: () =>
                         Object.fromEntries(
                             mutations.map((id) => [
@@ -300,6 +419,8 @@ export function createAudioLibrary(config, assets) {
                         ),
                     limits: {
                         pageSize: 50,
+                        browseTtlMs: BROWSE_TTL_MS,
+                        maxPlaybackPoolBytes: 4 * 1024 * 1024,
                         maxAssets: 4096,
                         maxCategories: 128,
                         maxTitleLength: 120,
@@ -332,6 +453,7 @@ export function createAudioLibrary(config, assets) {
             shutdown: async () => {
                 stopped = true;
                 unobserve();
+                await assets.readSessions.drain('library:');
                 for (const pending of stores.values()) {
                     try {
                         (await pending).close();
@@ -368,84 +490,13 @@ export function createAudioLibrary(config, assets) {
                 return item.observe(id, title);
             });
         },
-        async list(context, query = {}) {
-            if (
-                Object.keys(query).some((key) => !['category', 'search', 'hidden', 'cursor'].includes(key)) ||
-                Object.values(query).some((value) => typeof value !== 'string') ||
-                (query.category &&
-                    !['all', 'uncategorized'].includes(query.category) &&
-                    !validCategoryId(query.category)) ||
-                (query.search && query.search.length > 120) ||
-                (query.hidden && !['true', 'false'].includes(query.hidden)) ||
-                (query.cursor && !/^\d{1,4}~[a-f0-9]{16}$/.test(query.cursor))
-            )
-                fail('INVALID_REQUEST');
-            const [item, assetStore] = await ready(context);
-            return coordinateAudio(context.userRoot, async () => {
-                const metadata = item.metadata(),
-                    cats = item.categories();
-                if (
-                    query.category &&
-                    !['all', 'uncategorized'].includes(query.category) &&
-                    !cats.categories.some((c) => c.categoryId === query.category)
-                )
-                    fail('AUDIO_CATEGORY_NOT_FOUND');
-                const records = await assetStore.inventory();
-                const all = records.map((row) => ({
-                    ...row,
-                    ...item.view(metadata.get(row.assetId) || defaultTrack(row.assetId)),
-                }));
-                // Recover harmless dangling metadata after interrupted deletion. Never retain an Asset.
-                const ids = new Set(records.map((row) => row.assetId));
-                for (const id of metadata.keys()) if (!ids.has(id)) item.remove(id);
-                const selected = all
-                    .filter(
-                        (row) =>
-                            query.hidden === 'true' || (row.health === 'healthy' && row.libraryVisibility !== 'hidden'),
-                    )
-                    .filter(
-                        (row) =>
-                            !query.category ||
-                            query.category === 'all' ||
-                            row.category === (query.category === 'uncategorized' ? null : query.category),
-                    )
-                    .filter(
-                        (row) =>
-                            !query.search ||
-                            row.displayTitle.toLocaleLowerCase().includes(query.search.toLocaleLowerCase()),
-                    )
-                    .sort(
-                        (a, b) =>
-                            collator.compare(a.displayTitle, b.displayTitle) ||
-                            a.assetId.localeCompare(b.assetId, 'en'),
-                    );
-                const snapshot = createHash('sha256')
-                    .update(
-                        JSON.stringify([
-                            cats,
-                            query.category || 'all',
-                            query.search || '',
-                            query.hidden || 'false',
-                            selected,
-                        ]),
-                    )
-                    .digest('hex')
-                    .slice(0, 16);
-                let offset = 0;
-                if (query.cursor) {
-                    const [position, stamp] = query.cursor.split('~');
-                    if (stamp !== snapshot) fail('AUDIO_LIBRARY_CONFLICT');
-                    offset = Number(position);
-                    if (offset >= selected.length) fail('INVALID_REQUEST');
-                }
-                return {
-                    items: selected.slice(offset, offset + 50),
-                    total: selected.length,
-                    nextCursor: offset + 50 < selected.length ? `${offset + 50}~${snapshot}` : null,
-                    snapshot,
-                    ...cats,
-                };
-            });
+        list,
+        browse,
+        async playbackPool(context, query = {}, signal) {
+            // Complete playback reads always scan fresh health, outside the write lock.
+            // No retained browse snapshot can become a playback pool.
+            if (Object.keys(query).some(key => key !== 'category')) fail('INVALID_REQUEST');
+            return browse(context, query, signal, true);
         },
     };
 }
