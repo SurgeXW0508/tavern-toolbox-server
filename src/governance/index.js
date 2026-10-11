@@ -63,8 +63,8 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
         const complete = providers.size > 0 && health.every(item => item.state === 'complete');
         return { complete, providers: health, groups, references };
     }
-    async function catalog(context) {
-        const [assets, refs, storage] = await Promise.all([media.catalog(context), analysis(context), media.storage(context)]);
+    async function catalog(context, { includeStorage = false } = {}) {
+        const [assets, refs, storage] = await Promise.all([media.catalog(context), analysis(context), includeStorage ? media.storage(context) : null]);
         const byAsset = new Map();
         for (const ref of refs.references) {
             const list = byAsset.get(ref.mediaRef.assetId) || [];
@@ -90,7 +90,7 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
                 limits: { maxPageSize: 48, maxDeleteBatch: 48 }, constraints: { referenceProviders: () => {} } }],
             health: () => ({ state: 'ready' }) },
         async summary(context) {
-            const { items, refs, broken, storage } = await catalog(context);
+            const { items, refs, broken, storage } = await catalog(context, { includeStorage: true });
             const free = items.filter(item => item.referenceState === 'unreferenced');
             return { storage, complete: refs.complete, providers: refs.providers, unreferencedCount: free.length,
                 unreferencedBytes: free.reduce((sum, item) => sum + item.originalBytes + item.derivedBytes, 0), brokenCount: broken.length };
@@ -150,20 +150,21 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
             // It acquires the coordinator itself; no recursive lock or partial per-ref loop.
             const removed = await provider.mutateGroup(context, body);
             const assetIds = [...new Set(removed.assetIds)];
-            if (!body.cleanup) return { revision: removed.revision, unlinkedCount: removed.unlinkedCount,
-                deletedCount: 0, retainedCount: assetIds.length, sharedCount: 0, failedCount: 0, cleanup: false };
             return coordinate(context, async () => {
-                const refs = await analysis(context), protectedIds = new Set(refs.references.map(ref => ref.mediaRef.assetId));
-                let deletedCount = 0, sharedCount = 0, failedCount = 0;
+                const refs = body.cleanup ? await analysis(context) : null, protectedIds = new Set(refs?.references.map(ref => ref.mediaRef.assetId));
+                let deletedCount = 0, missingCount = 0, sharedCount = 0, failedCount = 0;
                 for (const id of assetIds) {
+                    try { await media.metadata(context, id); }
+                    catch (error) { if (error instanceof MediaFailure && error.code === 'MEDIA_NOT_FOUND') missingCount++; else failedCount++; continue; }
+                    if (!body.cleanup) continue;
                     if (!refs.complete) { failedCount++; continue; }
                     if (protectedIds.has(id)) { sharedCount++; continue; }
                     try { await media.delete(context, id); deletedCount++; }
-                    catch { failedCount++; }
+                    catch (error) { if (error instanceof MediaFailure && error.code === 'MEDIA_NOT_FOUND') missingCount++; else failedCount++; }
                 }
                 return { revision: removed.revision, unlinkedCount: removed.unlinkedCount, deletedCount,
-                    retainedCount: assetIds.length - deletedCount, sharedCount, failedCount, cleanup: true,
-                    complete: refs.complete };
+                    retainedCount: assetIds.length - deletedCount - missingCount, missingCount, sharedCount, failedCount, cleanup: body.cleanup,
+                    ...(refs ? { complete: refs.complete } : {}) };
             });
         },
         async action(context, body) {

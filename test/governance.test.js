@@ -257,3 +257,71 @@ test('whole-group cleanup reports deletion failure separately and cannot cross u
     assert.equal(result.unlinkedCount, 2); assert.equal(result.deletedCount, 1); assert.equal(result.failedCount, 1); assert.equal(result.retainedCount, 1);
     assert.equal((await f.governance.detail(f.context, first.mediaRef.assetId)).asset.referenceState, 'unreferenced');
 });
+
+test('group receipts count missing candidates once, separately from shared/retained or failed assets', async t => {
+    for (const [cleanup, incomplete] of [[false, false], [true, false], [true, true]]) await t.test(`cleanup=${cleanup}, incomplete=${incomplete}`, async t => {
+        const f = await fixture(t), missing = await f.image(), free = await f.image('blue'), shared = await f.image('green');
+        let revision = 0;
+        for (const [n, mediaRef] of [missing.mediaRef, missing.mediaRef, free.mediaRef, shared.mediaRef].entries()) {
+            revision = (await f.localization.bindExisting(f.context, { hostId: 'A.png', displayName: 'A', url: `https://example.com/${n}.png`, revision, mediaRef })).revision;
+        }
+        await f.business.commit(f.context, 'outfit', 1, 0, outfit(shared.mediaRef));
+        await f.media.delete(f.context, missing.mediaRef.assetId);
+        f.governance.register({ id: 'broken-shared', consumer: 'worldbook', label: '世界书', enumerate: async () => [{ id: 'book', label: 'Book', lifecycle: 'active', revision: 0,
+            references: [{ id: 'image', mediaRef: missing.mediaRef }] }] });
+        if (incomplete) f.governance.register({ id: 'unavailable', consumer: 'future', label: 'Future', enumerate: async () => { throw new Error('unavailable'); } });
+        const group = (await f.governance.groups(f.context)).items.find(group => group.consumer === 'character');
+        assert.equal((await f.governance.group(f.context, group.providerId, group.id)).usage.missingCount, 1);
+        const result = await f.governance.groupAction(f.context, { providerId: group.providerId, groupId: group.id, revision: group.revision, hostId: 'A.png', action: 'unlinkGroup', cleanup });
+        assert.equal(result.unlinkedCount, 4); assert.equal(result.missingCount, 1);
+        assert.equal(result.deletedCount, cleanup && !incomplete ? 1 : 0);
+        assert.equal(result.retainedCount, cleanup && !incomplete ? 1 : 2);
+        assert.equal(result.sharedCount, cleanup && !incomplete ? 1 : 0);
+        assert.equal(result.failedCount, incomplete ? 2 : 0);
+        assert.equal(result.deletedCount + result.retainedCount + result.missingCount, 3);
+        assert.equal((await f.media.metadata(f.context, shared.mediaRef.assetId)).mediaRef.assetId, shared.mediaRef.assetId);
+    });
+});
+
+test('Group and paged inventory reads do not scan Storage; Summary still provides authoritative storage', async t => {
+    const f = await fixture(t), asset = await f.image();
+    await f.business.commit(f.context, 'outfit', 1, 0, outfit(asset.mediaRef));
+    let scans = 0; const storage = f.media.storage;
+    f.media.storage = async (...args) => { scans++; return storage(...args); };
+    assert.equal((await f.governance.group(f.context, 'outfit', 'coat')).usage.exclusiveCount, 1);
+    await f.governance.groups(f.context); await f.governance.assets(f.context); await f.governance.detail(f.context, asset.mediaRef.assetId);
+    assert.equal(scans, 0);
+    assert.equal((await f.governance.summary(f.context)).storage.assetCount, 1); assert.equal(scans, 1);
+});
+
+test('scoped Group queries reach smaller Consumers after a full Character page and always expose all Provider identities', async t => {
+    const f = await fixture(t), asset = await f.image();
+    await f.business.commit(f.context, 'outfit', 1, 0, outfit(asset.mediaRef));
+    const governance = createGovernance(f.media, f.coordinate);
+    governance.register({ id: 'characters', consumer: 'character', label: '角色本地化', enumerate: async () => Array.from({ length: 31 }, (_, n) => ({ id: String(n), label: `角色 ${n}`, lifecycle: 'active', revision: 1, references: [] })) });
+    governance.register(f.business.referenceProvider);
+    governance.register({ id: 'future', consumer: 'worldbook', label: '世界书', enumerate: async () => [{ id: 'book', label: 'Book', lifecycle: 'active', revision: 1, references: [] }] });
+    const first = await governance.groups(f.context, { limit: 24 });
+    assert.equal(first.items.length, 24); assert(first.items.every(group => group.consumer === 'character'));
+    assert.deepEqual(first.providers.map(provider => provider.consumer), ['character', 'outfit', 'worldbook']);
+    assert.equal(first.total, 33);
+    assert.equal((await governance.groups(f.context, { consumer: 'outfit', limit: 24 })).items[0].label, '黑色礼服');
+    assert.equal((await governance.groups(f.context, { consumer: 'worldbook', limit: 24 })).items[0].id, 'book');
+});
+
+test('Group-owned host maintenance retains Server checks against another existing host and replaced Character identity', async t => {
+    const f = await fixture(t), asset = await f.image();
+    await card(path.join(f.context.userRoot, 'characters', 'B.png'), '2026-01-02', 'B');
+    await f.localization.bindExisting(f.context, { hostId: 'A.png', displayName: 'A', url, revision: 0, mediaRef: asset.mediaRef });
+    const group = (await f.governance.groups(f.context)).items[0], reference = (await f.governance.group(f.context, group.providerId, group.id)).references.items[0];
+    const body = { providerId: group.providerId, groupId: group.id, revision: group.revision, hostId: 'B.png' };
+    await assert.rejects(f.governance.action(f.context, { ...body, referenceId: reference.id, action: 'unlink' }), { code: 'HOST_IDENTITY_UNAVAILABLE' });
+    await assert.rejects(f.governance.action(f.context, { ...body, referenceId: reference.id, action: 'replace', mediaRef: asset.mediaRef }), { code: 'HOST_IDENTITY_UNAVAILABLE' });
+    await assert.rejects(f.governance.groupAction(f.context, { ...body, action: 'unlinkGroup', cleanup: true }), { code: 'HOST_IDENTITY_UNAVAILABLE' });
+    assert.equal((await f.governance.group(f.context, group.providerId, group.id)).references.total, 1);
+    await card(path.join(f.context.userRoot, 'characters', 'A.png'), '2026-02-01', 'replacement');
+    await assert.rejects(f.governance.groupAction(f.context, { ...body, hostId: 'A.png', action: 'unlinkGroup', cleanup: true }), { code: 'LOCALIZATION_CONFLICT' });
+    assert.equal((await f.media.metadata(f.context, asset.mediaRef.assetId)).mediaRef.assetId, asset.mediaRef.assetId);
+    const detached = (await f.governance.group(f.context, group.providerId, group.id)).group;
+    assert.equal(detached.lifecycle, 'detached'); assert.equal(detached.referenceCount, 1);
+});
