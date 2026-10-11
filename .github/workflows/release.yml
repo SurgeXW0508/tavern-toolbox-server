@@ -112,32 +112,17 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "${TAG}" release/* --verify-tag --title "Tavern Toolbox Server ${TAG}" --notes-file release-notes.md
-          mkdir -p verified-release
-          gh release download "${TAG}" --dir verified-release --pattern 'tavern-toolbox-server-*-source.zip' --pattern SHA256SUMS
-          (cd verified-release && sha256sum -c SHA256SUMS)
 
-      # This closeout is restricted to the accepted Phase 5 branch and version.
-      # It never scans or deletes unrelated stage branches.
-      - name: Clean up accepted Phase 5 branch after verified release
+      - name: Verify published release assets (including retries)
         env:
           TAG: ${{ steps.release.outputs.tag }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          [[ "${VERSION}" == "0.5.0" ]] || exit 0
-          STAGE_BRANCH='stage/phase-5-remote-image'
-          if STAGE_REF="$(git ls-remote --exit-code origin "refs/heads/${STAGE_BRANCH}")"; then
-            STAGE_SHA="${STAGE_REF%%[[:space:]]*}"
-          else
-            RESULT=$?
-            [[ "${RESULT}" == 2 ]] || exit "${RESULT}"
-            exit 0
-          fi
-          MAIN_REF="$(git ls-remote --exit-code origin refs/heads/main)"
-          MAIN_SHA="${MAIN_REF%%[[:space:]]*}"
-          TAG_SHA="$(git rev-list -n 1 "${TAG}")"
-          [[ "${STAGE_SHA}" == "${GITHUB_SHA}" && "${MAIN_SHA}" == "${GITHUB_SHA}" ]]
-          [[ "${TAG_SHA}" == "${GITHUB_SHA}" ]]
           [[ "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" == false ]]
-          echo 'Accepted stage/main ahead=0 behind=0; Tag and published Release verified'
-          git push origin --force-with-lease="refs/heads/${STAGE_BRANCH}:${STAGE_SHA}" ":refs/heads/${STAGE_BRANCH}"
+          mkdir -p verified-release
+          gh release download "${TAG}" --dir verified-release --pattern 'tavern-toolbox-server-*-source.zip' --pattern SHA256SUMS
+          (cd verified-release && sha256sum -c SHA256SUMS)
+          EXPECTED="$(printf '%s\n' SHA256SUMS "tavern-toolbox-server-v${VERSION}-source.zip" | sort)"
+          ACTUAL="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq '.assets[].name' | sort)"
+          [[ "${ACTUAL}" == "${EXPECTED}" ]]

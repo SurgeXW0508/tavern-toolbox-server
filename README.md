@@ -2,7 +2,11 @@
 
 Current architecture, scalability findings, lifecycle and future development rules: [Engineering](docs/ENGINEERING.md). Public contracts: [Protocol](protocol/README.md). Phase acceptance files are historical evidence; their old branch instructions and temporary non-goals do not override the current baseline.
 
-## Phase 8 — Audio Library · Release v0.8.0
+## Current release v0.8.1 — performance and lifecycle maintenance
+
+Paired with Frontend v0.51.1. See Release notes for maintenance changes and verification limits. Successful Release verification triggers guarded cleanup only for its unchanged, merged PR head.
+
+## Phase 8 — Audio Library foundation (v0.8.0)
 
 Release v0.8.0, paired with Frontend v0.51.0 / Protocol 1.0. The user has completed the paired Media Center / Audio Library / Final Cutover core real-device acceptance on SillyTavern 1.19.0 Docker / NAS. Server race, privacy, paging and specialized failure coverage remain principally automated evidence; see [Phase 8 acceptance](PHASE-8-ACCEPTANCE.md). Future development starts from latest main.
 
@@ -12,7 +16,7 @@ A track has at most one flat category and visible/hidden state. Track and catego
 
 [Library routes, schemas and fixtures](protocol/README.md) describe bounded 50-item natural-title pages with stable tie order and snapshot cursors. Frontend playback independently reads the entire selected category, without UI search or page state; streaming continues through existing session-bound Asset GET/Range and never Remote fallback. Server does not store player state, queue, volume or history. Settings/media navigation changes are frontend product work; Image/Media/Governance/Business/Localization contracts and schemas remain unchanged.
 
-Code/HTTP tests cover legacy Assets, dedup, title priority, persistence/isolation, concurrent CAS, categories, health/visibility, 230-item paging and deletion coordination. Candidate CI and Privacy/Core Checks run the release gates. Joint Frontend installed-host evidence confirms existing NAS Local Assets, metadata UI, playback, Media Center and Final Cutover core; it does not claim every Server race/crash/negative case was manually exercised. A 200–500-track full-category first-play NAS latency measurement remains non-blocking and unquantified. See PHASE-8-ACCEPTANCE.md and the frontend TESTING/HANDOFF. Preserve the stage branch until the user confirms the formal release-package smoke, then verify complete main ancestry before cleanup.
+Code/HTTP tests cover legacy Assets, dedup, title priority, persistence/isolation, concurrent CAS, categories, health/visibility, 230-item paging and deletion coordination. Candidate CI and Privacy/Core Checks run the release gates. Joint Frontend installed-host evidence confirms existing NAS Local Assets, metadata UI, playback, Media Center and Final Cutover core; it does not claim every Server race/crash/negative case was manually exercised. A 200–500-track full-category first-play NAS latency measurement remains non-blocking and unquantified. See PHASE-8-ACCEPTANCE.md and the frontend TESTING/HANDOFF. Maintenance release validation limits are recorded in Release notes; prior Phase 8 smoke evidence does not automatically cover later changes.
 
 Backup/restore: with ST stopped, preserve `audio-library-v1` together with `audio-assets-v1` and `audio-sources-v1` under each trusted user directory. Source/Asset backups remain authoritative for audio data; library database contains private user titles/categories only, and does not retain files. A code rollback does not roll back user metadata.
 
@@ -48,18 +52,13 @@ The completed installed-host acceptance and automated evidence boundaries are in
 
 ## Release notes
 
-- Adds the audio.library Protocol 1.0 capability, without upgrading Protocol.
-- Stores local-music display metadata independently for each authenticated ST user; Audio Asset / Source identity is not duplicated.
-- Existing healthy Local Audio Assets automatically become music candidates, without import or data migration.
-- Title priority is user > first valid automatic > unnamed; automatic character observations never overwrite a user title.
-- Each track has at most one category and supports hidden visibility; Track / Category writes use revision CAS.
-- Category deletion atomically moves affected tracks back to uncategorized.
-- Music metadata is not an Asset retention lock; explicit Asset deletion coordinates library metadata cleanup without making metadata failure block deletion.
-- Bounded natural-title paging uses stable tie order and snapshot cursors; Frontend reads the full selected category independently of UI search/paging for playback.
-- Adds audio-library-v1 to per-user backups, alongside audio-assets-v1 and audio-sources-v1.
-- Protocol 1.0 and existing Source / Asset / Media Governance / Business / Localization semantics remain compatible.
+Server v0.8.1 pairs with Frontend v0.51.1; Protocol 1.0 and persisted schemas remain unchanged.
 
-The user confirmed joint Frontend Media Center Audio UI and Final Cutover core real-device acceptance. Automated Server evidence covers CAS, paging, deletion coordination, cross-user isolation and privacy; this is not a manual pass of every failure matrix. Formal release-package smoke is a separate user confirmation, with both Phase 8 branches retained until it passes and main ancestry is verified. The 200–500-track full-category first-play NAS latency remains unquantified and non-blocking.
+- Add optional bounded complete-category playbackPool and short-lived Library/Asset browse snapshots, preserving legacy list behavior and explicit expiry/conflict errors.
+- Move file health checks outside the per-user write coordinator, validate metadata before return, and bound/cancel/drain read workers. Cached summaries never authorize deletion or playback.
+- Update Sharp to 0.35.5; automatically syntax-check all entry/source JavaScript. Preserve reviewed ST compatibility fixtures and their documented development-only audit findings.
+- Replace obsolete phase-specific cleanup with verified post-Release cleanup of unchanged, merged branch heads; preserve immutable tags and verify release assets on retries.
+- Validation: automated real-store/HTTP/concurrency regressions and full CI. This maintenance release adds no installed-NAS/mobile performance claim; 200–500-track first-play and long-session checks remain follow-up validation. Back up Source/Asset/Library user data consistently; code rollback does not restore data.
 
 ## Phase 4 Business Provider and Outfit
 
@@ -91,7 +90,7 @@ For development, run `npm ci --ignore-scripts` then `npm run check` for unit and
 
 ## Operator and review notes
 
-1. Pin `v0.8.0` or an exact reviewed commit before installing in `plugins/tavern-toolbox-server/`. Use the matching frontend `v0.51.0` for Media Center Audio, Server Outfit and Character Localization. Confirm the installed SillyTavern loader supports `init(router)` and exit hooks, `req.user.profile.handle` and `req.user.directories.root` in your real version. No separate administrator Web UI exists.
+1. Pin `v0.8.1` or an exact reviewed commit before installing in `plugins/tavern-toolbox-server/`. Use the matching frontend `v0.51.1` for Media Center Audio, Server Outfit and Character Localization. Confirm the installed SillyTavern loader supports `init(router)` and exit hooks, `req.user.profile.handle` and `req.user.directories.root` in your real version. No separate administrator Web UI exists.
 2. Confirm `enableServerPlugins: true`, restart one active SillyTavern instance, sign in to the official Web client, open any module homepage in Toolbox, select **服务器与扩展能力**, and inspect `core.status` plus `network.remoteFetch` (disabled until the administrator enables it). Refresh once and preview diagnostics before copying; verify no personal path/cookie. Try the other ST account, if configured, to verify separate context IDs.
 3. Temporarily disable/remove this plugin, restart, and check that old outfit images, Genesis images, and lorebook editing still use their previous Local paths. Repeat in the actual TT client; TT never connects to this Server directly. Re-enable the plugin and check Docker container restart rotates boot/context IDs without modifying existing data.
 4. Check coexistence with installed 柏宝库 on the real NAS. The plugin ID, route and config filename are dedicated. Keep the actual ST dataRoot and plugin code volume mounted as intended and check UID/GID; config persistence requires the dataRoot volume. The plugin never writes into its own code folder.
