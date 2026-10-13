@@ -22,6 +22,8 @@ function stateOf(references, complete) {
     if (references.some(ref => ref.lifecycle === 'detached')) return 'detached';
     return complete ? 'unreferenced' : 'unknown';
 }
+// Browse/count only: retain empty recovery records and the full analysis used by mutations.
+const browsableGroup = group => group.lifecycle !== 'active' || group.referenceCount > 0;
 
 export function createGovernance(media, coordinate, { mutations = true } = {}) {
     const providers = new Map();
@@ -111,7 +113,7 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
         },
         async groups(context, query = {}) {
             const bounds = page(query), { refs, ids } = await catalog(context);
-            const groups = refs.groups.map(({ references, ...group }) => ({ ...group,
+            const groups = refs.groups.filter(browsableGroup).map(({ references, ...group }) => ({ ...group,
                 brokenCount: references.filter(ref => !ids.has(ref.mediaRef.assetId)).length }));
             return { ...slice(groups.filter(group => (!query.provider || group.providerId === query.provider) && (!query.consumer || group.consumer === query.consumer)
                 && (!query.state || group.lifecycle === query.state)
@@ -123,7 +125,7 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
             const bounds = page(query), previewLimit = Number(query.previewLimit ?? 6);
             if (!Number.isSafeInteger(previewLimit) || previewLimit < 1 || previewLimit > 6 || bounds.offset) fail('INVALID_REQUEST');
             const { refs, ids } = await catalog(context);
-            const matches = refs.groups.filter(group => (!query.consumer || group.consumer === query.consumer)
+            const matches = refs.groups.filter(group => browsableGroup(group) && (!query.consumer || group.consumer === query.consumer)
                 && (!query.state || group.lifecycle === query.state)
                 && (query.broken !== 'true' || group.references.some(ref => !ids.has(ref.mediaRef.assetId)))
                 && (!bounds.search || [group.label, group.consumerLabel].some(value => value.toLocaleLowerCase().includes(bounds.search))));

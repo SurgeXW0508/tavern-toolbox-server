@@ -299,9 +299,9 @@ test('scoped Group queries reach smaller Consumers after a full Character page a
     const f = await fixture(t), asset = await f.image();
     await f.business.commit(f.context, 'outfit', 1, 0, outfit(asset.mediaRef));
     const governance = createGovernance(f.media, f.coordinate);
-    governance.register({ id: 'characters', consumer: 'character', label: '角色本地化', enumerate: async () => Array.from({ length: 31 }, (_, n) => ({ id: String(n), label: `角色 ${n}`, lifecycle: 'active', revision: 1, references: [] })) });
+    governance.register({ id: 'characters', consumer: 'character', label: '角色本地化', enumerate: async () => Array.from({ length: 31 }, (_, n) => ({ id: String(n), label: `角色 ${n}`, lifecycle: 'active', revision: 1, references: [{ id: 'image', mediaRef: asset.mediaRef }] })) });
     governance.register(f.business.referenceProvider);
-    governance.register({ id: 'future', consumer: 'worldbook', label: '世界书', enumerate: async () => [{ id: 'book', label: 'Book', lifecycle: 'active', revision: 1, references: [] }] });
+    governance.register({ id: 'future', consumer: 'worldbook', label: '世界书', enumerate: async () => [{ id: 'book', label: 'Book', lifecycle: 'active', revision: 1, references: [{ id: 'image', mediaRef: asset.mediaRef }] }] });
     const first = await governance.groups(f.context, { limit: 24 });
     assert.equal(first.items.length, 24); assert(first.items.every(group => group.consumer === 'character'));
     assert.deepEqual(first.providers.map(provider => provider.consumer), ['character', 'outfit', 'worldbook']);
@@ -345,4 +345,58 @@ test('Consumer overview analyzes inventory once, bounds previews and preserves e
     assert.equal(filtered.sections[1].total, 0); assert.equal(filtered.sections[4].total, null);
     assert.equal((await governance.groups({}, { provider: 'outfit', limit: 24 })).total, 4);
     for (const query of [{ previewLimit: 7 }, { previewLimit: 0 }, { offset: 1 }, { provider: {} }, { consumer: 'x'.repeat(161) }]) await assert.rejects(governance.groupOverview({}, query), { code: 'INVALID_REQUEST' });
+});
+
+test('browse totals exclude Active empty scopes before pagination without changing analysis or Provider health', async () => {
+    const mediaRef = { provider: 'server', assetId: '12345678-1234-4123-8123-123456789012' };
+    const records = Array.from({ length: 49 }, (_, n) => [
+        { id: `empty-${n}`, label: `Empty ${n}`, lifecycle: 'active', revision: 1, references: [] },
+        { id: `used-${n}`, label: `Used ${n}`, lifecycle: 'active', revision: 1, references: [{ id: 'image', mediaRef }] }
+    ]).flat();
+    const governance = createGovernance({ catalog: async () => [{ mediaRef }] }, (_context, work) => work());
+    governance.register({ id: 'characters', consumer: 'character', label: '角色本地化', enumerate: async () => records });
+    governance.register({ id: 'offline', consumer: 'worldbook', label: '世界书', enumerate: async () => { throw Error('unavailable'); } });
+    const overview = await governance.groupOverview({});
+    assert.equal(overview.complete, false);
+    assert.equal(overview.sections[0].total, 49);
+    assert(overview.sections[0].items.every(group => group.referenceCount === 1));
+    assert.equal(overview.sections[1].state, 'unavailable'); assert.equal(overview.sections[1].total, null);
+    const seen = [];
+    for (const offset of [0, 24, 48]) {
+        const page = await governance.groups({}, { consumer: 'character', state: 'active', offset, limit: 24 });
+        assert.equal(page.total, 49); assert.equal(page.items.length, offset === 48 ? 1 : 24);
+        assert.equal(page.hasMore, offset < 48); seen.push(...page.items.map(group => group.id));
+        assert.equal(page.providers[1].state, 'unavailable'); assert.equal(page.complete, false);
+    }
+    assert.deepEqual(seen, records.filter(group => group.id.startsWith('used-')).map(group => group.id));
+    assert.equal((await governance.groups({}, { provider: 'characters', search: 'Empty' })).total, 0);
+    assert.equal((await governance.groupOverview({}, { consumer: 'character', search: 'Empty' })).sections[0].total, 0);
+    assert.equal((await governance.analysis({})).groups.length, 98);
+    assert.equal((await governance.group({}, 'characters', 'empty-0')).references.total, 0);
+});
+
+test('real empty Character records are hidden only while Active and remain eligible for Detached rebind and removal', async t => {
+    const f = await fixture(t), asset = await f.image();
+    await f.localization.bindExisting(f.context, { hostId: 'A.png', displayName: 'A', url, revision: 0, mediaRef: asset.mediaRef });
+    const initial = (await f.governance.groups(f.context)).items[0];
+    await f.governance.groupAction(f.context, { providerId: initial.providerId, groupId: initial.id, revision: initial.revision, action: 'unlinkGroup', cleanup: false, hostId: 'A.png' });
+    assert.equal((await f.governance.groups(f.context)).total, 0);
+    assert.equal((await f.governance.groupOverview(f.context)).sections[0].total, 0);
+    assert.equal((await f.governance.analysis(f.context)).groups.length, 1);
+    assert.equal((await f.governance.group(f.context, initial.providerId, initial.id)).group.referenceCount, 0);
+    await unlink(path.join(f.context.userRoot, 'characters', 'A.png'));
+    const detached = (await f.governance.groups(f.context, { state: 'detached' })).items[0];
+    assert.equal(detached.id, initial.id); assert.equal(detached.referenceCount, 0);
+    assert.equal((await f.governance.groupOverview(f.context, { state: 'detached' })).sections[0].total, 1);
+    assert.deepEqual((await f.governance.group(f.context, detached.providerId, detached.id)).usage, { assetCount: 0, exclusiveCount: 0, sharedCount: 0, missingCount: 0 });
+    await card(path.join(f.context.userRoot, 'characters', 'B.png'), '2026-01-02', 'B');
+    await f.governance.action(f.context, { providerId: detached.providerId, groupId: detached.id, revision: detached.revision, action: 'rebind', hostId: 'B.png', displayName: 'B' });
+    assert.equal((await f.governance.groups(f.context)).total, 0);
+    assert.equal((await f.governance.group(f.context, detached.providerId, detached.id)).group.hostId, 'B.png');
+    await unlink(path.join(f.context.userRoot, 'characters', 'B.png'));
+    const restored = (await f.governance.groups(f.context, { state: 'detached' })).items[0];
+    const removed = await f.governance.groupAction(f.context, { providerId: restored.providerId, groupId: restored.id, revision: restored.revision, action: 'forgetGroup', cleanup: false });
+    assert.equal(removed.unlinkedCount, 0); assert.equal(removed.deletedCount, 0);
+    assert.equal((await f.governance.analysis(f.context)).groups.length, 0);
+    assert.equal((await f.media.metadata(f.context, asset.mediaRef.assetId)).mediaRef.assetId, asset.mediaRef.assetId);
 });
