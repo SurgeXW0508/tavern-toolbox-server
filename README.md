@@ -2,9 +2,15 @@
 
 Current architecture, scalability findings, lifecycle and future development rules: [Engineering](docs/ENGINEERING.md). Public contracts: [Protocol](protocol/README.md). Phase acceptance files are historical evidence; their old branch instructions and temporary non-goals do not override the current baseline.
 
-## Current release v0.8.1 — performance and lifecycle maintenance
+## Current release v0.9.0 — Phase 9 Image Domain
 
-Paired with Frontend v0.51.1. See Release notes for maintenance changes and verification limits. Successful Release verification triggers guarded cleanup only for its unchanged, merged PR head.
+Paired with Frontend v0.52.0 / Protocol 1.0. Phase 9 is complete and released. The user accepted the core desktop Image workflows on SillyTavern 1.19.0 Docker / NAS; complete physical-phone coverage and large real-NAS catalog benchmarks are not claimed. See [Phase 9 acceptance](PHASE-9-ACCEPTANCE.md), [Protocol](protocol/README.md) and [Engineering](docs/ENGINEERING.md).
+
+Governance exposes Consumer Overview, scoped Group paging and safe Group detail metadata, with exclusive/shared/missing usage counts. Group-owned Character maintenance validates host identity/proof and revision independently of the active chat; Detached Rebind still selects an explicit current character. Consumer-owned Outfit descriptions present 单品 / 穿搭组合 / 具体搭配 / 场景组 without changing its data or relations.
+
+Group cleanup first performs one Consumer-owned CAS unlink/removal, then reanalyzes current references before deleting only unused candidate files. Shared assets and incomplete analysis remain protected; receipts distinguish deletion, retention, sharing, already-missing assets and failures. Active zero-reference Groups are excluded before browse counts, previews and paging; empty Detached recovery records and unavailable Provider health remain visible through their maintenance paths. Full analysis and exact reads/mutations retain those records. Only Summary reads Storage. There is no schema migration, automatic GC or Protocol change.
+
+Frontend provides the formal Image library, associations and management routes, explicit Original/GIF Viewer, confirmed existing-image Picker, Remote Image settings and public Media Center presentation. Audio and Image keep independent data planes. Future development starts from latest main on a new branch; Phase 9's branch is retired after release verification.
 
 ## Phase 8 — Audio Library foundation (v0.8.0)
 
@@ -52,13 +58,17 @@ The completed installed-host acceptance and automated evidence boundaries are in
 
 ## Release notes
 
-Server v0.8.1 pairs with Frontend v0.51.1; Protocol 1.0 and persisted schemas remain unchanged.
+Server v0.9.0 pairs with Frontend v0.52.0. Protocol 1.0 and persistent schemas remain unchanged.
 
-- Add optional bounded complete-category playbackPool and short-lived Library/Asset browse snapshots, preserving legacy list behavior and explicit expiry/conflict errors.
-- Move file health checks outside the per-user write coordinator, validate metadata before return, and bound/cancel/drain read workers. Cached summaries never authorize deletion or playback.
-- Update Sharp to 0.35.5; automatically syntax-check all entry/source JavaScript. Preserve reviewed ST compatibility fixtures and their documented development-only audit findings.
-- Replace obsolete phase-specific cleanup with verified post-Release cleanup of unchanged, merged branch heads; preserve immutable tags and verify release assets on retries.
-- Validation: automated real-store/HTTP/concurrency regressions and full CI. This maintenance release adds no installed-NAS/mobile performance claim; 200–500-track first-play and long-session checks remain follow-up validation. Back up Source/Asset/Library user data consistently; code rollback does not restore data.
+- Add media.governance groupOverview: one Catalog/reference pass returns Provider health, exact complete counts and bounded safe previews; scoped Group paging supports Consumer collections.
+- Add Group detail with unique exclusive/shared/missing asset counts and groupAction for Consumer-owned atomic unlink/removal followed by optional fresh reference-safe cleanup.
+- Protect shared assets and fail closed under incomplete reference analysis. Cleanup receipts separate already-absent resources from retained/shared assets and genuine failures; hard delete always rechecks full current Reference Analysis.
+- Exclude Active zero-reference Groups before browse counts, previews and pagination. Retain empty Detached recovery records and all full-analysis/exact-read/mutation records; unavailable Providers remain unknown.
+- Maintain Active Character Groups using the Group-owned host identity, directory/proof checks and revision CAS, without requiring that character's active chat. Detached Rebind remains explicit and identity-checked.
+- Present Outfit Group types as 单品 / 穿搭组合 / 具体搭配 / 场景组 through Consumer-owned metadata, preserving Outfit schema and relations.
+- Omit Storage reads from non-summary queries while retaining fresh reference analysis and coordination boundaries. Governance still uses full Catalog/reference analysis, not an indexed large-library query.
+- Phase 9 desktop core accepted on SillyTavern 1.19.0 Docker / NAS; automated Store/HTTP/concurrency/privacy and responsive tests remain distinct from manual device evidence. No complete physical-phone matrix or large real-NAS benchmark is claimed.
+- No Media, Character or Outfit data migration, identity change, automatic GC or Protocol upgrade. Back up user data consistently; code rollback does not restore data.
 
 ## Phase 4 Business Provider and Outfit
 
@@ -90,7 +100,7 @@ For development, run `npm ci --ignore-scripts` then `npm run check` for unit and
 
 ## Operator and review notes
 
-1. Pin `v0.8.1` or an exact reviewed commit before installing in `plugins/tavern-toolbox-server/`. Use the matching frontend `v0.51.1` for Media Center Audio, Server Outfit and Character Localization. Confirm the installed SillyTavern loader supports `init(router)` and exit hooks, `req.user.profile.handle` and `req.user.directories.root` in your real version. No separate administrator Web UI exists.
+1. Pin `v0.9.0` or an exact reviewed commit before installing in `plugins/tavern-toolbox-server/`. Use the matching frontend `v0.52.0` for Media Center Audio, Server Outfit and Character Localization. Confirm the installed SillyTavern loader supports `init(router)` and exit hooks, `req.user.profile.handle` and `req.user.directories.root` in your real version. No separate administrator Web UI exists.
 2. Confirm `enableServerPlugins: true`, restart one active SillyTavern instance, sign in to the official Web client, open any module homepage in Toolbox, select **服务器与扩展能力**, and inspect `core.status` plus `network.remoteFetch` (disabled until the administrator enables it). Refresh once and preview diagnostics before copying; verify no personal path/cookie. Try the other ST account, if configured, to verify separate context IDs.
 3. Temporarily disable/remove this plugin, restart, and check that old outfit images, Genesis images, and lorebook editing still use their previous Local paths. Repeat in the actual TT client; TT never connects to this Server directly. Re-enable the plugin and check Docker container restart rotates boot/context IDs without modifying existing data.
 4. Check coexistence with installed 柏宝库 on the real NAS. The plugin ID, route and config filename are dedicated. Keep the actual ST dataRoot and plugin code volume mounted as intended and check UID/GID; config persistence requires the dataRoot volume. The plugin never writes into its own code folder.

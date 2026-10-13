@@ -6,6 +6,7 @@ function page(query) {
     const offset = Number(query.offset ?? 0), limit = Number(query.limit ?? 24);
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 48
         || typeof (query.search ?? '') !== 'string' || (query.search || '').length > 160
+        || ['consumer', 'provider'].some(key => typeof (query[key] ?? '') !== 'string' || (query[key] || '').length > 160)
         || query.state && !states.includes(query.state)
         || query.kind && query.kind !== 'image'
         || query.sort && !['newest', 'oldest', 'largest', 'smallest'].includes(query.sort)
@@ -21,6 +22,8 @@ function stateOf(references, complete) {
     if (references.some(ref => ref.lifecycle === 'detached')) return 'detached';
     return complete ? 'unreferenced' : 'unknown';
 }
+// Browse/count only: retain empty recovery records and the full analysis used by mutations.
+const browsableGroup = group => group.lifecycle !== 'active' || group.referenceCount > 0;
 
 export function createGovernance(media, coordinate, { mutations = true } = {}) {
     const providers = new Map();
@@ -63,8 +66,8 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
         const complete = providers.size > 0 && health.every(item => item.state === 'complete');
         return { complete, providers: health, groups, references };
     }
-    async function catalog(context) {
-        const [assets, refs, storage] = await Promise.all([media.catalog(context), analysis(context), media.storage(context)]);
+    async function catalog(context, { includeStorage = false } = {}) {
+        const [assets, refs, storage] = await Promise.all([media.catalog(context), analysis(context), includeStorage ? media.storage(context) : null]);
         const byAsset = new Map();
         for (const ref of refs.references) {
             const list = byAsset.get(ref.mediaRef.assetId) || [];
@@ -83,13 +86,14 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
         register, analysis,
         definition: { id: 'governance', version: '0.1.0', dependsOn: ['core', 'media'],
             capabilities: [{ id: 'media.governance', contract: { major: 1, minMinor: 0, maxMinor: 0 },
-                operations: ['summary', 'assets', 'groups', 'detail', 'group', 'action', 'deleteBatch'].map(id => ({ id, available: true })),
+                operations: ['summary', 'assets', 'groups', 'groupOverview', 'detail', 'group', 'action', 'groupAction', 'deleteBatch'].map(id => ({ id, available: true })),
                 operationAvailability: () => ({ action: { available: mutations, reasonCode: 'ORIGIN_POLICY_MISSING' },
+                    groupAction: { available: mutations, reasonCode: 'ORIGIN_POLICY_MISSING' },
                     deleteBatch: { available: mutations, reasonCode: 'ORIGIN_POLICY_MISSING' } }),
                 limits: { maxPageSize: 48, maxDeleteBatch: 48 }, constraints: { referenceProviders: () => {} } }],
             health: () => ({ state: 'ready' }) },
         async summary(context) {
-            const { items, refs, broken, storage } = await catalog(context);
+            const { items, refs, broken, storage } = await catalog(context, { includeStorage: true });
             const free = items.filter(item => item.referenceState === 'unreferenced');
             return { storage, complete: refs.complete, providers: refs.providers, unreferencedCount: free.length,
                 unreferencedBytes: free.reduce((sum, item) => sum + item.originalBytes + item.derivedBytes, 0), brokenCount: broken.length };
@@ -109,13 +113,28 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
         },
         async groups(context, query = {}) {
             const bounds = page(query), { refs, ids } = await catalog(context);
-            const groups = refs.groups.map(({ references, ...group }) => ({ ...group,
+            const groups = refs.groups.filter(browsableGroup).map(({ references, ...group }) => ({ ...group,
                 brokenCount: references.filter(ref => !ids.has(ref.mediaRef.assetId)).length }));
-            return { ...slice(groups.filter(group => (!query.consumer || group.consumer === query.consumer)
+            return { ...slice(groups.filter(group => (!query.provider || group.providerId === query.provider) && (!query.consumer || group.consumer === query.consumer)
                 && (!query.state || group.lifecycle === query.state)
                 && (query.broken !== 'true' || group.brokenCount > 0)
                 && (!bounds.search || [group.label, group.consumerLabel].some(value => value.toLocaleLowerCase().includes(bounds.search)))), bounds),
                 complete: refs.complete, providers: refs.providers };
+        },
+        async groupOverview(context, query = {}) {
+            const bounds = page(query), previewLimit = Number(query.previewLimit ?? 6);
+            if (!Number.isSafeInteger(previewLimit) || previewLimit < 1 || previewLimit > 6 || bounds.offset) fail('INVALID_REQUEST');
+            const { refs, ids } = await catalog(context);
+            const matches = refs.groups.filter(group => browsableGroup(group) && (!query.consumer || group.consumer === query.consumer)
+                && (!query.state || group.lifecycle === query.state)
+                && (query.broken !== 'true' || group.references.some(ref => !ids.has(ref.mediaRef.assetId)))
+                && (!bounds.search || [group.label, group.consumerLabel].some(value => value.toLocaleLowerCase().includes(bounds.search))));
+            return { complete: refs.complete, sections: refs.providers.map(provider => {
+                const groups = matches.filter(group => group.providerId === provider.id);
+                return { ...provider, total: provider.state === 'complete' ? groups.length : null,
+                    items: groups.slice(0, previewLimit).map(({ references, ...group }) => ({ ...group,
+                        brokenCount: references.filter(ref => !ids.has(ref.mediaRef.assetId)).length })) };
+            }) };
         },
         async detail(context, id, query = {}) {
             const bounds = page(query), { items, refs, byAsset } = await catalog(context);
@@ -124,11 +143,47 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
             return { asset, health: await media.health(context, id), references: slice(byAsset.get(id) || [], bounds), complete: refs.complete };
         },
         async group(context, providerId, groupId, query = {}) {
-            const bounds = page(query), { refs, ids } = await catalog(context);
+            return coordinate(context, async () => {
+            const bounds = page(query), { refs, ids, items } = await catalog(context);
             const group = refs.groups.find(item => item.providerId === providerId && item.id === groupId);
             if (!group) fail(refs.complete ? 'REFERENCE_NOT_FOUND' : 'REFERENCE_ANALYSIS_INCOMPLETE');
             const { references, ...info } = group;
-            return { group: info, references: slice(references.map(ref => ({ ...ref, broken: !ids.has(ref.mediaRef.assetId) })), bounds), complete: refs.complete };
+            const candidates = new Set(references.map(ref => ref.mediaRef.assetId));
+            const shared = new Set(refs.references.filter(ref => ref.providerId !== providerId || ref.groupId !== groupId).map(ref => ref.mediaRef.assetId));
+            const assets = new Map(items.map(asset => [asset.mediaRef.assetId, asset]));
+            return { group: { ...info, brokenCount: references.filter(ref => !ids.has(ref.mediaRef.assetId)).length }, references: slice(references.map(ref => ({ ...ref, broken: !ids.has(ref.mediaRef.assetId), asset: assets.get(ref.mediaRef.assetId) || null })), bounds), complete: refs.complete,
+                usage: { assetCount: candidates.size, exclusiveCount: refs.complete ? [...candidates].filter(id => !shared.has(id) && ids.has(id)).length : null,
+                    sharedCount: refs.complete ? [...candidates].filter(id => shared.has(id) && ids.has(id)).length : null,
+                    missingCount: [...candidates].filter(id => !ids.has(id)).length } };
+            });
+        },
+        async groupAction(context, body) {
+            if (!body || Object.keys(body).some(key => !['providerId', 'groupId', 'revision', 'action', 'hostId', 'cleanup'].includes(key))
+                || typeof body.providerId !== 'string' || typeof body.groupId !== 'string' || !body.groupId
+                || !Number.isSafeInteger(body.revision) || body.revision < 0 || typeof body.cleanup !== 'boolean'
+                || !['unlinkGroup', 'forgetGroup'].includes(body.action)) fail('INVALID_REQUEST');
+            const provider = providers.get(body.providerId);
+            if (!provider?.mutateGroup) fail('REFERENCE_ACTION_UNAVAILABLE');
+            // Consumer owns a single CAS commit and returns the exact removed candidates.
+            // It acquires the coordinator itself; no recursive lock or partial per-ref loop.
+            const removed = await provider.mutateGroup(context, body);
+            const assetIds = [...new Set(removed.assetIds)];
+            return coordinate(context, async () => {
+                const refs = body.cleanup ? await analysis(context) : null, protectedIds = new Set(refs?.references.map(ref => ref.mediaRef.assetId));
+                let deletedCount = 0, missingCount = 0, sharedCount = 0, failedCount = 0;
+                for (const id of assetIds) {
+                    try { await media.metadata(context, id); }
+                    catch (error) { if (error instanceof MediaFailure && error.code === 'MEDIA_NOT_FOUND') missingCount++; else failedCount++; continue; }
+                    if (!body.cleanup) continue;
+                    if (!refs.complete) { failedCount++; continue; }
+                    if (protectedIds.has(id)) { sharedCount++; continue; }
+                    try { await media.delete(context, id); deletedCount++; }
+                    catch (error) { if (error instanceof MediaFailure && error.code === 'MEDIA_NOT_FOUND') missingCount++; else failedCount++; }
+                }
+                return { revision: removed.revision, unlinkedCount: removed.unlinkedCount, deletedCount,
+                    retainedCount: assetIds.length - deletedCount - missingCount, missingCount, sharedCount, failedCount, cleanup: body.cleanup,
+                    ...(refs ? { complete: refs.complete } : {}) };
+            });
         },
         async action(context, body) {
             if (!body || Object.keys(body).some(key => !['providerId', 'groupId', 'referenceId', 'action', 'revision', 'hostId', 'displayName', 'mediaRef'].includes(key))

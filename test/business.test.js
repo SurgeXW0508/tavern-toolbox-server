@@ -6,7 +6,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { BusinessStore } from '../src/business/store.js';
 import { createBusiness } from '../src/business/index.js';
-import { emptyOutfit, validateOutfit } from '../src/business/outfit.js';
+import { emptyOutfit, validateOutfit, outfitReferenceGroups } from '../src/business/outfit.js';
 
 async function root(t) {
     const dir = await mkdtemp(path.join(tmpdir(), 'ttb-business-'));
@@ -97,4 +97,12 @@ test('storage schema failure preserves data and cold copy restores revision', as
     db.exec('PRAGMA user_version = 99'); db.close();
     const newer = new BusinessStore(restored, DatabaseSync);
     await assert.rejects(newer.initialize(), { code: 'BUSINESS_STORAGE_INCOMPATIBLE' });
+});
+
+test('Outfit Reference presentation supplies readable types without changing records, graph or media identity', () => {
+    const snapshot = { revision: 4, document: { assets: ['item', 'outfit', 'kit', 'wardrobe'].map(kind => ({ id: kind, kind, name: kind + ' name', scope: { label: 'global' }, mediaRef: { provider: 'server', assetId: '12345678-1234-4123-8123-123456789012' } })) } };
+    const original = structuredClone(snapshot), groups = outfitReferenceGroups(snapshot);
+    assert.deepEqual(groups.map(group => group.description), ['单品', '穿搭组合', '具体搭配', '场景组']);
+    assert.deepEqual(snapshot, original); assert(groups.every(group => group.references[0].mediaRef === snapshot.document.assets.find(asset => asset.id === group.id).mediaRef));
+    assert(groups.every(group => group.revision === 4 && group.references.length === 1));
 });
