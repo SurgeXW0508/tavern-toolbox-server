@@ -200,11 +200,13 @@ Optional capability `worldbook.core`, module `worldbook`, contract major 1 / min
 
 Catalog also accepts runtimeToken for temporary native-enabled intersection, or sourceId + uid to browse individual same-source Materials. Runtime batch offsets allow exact replay, reject modified replay and expire after 60 seconds; tokens are user/context bound and never persisted. Global Catalog filters before grouping by stable Source ID + UID and sorting/paging. Stable tie breakers include Column ID and Material ID. Dataset changes may change later pages; Tree continuation explicitly rejects a changed stamp.
 
+Tags retain input order across writes and queries.
+
 Card: id, columnId, parentId, order, revision, name, materialType, summary, tags, favorite, source `{sourceId,locator,uid,title}`, optional memberCount. Detail adds description. No enabled/mode/native body/keywords/media/cover fields are accepted or returned as business data. Source in writes is explicitly `{locator,uid,title}`, with a new/reused Source ID allocated by Server.
 
 Commands and required data:
 
-- column-create: profile `{title,description,icon:{type,value},accent,order?}`, materials? <=100 with explicit source and metadata.
+- column-create: profile `{title,description,icon:{type,value},accent,order?}`, materials? <=100 with explicit source and metadata, optional importFolderName <=80 (source grouping name, independent of profile.title).
 - column-update: id, revision, profile; column-delete: id, revision, structureRevision; column-reorder: id/revision/targetId/targetRevision. Builtin appearance/delete/reorder is forbidden.
 - material-create: columnId, parentId (null=root), structureRevision, material `{name,source,materialType?,summary?,description?,tags?,favorite?}`.
 - material-update: id, revision, fields (nonempty metadata/source subset).

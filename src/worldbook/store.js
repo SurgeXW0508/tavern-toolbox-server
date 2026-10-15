@@ -67,7 +67,7 @@ export class WorldbookStore {
                     CREATE INDEX material_favorite ON materials(favorite,column_id,position,id);
                     CREATE INDEX material_type ON materials(wb_fold(material_type),column_id,position,id);
                     CREATE TABLE material_details (material_id TEXT PRIMARY KEY REFERENCES materials(id) ON DELETE CASCADE, description TEXT NOT NULL, description_folded TEXT NOT NULL);
-                    CREATE TABLE tags (material_id TEXT NOT NULL REFERENCES materials(id) ON DELETE CASCADE, tag TEXT NOT NULL, PRIMARY KEY(material_id,tag));
+                    CREATE TABLE tags (material_id TEXT NOT NULL REFERENCES materials(id) ON DELETE CASCADE, tag TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(material_id,tag));
                     CREATE INDEX tag_value ON tags(wb_fold(tag),material_id);
                     CREATE TABLE commands (id TEXT PRIMARY KEY, issued_at INTEGER NOT NULL, digest TEXT NOT NULL, response TEXT NOT NULL);
                     CREATE INDEX command_expiry ON commands(issued_at); PRAGMA user_version=1;`);
@@ -87,6 +87,19 @@ export class WorldbookStore {
                     'commands',
                 ])
                     db.prepare(`SELECT * FROM ${table} LIMIT 0`).all();
+                const tagColumns = db
+                    .prepare('PRAGMA table_info(tags)')
+                    .all()
+                    .map((row) => row.name);
+                // Narrow additive upgrade of the earlier, unreleased v1 candidate.
+                // Preserve its observed alphabetical order and all business IDs.
+                if (tagColumns.join(',') === 'material_id,tag') {
+                    db.exec(`BEGIN IMMEDIATE;
+                        ALTER TABLE tags ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
+                        WITH ordered AS (SELECT material_id,tag,row_number() OVER(PARTITION BY material_id ORDER BY tag)-1 position FROM tags)
+                        UPDATE tags SET position=(SELECT position FROM ordered o WHERE o.material_id=tags.material_id AND o.tag=tags.tag);
+                        COMMIT;`);
+                } else if (tagColumns.join(',') !== 'material_id,tag,position') fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
             } catch {
                 fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
             }
@@ -158,7 +171,11 @@ export class WorldbookStore {
                 'SELECT s.id,s.locator,s.display_name FROM sources s WHERE EXISTS(SELECT 1 FROM materials m WHERE m.source_id=s.id) ORDER BY s.id LIMIT ? OFFSET ?',
                 LIMITS.sourcePageSize,
                 (page - 1) * LIMITS.sourcePageSize,
-            ).map((row) => ({ id: row.id, locator: row.locator, displayName: row.display_name })),
+            ).map((row) => ({
+                id: row.id,
+                locator: row.locator,
+                displayName: row.display_name,
+            })),
             total,
             nextPage: page * LIMITS.sourcePageSize < total ? page + 1 : null,
         };
@@ -173,10 +190,17 @@ export class WorldbookStore {
             materialType: row.material_type,
             summary: row.summary,
             ...(detail ? { description: row.description } : {}),
-            tags: this.all('SELECT tag FROM tags WHERE material_id=? ORDER BY tag', row.id).map((item) => item.tag),
+            tags: this.all('SELECT tag FROM tags WHERE material_id=? ORDER BY position,tag', row.id).map(
+                (item) => item.tag,
+            ),
             favorite: row.favorite === 1,
             revision: row.revision,
-            source: { sourceId: row.source_id, locator: row.locator, uid: row.entry_uid, title: row.entry_title },
+            source: {
+                sourceId: row.source_id,
+                locator: row.locator,
+                uid: row.entry_uid,
+                title: row.entry_title,
+            },
             ...(row.member_count ? { memberCount: row.member_count } : {}),
         };
     }
@@ -186,7 +210,10 @@ export class WorldbookStore {
             id(materialId),
         );
         if (!row) fail('WORLDBOOK_NOT_FOUND');
-        return { material: this.material(row, true), column: this.columnView(this.column(row.column_id)) };
+        return {
+            material: this.material(row, true),
+            column: this.columnView(this.column(row.column_id)),
+        };
     }
     ack(materialId) {
         const row = this.one('SELECT id,column_id,revision FROM materials WHERE id=?', materialId);
@@ -271,7 +298,13 @@ export class WorldbookStore {
                 order: row.position,
                 revision: row.revision,
                 ...(row.kind === 'material'
-                    ? { source: { sourceId: row.source_id, locator: row.locator, uid: row.entry_uid } }
+                    ? {
+                          source: {
+                              sourceId: row.source_id,
+                              locator: row.locator,
+                              uid: row.entry_uid,
+                          },
+                      }
                     : {}),
             })),
             nextCursor: more ? `${column.tree_revision}:${offset + LIMITS.treePageSize}` : null,
@@ -283,7 +316,8 @@ export class WorldbookStore {
     ensureSource(binding) {
         const existing = this.one('SELECT id FROM sources WHERE locator=?', binding.locator);
         if (existing) return existing.id;
-        this.capacity('sources', LIMITS.maxSources);
+        // Check the referenced-source budget after mutation and orphan cleanup;
+        // a rebind at capacity must be able to replace its final old reference.
         const sourceId = newId('source');
         this.run('INSERT INTO sources VALUES(?,?,?,1)', sourceId, binding.locator, binding.locator);
         return sourceId;
@@ -370,7 +404,9 @@ export class WorldbookStore {
             folded(value.description),
         );
         // Explicit column list prevents schema/placeholder drift from silently losing a placement.
-        for (const tag of value.tags) this.run('INSERT INTO tags VALUES(?,?)', materialId, tag);
+        value.tags.forEach((tag, position) =>
+            this.run('INSERT INTO tags(material_id,tag,position) VALUES(?,?,?)', materialId, tag, position),
+        );
         return materialId;
     }
     execute(body) {
@@ -397,6 +433,8 @@ export class WorldbookStore {
                 ).map((row) => row.id),
             );
             const result = this.mutate(body.action, body.data);
+            this.run('DELETE FROM sources WHERE NOT EXISTS(SELECT 1 FROM materials m WHERE m.source_id=sources.id)');
+            this.capacity('sources', LIMITS.maxSources, 0);
             result.replayed = false;
             result.columns = [...new Set([result.columnId, result.fromColumnId, result.column?.id].filter(Boolean))]
                 .filter((columnId) => this.one('SELECT id FROM columns WHERE id=?', columnId))
@@ -440,14 +478,19 @@ export class WorldbookStore {
                 if (row.position !== position)
                     this.run('UPDATE columns SET position=?,revision=revision+1 WHERE id=?', position, row.id);
             });
-            return { column: this.columnView(this.column(current.id)), summaryChanged: true };
+            return {
+                column: this.columnView(this.column(current.id)),
+                summaryChanged: true,
+            };
         }
         if (action === 'column-create') {
-            object(data, ['profile', 'materials'], ['profile']);
+            object(data, ['profile', 'materials', 'importFolderName'], ['profile']);
             const profile = appearance(data.profile),
                 rows = data.materials ?? [];
             if (!Array.isArray(rows) || rows.length > LIMITS.maxImportItems) fail('WORLDBOOK_VALIDATION');
             const materials = rows.map((row) => metadata(row));
+            const folderName =
+                data.importFolderName === undefined ? profile.title : text(data.importFolderName, LIMITS.maxName, true);
             this.capacity('columns', LIMITS.maxColumns);
             const columnId = newId('worldbook-user');
             this.run(
@@ -463,10 +506,13 @@ export class WorldbookStore {
             if (materials.length) {
                 this.capacity('folders', LIMITS.maxFolders);
                 folderId = newId('folder');
-                this.run('INSERT INTO folders VALUES(?,?,NULL,?,0,1)', folderId, columnId, profile.title);
+                this.run('INSERT INTO folders VALUES(?,?,NULL,?,0,1)', folderId, columnId, folderName);
             }
             materials.forEach((row, index) => this.insertMaterial(columnId, folderId, row, index));
-            return { column: this.columnView(this.column(columnId)), createdCount: materials.length };
+            return {
+                column: this.columnView(this.column(columnId)),
+                createdCount: materials.length,
+            };
         }
         if (action === 'column-update') {
             object(data, ['id', 'revision', 'profile'], ['id', 'revision', 'profile']);
@@ -502,7 +548,12 @@ export class WorldbookStore {
             const current = this.detail(data.id).material;
             if (current.revision !== integer(data.revision)) fail('WORLDBOOK_CONFLICT');
             const fields = metadata(data.fields, true),
-                mapping = { name: 'name', materialType: 'material_type', summary: 'summary', favorite: 'favorite' };
+                mapping = {
+                    name: 'name',
+                    materialType: 'material_type',
+                    summary: 'summary',
+                    favorite: 'favorite',
+                };
             for (const [key, column] of Object.entries(mapping))
                 if (Object.hasOwn(fields, key))
                     this.run(
@@ -519,7 +570,9 @@ export class WorldbookStore {
                 );
             if (fields.tags) {
                 this.run('DELETE FROM tags WHERE material_id=?', data.id);
-                for (const tag of fields.tags) this.run('INSERT INTO tags VALUES(?,?)', data.id, tag);
+                fields.tags.forEach((tag, position) =>
+                    this.run('INSERT INTO tags(material_id,tag,position) VALUES(?,?,?)', data.id, tag, position),
+                );
             }
             if (fields.source)
                 this.run(
@@ -566,7 +619,11 @@ export class WorldbookStore {
             if (action === 'material-delete') {
                 this.run('DELETE FROM materials WHERE id=?', current.id);
                 this.bump(current.columnId, true);
-                return { deleted: true, id: current.id, columnId: current.columnId };
+                return {
+                    deleted: true,
+                    id: current.id,
+                    columnId: current.columnId,
+                };
             }
             this.expectStructure(data.columnId, data.targetStructureRevision);
             this.parent(data.columnId, data.parentId);
@@ -699,7 +756,11 @@ export class WorldbookStore {
                 this.run('DELETE FROM folders WHERE id=?', current.id);
             }
             this.bump(current.column_id, true);
-            return { columnId: current.column_id, folderId: current.id, deleted: action === 'folder-delete' };
+            return {
+                columnId: current.column_id,
+                folderId: current.id,
+                deleted: action === 'folder-delete',
+            };
         }
         fail('WORLDBOOK_VALIDATION');
     }

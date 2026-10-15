@@ -33,10 +33,17 @@ async function fixture(t) {
         store.close();
         await rm(root, { recursive: true, force: true });
     });
-    return { root, store, send: (action, data, commandId = token()) => store.execute({ commandId, action, data }) };
+    return {
+        root,
+        store,
+        send: (action, data, commandId = token()) => store.execute({ commandId, action, data }),
+    };
 }
 function create(env, title = '栏目', rows = []) {
-    return env.send('column-create', { profile: profile(title), materials: rows }).column;
+    return env.send('column-create', {
+        profile: profile(title),
+        materials: rows,
+    }).column;
 }
 function page(store, params = {}) {
     return store.catalog(query(params));
@@ -59,7 +66,9 @@ test('Worldbook restart persistence, empty shared builtins, schema version and i
     const db = new DatabaseSync(dbFile);
     db.exec('PRAGMA user_version=2');
     db.close();
-    await assert.rejects(env.store.initialize(), { code: 'WORLDBOOK_SCHEMA_INCOMPATIBLE' });
+    await assert.rejects(env.store.initialize(), {
+        code: 'WORLDBOOK_SCHEMA_INCOMPATIBLE',
+    });
     const other = await fixture(t);
     assert.equal(page(other.store).total, 0);
 });
@@ -79,7 +88,12 @@ test('metadata CAS is per Material; stale writes do not alter saved content and 
         fields: { favorite: true, summary: '设备 B 的编辑' },
     });
     assert.throws(
-        () => env.send('material-update', { id: a.id, revision: a.revision, fields: { description: '过时覆盖' } }),
+        () =>
+            env.send('material-update', {
+                id: a.id,
+                revision: a.revision,
+                fields: { description: '过时覆盖' },
+            }),
         { code: 'WORLDBOOK_CONFLICT' },
     );
     let saved = env.store.detail(a.id).material;
@@ -88,14 +102,16 @@ test('metadata CAS is per Material; stale writes do not alter saved content and 
     env.send('material-update', {
         id: a.id,
         revision: saved.revision,
-        fields: { source: { locator: '新版书', uid: 9, title: 'Entry renamed' } },
+        fields: {
+            source: { locator: '新版书', uid: 9, title: 'Entry renamed' },
+        },
     });
     saved = env.store.detail(a.id).material;
     assert.equal(saved.id, a.id);
     assert.equal(saved.name, '自己的名称');
     assert.notEqual(saved.source.sourceId, a.source.sourceId);
     assert.equal(saved.description, '设备 A 的编辑');
-    assert.deepEqual(saved.tags, ['乙', '甲'].sort());
+    assert.deepEqual(saved.tags, ['甲', '乙']);
 });
 
 test('column ordering is atomic with tied positions, independent of Material edits, and stale target edits conflict', async (t) => {
@@ -117,7 +133,11 @@ test('column ordering is atomic with tied positions, independent of Material edi
         [target.id, a.id, ...before.slice(2).map((row) => row.id)],
     );
     const m = page(env.store, { columnId: a.id }).items[0];
-    env.send('material-update', { id: m.id, revision: m.revision, fields: { summary: '独立编辑' } });
+    env.send('material-update', {
+        id: m.id,
+        revision: m.revision,
+        fields: { summary: '独立编辑' },
+    });
     assert.throws(
         () =>
             env.send('column-reorder', {
@@ -170,7 +190,10 @@ test('Move preserves ID, Copy creates an independent ID, structural CAS, deletes
     assert.notEqual(copy.id, m.id);
     env.store.close();
     await env.store.initialize();
-    assert.deepEqual(env.send('material-copy', body, copyCommand), { ...copy, replayed: true });
+    assert.deepEqual(env.send('material-copy', body, copyCommand), {
+        ...copy,
+        replayed: true,
+    });
     assert.equal(env.store.detail(copy.id).material.source.sourceId, m.source.sourceId);
     assert.equal(env.store.one('SELECT COUNT(*) n FROM sources').n, 1);
     const copied = env.store.detail(copy.id);
@@ -179,7 +202,9 @@ test('Move preserves ID, Copy creates an independent ID, structural CAS, deletes
         revision: copied.material.revision,
         structureRevision: copied.column.structureRevision,
     });
-    assert.throws(() => env.store.detail(copy.id), { code: 'WORLDBOOK_NOT_FOUND' });
+    assert.throws(() => env.store.detail(copy.id), {
+        code: 'WORLDBOOK_NOT_FOUND',
+    });
     assert.ok(env.store.detail(m.id));
     assert.equal(env.store.one('SELECT COUNT(*) n FROM sources').n, 1);
 });
@@ -193,7 +218,11 @@ test('legal maximal Unicode card/detail/tree/summary and command acknowledgments
                 summary: '摘'.repeat(160),
                 description: '文'.repeat(20000),
                 tags: Array.from({ length: 16 }, (_, n) => String(n) + '标'.repeat(30)),
-                source: { locator: String(i) + '书'.repeat(235), uid: i, title: '题'.repeat(200) },
+                source: {
+                    locator: String(i) + '书'.repeat(235),
+                    uid: i,
+                    title: '题'.repeat(200),
+                },
             }),
         );
     const result = env.send('column-create', {
@@ -211,7 +240,12 @@ test('legal maximal Unicode card/detail/tree/summary and command acknowledgments
         assert.ok(Buffer.byteLength(JSON.stringify(response)) + 1024 < LIMITS.maxResponseBytes);
     const builtin = env.store.column('xp-worldbook');
     assert.throws(
-        () => env.send('column-update', { id: builtin.id, revision: builtin.revision, profile: profile('替换内置') }),
+        () =>
+            env.send('column-update', {
+                id: builtin.id,
+                revision: builtin.revision,
+                profile: profile('替换内置'),
+            }),
         { code: 'WORLDBOOK_BUILTIN' },
     );
     assert.throws(
@@ -241,7 +275,10 @@ test('legal maximal Unicode card/detail/tree/summary and command acknowledgments
     const deleted = env.send('material-delete', data, retry);
     env.store.close();
     await env.store.initialize();
-    assert.deepEqual(env.send('material-delete', data, retry), { ...deleted, replayed: true });
+    assert.deepEqual(env.send('material-delete', data, retry), {
+        ...deleted,
+        replayed: true,
+    });
 });
 
 test('durable command receipt makes response-lost create retry safe, detects modified retry and fails old tokens', async (t) => {
@@ -251,7 +288,10 @@ test('durable command receipt makes response-lost create retry safe, detects mod
     const first = env.send('column-create', data, commandId);
     env.store.close();
     await env.store.initialize();
-    assert.deepEqual(env.send('column-create', data, commandId), { ...first, replayed: true });
+    assert.deepEqual(env.send('column-create', data, commandId), {
+        ...first,
+        replayed: true,
+    });
     assert.equal(page(env.store).total, 1);
     assert.throws(() => env.send('column-create', { ...data, profile: profile('不同') }, commandId), {
         code: 'WORLDBOOK_IDEMPOTENCY_MISMATCH',
@@ -289,7 +329,11 @@ test('SQL query includes Chinese, Latin/numbers, tag AND and exact type/favorite
     assert.equal(page(env.store, { tags, type: '规则' }).total, 0);
     assert.equal(page(env.store, { tags, type: '角色', favorite: 'true' }).total, 13);
     const latin = create(env, 'Latin', [
-        material(900, { name: 'ÉCHO ABC123', materialType: ' WÉAPON ', tags: [' DrÁGon ', '甲'] }),
+        material(900, {
+            name: 'ÉCHO ABC123',
+            materialType: ' WÉAPON ',
+            tags: [' DrÁGon ', '甲'],
+        }),
     ]);
     assert.equal(
         page(env.store, {
@@ -300,9 +344,15 @@ test('SQL query includes Chinese, Latin/numbers, tag AND and exact type/favorite
         }).total,
         1,
     );
-    assert.throws(() => query({ tags: '["甲","甲"]' }), { code: 'WORLDBOOK_VALIDATION' });
-    assert.throws(() => query({ q: 'x'.repeat(161) }), { code: 'WORLDBOOK_VALIDATION' });
-    assert.throws(() => query({ sort: 'recent' }), { code: 'WORLDBOOK_VALIDATION' });
+    assert.throws(() => query({ tags: '["甲","甲"]' }), {
+        code: 'WORLDBOOK_VALIDATION',
+    });
+    assert.throws(() => query({ q: 'x'.repeat(161) }), {
+        code: 'WORLDBOOK_VALIDATION',
+    });
+    assert.throws(() => query({ sort: 'recent' }), {
+        code: 'WORLDBOOK_VALIDATION',
+    });
 });
 
 test('tree pages are lightweight, parent-before-child and revision-bound; a folder is expanded without N+1 reads', async (t) => {
@@ -323,8 +373,14 @@ test('tree pages are lightweight, parent-before-child and revision-bound; a fold
     const seen = new Set(first.items.map((row) => row.id));
     assert.ok(second.items.every((row) => seen.has(row.parentId)));
     const row = page(env.store, { columnId: col.id }).items[0];
-    env.send('material-update', { id: row.id, revision: row.revision, fields: { name: '新名称' } });
-    assert.throws(() => env.store.tree(col.id, { stamp, offset }), { code: 'WORLDBOOK_TREE_CHANGED' });
+    env.send('material-update', {
+        id: row.id,
+        revision: row.revision,
+        fields: { name: '新名称' },
+    });
+    assert.throws(() => env.store.tree(col.id, { stamp, offset }), {
+        code: 'WORLDBOOK_TREE_CHANGED',
+    });
     assert.ok(Buffer.byteLength(JSON.stringify(first)) < LIMITS.maxResponseBytes);
 });
 
@@ -429,11 +485,17 @@ test('runtime query batches are temporary, isolated, bounded and intersect the f
     await service.command(a, {
         commandId: token(),
         action: 'column-create',
-        data: { profile: profile('A'), materials: Array.from({ length: 80 }, (_, i) => material(i)) },
+        data: {
+            profile: profile('A'),
+            materials: Array.from({ length: 80 }, (_, i) => material(i)),
+        },
     });
     const session = await service.runtime(a, {
         offset: 0,
-        bindings: Array.from({ length: 80 }, (_, i) => ({ locator: '非 Active 书', uid: i })),
+        bindings: Array.from({ length: 80 }, (_, i) => ({
+            locator: '非 Active 书',
+            uid: i,
+        })),
         complete: true,
     });
     const result = await service.read(a, 'catalog', query({ runtimeToken: session.token }));
@@ -447,9 +509,20 @@ test('runtime query batches are temporary, isolated, bounded and intersect the f
     });
     assert.equal(earlier.complete, true);
     assert.equal((await service.read(a, 'catalog', query({ runtimeToken: session.token }))).total, 80);
-    const empty = await service.runtime(a, { offset: 0, bindings: [], complete: true });
+    const empty = await service.runtime(a, {
+        offset: 0,
+        bindings: [],
+        complete: true,
+    });
     assert.equal(
-        (await service.runtime(a, { token: empty.token, offset: 0, bindings: [], complete: true })).complete,
+        (
+            await service.runtime(a, {
+                token: empty.token,
+                offset: 0,
+                bindings: [],
+                complete: true,
+            })
+        ).complete,
         true,
     );
     assert.equal((await service.read(b, 'catalog', query({}))).total, 0);
@@ -464,4 +537,171 @@ test('runtime query batches are temporary, isolated, bounded and intersect the f
     const caps = service.definition.capabilities[0];
     assert.equal(caps.id, 'worldbook.core');
     assert.equal(caps.operationAvailability().command.available, true);
+});
+
+test('unreferenced Sources are cleaned transactionally; shared references and uncertain-command receipts remain valid', async (t) => {
+    const env = await fixture(t),
+        col = create(env, 'A', [material(1), material(2)]);
+    const [a, b] = page(env.store, { columnId: col.id }).items;
+    const sourceId = a.source.sourceId;
+    env.send('material-update', {
+        id: a.id,
+        revision: 1,
+        fields: { source: { locator: 'B', uid: 1, title: 'B' } },
+    });
+    assert.ok(env.store.one('SELECT id FROM sources WHERE id=?', sourceId), 'shared original Source survives');
+    const commandId = token();
+    const removed = env.send(
+        'material-delete',
+        { id: b.id, revision: 1, structureRevision: col.structureRevision },
+        commandId,
+    );
+    assert.deepEqual(removed.sourceIdsRemoved, [sourceId]);
+    assert.equal(env.store.one('SELECT id FROM sources WHERE id=?', sourceId), undefined);
+    env.store.close();
+    await env.store.initialize();
+    assert.equal(
+        env.send('material-delete', { id: b.id, revision: 1, structureRevision: col.structureRevision }, commandId)
+            .replayed,
+        true,
+    );
+    for (let i = 0; i < 270; i++) {
+        const current = env.store.detail(a.id).material;
+        env.send('material-update', {
+            id: a.id,
+            revision: current.revision,
+            fields: {
+                source: { locator: `替换 ${i}`, uid: 1, title: '选中条目' },
+            },
+        });
+        assert.equal(env.store.one('SELECT COUNT(*) n FROM sources').n, 1);
+    }
+    const current = env.store.detail(a.id);
+    env.send('column-delete', {
+        id: col.id,
+        revision: current.column.revision,
+        structureRevision: current.column.structureRevision,
+    });
+    assert.equal(env.store.one('SELECT COUNT(*) n FROM sources').n, 0);
+});
+
+test('Source capacity checks the final referenced set, allowing replacement at capacity and rolling back overflow', async (t) => {
+    const env = await fixture(t);
+    for (let offset = 0; offset < LIMITS.maxSources; offset += 100) {
+        create(
+            env,
+            String(offset),
+            Array.from({ length: Math.min(100, LIMITS.maxSources - offset) }, (_, i) =>
+                material(offset + i, {
+                    source: {
+                        locator: `书 ${offset + i}`,
+                        uid: 1,
+                        title: 'Entry',
+                    },
+                }),
+            ),
+        );
+    }
+    const row = page(env.store).items[0];
+    const saved = env.send('material-update', {
+        id: row.id,
+        revision: row.revision,
+        fields: { source: { locator: '替换书', uid: 1, title: 'Entry' } },
+    });
+    assert.equal(saved.sourcesAdded.length, 1);
+    assert.equal(saved.sourceIdsRemoved.length, 1);
+    assert.equal(env.store.one('SELECT COUNT(*) n FROM sources').n, LIMITS.maxSources);
+    const before = env.store.summary().columns.find((c) => c.id === row.columnId);
+    assert.throws(
+        () =>
+            env.send('material-create', {
+                columnId: row.columnId,
+                parentId: null,
+                structureRevision: before.structureRevision,
+                material: material(999, {
+                    source: { locator: '超出书', uid: 1, title: 'Entry' },
+                }),
+            }),
+        { code: 'WORLDBOOK_CAPACITY' },
+    );
+    assert.equal(env.store.one('SELECT COUNT(*) n FROM sources').n, LIMITS.maxSources);
+    assert.equal(env.store.one('SELECT id FROM sources WHERE locator=?', '超出书'), undefined);
+    assert.equal(page(env.store).total, LIMITS.maxSources);
+    assert.deepEqual(env.store.columnView(env.store.column(row.columnId)), before);
+});
+
+test('custom import title preserves Source folder name; tags retain entered order across update, copy and restart', async (t) => {
+    const env = await fixture(t);
+    const col = env.send('column-create', {
+        profile: profile('命运编织'),
+        importFolderName: 'B',
+        materials: [
+            material(1, {
+                tags: ['Z', 'A', 'M'],
+                source: { locator: 'B', uid: 1, title: 'B Entry' },
+            }),
+        ],
+    }).column;
+    let row = page(env.store, { columnId: col.id }).items[0];
+    assert.equal(env.store.tree(col.id).items[0].name, 'B');
+    assert.equal(col.title, '命运编织');
+    assert.deepEqual(row.tags, ['Z', 'A', 'M']);
+    env.send('material-update', {
+        id: row.id,
+        revision: row.revision,
+        fields: { tags: ['M', 'Z', 'A'] },
+    });
+    row = env.store.detail(row.id).material;
+    const copy = env.send('material-copy', {
+        id: row.id,
+        revision: row.revision,
+        structureRevision: col.structureRevision,
+        columnId: col.id,
+        parentId: null,
+        targetStructureRevision: col.structureRevision,
+    });
+    env.store.close();
+    await env.store.initialize();
+    assert.deepEqual(
+        page(env.store, { columnId: col.id }).items.map((item) => item.tags),
+        [
+            ['M', 'Z', 'A'],
+            ['M', 'Z', 'A'],
+        ],
+    );
+    assert.deepEqual(env.store.detail(copy.id).material.tags, ['M', 'Z', 'A']);
+    assert.equal(
+        page(env.store, { tags: JSON.stringify(['a', 'z']) }).total,
+        1,
+        'filtering/grouping is independent of presentation order',
+    );
+});
+
+test('earlier v1 candidate tag table upgrades additively without changing business identities or restarting user data', async (t) => {
+    const env = await fixture(t),
+        col = create(env, '旧候选', [material(1, { tags: ['Z', 'A', 'M'] })]);
+    const row = page(env.store).items[0];
+    env.store.db.exec(
+        'DROP TABLE tags; CREATE TABLE tags(material_id TEXT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,tag TEXT NOT NULL,PRIMARY KEY(material_id,tag)); CREATE INDEX tag_value ON tags(wb_fold(tag),material_id)',
+    );
+    for (const tag of ['Z', 'A', 'M']) env.store.run('INSERT INTO tags VALUES(?,?)', row.id, tag);
+    env.store.close();
+    await env.store.initialize();
+    assert.equal(env.store.one('PRAGMA user_version').user_version, 1);
+    assert.equal(env.store.detail(row.id).column.id, col.id);
+    assert.equal(env.store.detail(row.id).material.source.sourceId, row.source.sourceId);
+    assert.deepEqual(
+        env.store.detail(row.id).material.tags,
+        ['A', 'M', 'Z'],
+        'old candidate observed order is retained',
+    );
+    env.send('material-update', {
+        id: row.id,
+        revision: row.revision,
+        fields: { tags: ['Z', 'A', 'M'] },
+    });
+    env.store.close();
+    await env.store.initialize();
+    assert.deepEqual(env.store.detail(row.id).material.tags, ['Z', 'A', 'M']);
+    assert.equal(env.store.detail(row.id).material.description, '详细内容 Deep body 1');
 });

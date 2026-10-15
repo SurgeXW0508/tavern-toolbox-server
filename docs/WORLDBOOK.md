@@ -16,7 +16,7 @@ restarts. This stage does not implement a backup product; with ST stopped,
 preserve the complete `worldbook-v1` directory for an operator backup. A code
 rollback does not roll back this database.
 
-Schema is explicitly `PRAGMA user_version=1`. A future version, nonempty
+Schema is explicitly `PRAGMA user_version=1`. The recognized earlier unreleased v1 two-column Tag table receives an atomic additive position column/backfill, retaining its previously displayed alphabetical order and all entity IDs/data; subsequent writes preserve entered order. No other unknown table shape is upgraded. A future version, nonempty
 unversioned database or missing required tables fails closed; startup never
 resets existing records. The two product builtins (`xp-worldbook`,
 `fate-worldbook`) are initialized only with a new schema, empty of Materials.
@@ -29,15 +29,14 @@ Their appearance/deletion is protected; their contents remain editable.
 | materials | Stable ID, Column/parent placement, card metadata, Source ID + UID + last-known title, entity revision |
 | material_details | The Material's original long Description and derived Unicode-folded search text, separate from card/structure rows |
 | sources | Stable opaque ID, exact ST worldbook locator and display metadata; no Entry/runtime copy |
-| tags | Indexed bounded tags per Material |
+| tags | Indexed bounded tags per Material, with explicit presentation position |
 | commands | Expiring durable command digest and minimal acknowledgment, never a Material Description copy |
 
 Same-source Materials are independent cards. Move preserves Material ID; Copy
 creates a new one. Rename and explicit source rebind preserve ID. Source locator
 is used to find/reuse a Source row; the Source's identity is its persistent ID,
 not its display name. Advanced rename/repair/detached lifecycle is deferred.
-Unreferenced Source identities remain in the database; only referenced Sources
-are returned for frontend tracking. Source capacity includes retained identities.
+Source identities survive while referenced. The command transaction removes rows after their last Material reference disappears, then checks the 256-Source final-set budget. Shared Sources remain; rebind at capacity can replace its last old reference; overflow rolls back the entire command. Receipts are independent of Source rows and still resolve uncertain retries. Earlier orphan rows are reclaimed by the next successful command.
 
 ST exclusively owns Entry body, keywords, existence, Enabled and Mode. The Server
 does not read/write ST worldbooks, store their runtime or create placeholder
@@ -60,7 +59,7 @@ unchanged. The wire surface is listed in [Protocol](../protocol/README.md).
 | Home Summary | 32 Columns/page, maximum 128 Columns; counts in SQL, no Material Detail or Tree |
 | Catalog | 20 cards/page, no Description; exact Column/type, tags AND, favorite, Chinese/Latin case-insensitive/numeric substring search |
 | Global aggregation | Filter, group Source ID + UID, stable Column/order/ID tie sorting, then paginate; Column/explicit source lookup returns individual Materials |
-| Tree | 50 lightweight nodes/page, parent-before-child; `treeRevision:offset` continuation rejects changed trees; no long text or per-folder request fan-out |
+| Tree | 50 lightweight nodes/response; view auto-loads at most 4 chunks (200 nodes), then explicitly appends the same preorder prefix; parent-before-child; `treeRevision:offset` continuation rejects changed trees; no long text or per-folder request fan-out |
 | Detail | One exact Material, including Description; frontend keeps at most 8 recent Details in memory |
 | Referenced Sources | 50/page, maximum 256 retained Source identities; no Entry data |
 | Runtime lookup | Temporary session: 100 locator/UID inputs/batch, maximum 8192; 60 seconds, 2/user and 8 globally, bound to user/context |
@@ -73,7 +72,7 @@ appears in the command's source delta before frontend native refresh. Explicit
 refresh and newly encountered cross-device Sources reconcile the referenced
 Source summary; tracking uses exact replacement, not permanent append.
 
-Runtime sessions exist only in memory. Catalog intersects a materialized
+Runtime generation waits for the frontend Lorebook index loadedTrackingVersion to match the current Provider tracked set, including the first query after a Local cache. Ordinary paging reuses that index. Token caching uses a conservative local monotonic TTL; an expired-token Catalog read rebuilds/requeries once, without retrying business commands. Runtime sessions exist only in memory. Catalog intersects a materialized
 temporary JSON-input relation with indexed Source/Material identities before
 grouping; it does not parse all runtime inputs again for every Material. The
 frontend never downloads the full Server Catalog to calculate native counts.
@@ -128,6 +127,10 @@ comparison, then the user explicitly decides whether to save again. Structural
 conflicts require fresh structure/user action. Create forms can refresh the
 structure while retaining inputs. Abort/disconnect does not imply a server
 rollback; use the original command receipt to resolve uncertainty.
+
+Column imports accept an explicit importFolderName independently of the Column title, preserving the Wizard Source grouping. Tag input order survives create/update/copy/restart; SQL filtering and grouping remain independent of order.
+
+Frontend operation errors (capacity, command expiry, runtime expiry, busy, CSRF) remain local to that action. Provider/transport/schema failure and negotiated read/write availability are independent; first Local-to-Server selection preflights compatible basic read operations before committing the device preference. Already selected Server outages never fall back.
 
 Error codes distinguish validation, conflict, not-found, builtin protection,
 capacity, expired/mismatched commands, clock skew, expired runtime, changed Tree,
