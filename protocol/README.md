@@ -1,6 +1,6 @@
 # Protocol 1.0 — Core discovery
 
-Current Server v0.8.0 / Frontend v0.51.0 retains Protocol 1.0. Phase 8 adds `audio.library` (see its contract below). The existing Phase 7 public contracts remain [`network.remoteAudio`](#additive-phase-7-networkremoteaudio-contract-10), [`preferences.audioRouting`](#additive-phase-7-preferencesaudiorouting-contract-10), [`audio.sources`](#additive-phase-7-audiosources-contract-10) and [`audio.assets`](#additive-phase-7-audioassets-and-source-binding-operations-10), each with schema/fixture. Selected Source `restore` belongs to audio.sources and returns sensitive metadata only through protected explicit POST.
+Formal Server v0.9.0 / Frontend v0.52.0 retains Protocol 1.0; the current paired 10B stage adds independent Worldbook Core. Phase 8 added `audio.library` (see its contract below). The existing Phase 7 public contracts remain [`network.remoteAudio`](#additive-phase-7-networkremoteaudio-contract-10), [`preferences.audioRouting`](#additive-phase-7-preferencesaudiorouting-contract-10), [`audio.sources`](#additive-phase-7-audiosources-contract-10) and [`audio.assets`](#additive-phase-7-audioassets-and-source-binding-operations-10), each with schema/fixture. Selected Source `restore` belongs to audio.sources and returns sensitive metadata only through protected explicit POST.
 
 This directory holds the fixed language-neutral Core fixture and JSON Schema for the two success envelopes. Both are public wire contracts, not internal registry objects. The frontend keeps an independent copy of the fixture in `tests/fixtures/`. On a protocol change, update both fixtures deliberately and keep an older supported version's fixture during the compatibility window.
 
@@ -183,3 +183,35 @@ The shared Audio read owner retains at most 2 snapshots per user / 8 globally fo
 Filesystem checks occur outside the Source/Asset write coordinator. Capture and final validation use the existing coordinator; an overlapping write causes a conflict rather than a partial result. Complete `playbackPool` always performs a fresh category scan and retains no browse snapshot. Direct reads, stream opening, integrity checks, bindings and deletion retain their live validation and locking. Cached `orphan` counts must never authorize deletion; cleanup still confirms the exact requested IDs against current Source bindings. No persisted schema or global protocol-version change is involved.
 
 Outfit Reference Group description is Consumer-owned display context: 单品, 穿搭组合, 具体搭配 or 场景组. This replaces internal kind strings only in the existing presentation field; Business documents, graph ownership, MediaRef and mutation contracts remain unchanged. Generic clients display the text without parsing Outfit schemas or building a parent tree.
+
+## Worldbook Core 1.0
+
+Optional capability `worldbook.core`, module `worldbook`, contract major 1 / minor 0, schema 1. Independent operation availability: `summary`, `catalog`, `tree`, `detail`, `sources`, `runtime`, `command`. All routes are relative to the authenticated plugin base and require `X-TTB-Protocol: 1.0` / current `X-TTB-Context`; POST additionally requires trusted Origin and ST CSRF. Core success/failure envelope, response <=128 KiB, POST body <=256 KiB. See [Worldbook semantics and limits](../docs/WORLDBOOK.md).
+
+| Method / route | Input / response data |
+| --- | --- |
+| GET `/v1/worldbook/summary?page=1` | schemaVersion, columns <=32 (ID/appearance/order/revisions/materialCount), total/page/pageSize/nextPage |
+| GET `/v1/worldbook/catalog` | Optional columnId, q <=160, exact type, tags as JSON string array (AND), favorite=true, page; returns items <=20 without Description, referenced columns <=20, total/page/pageSize/pageCount |
+| GET `/v1/worldbook/columns/:id/tree?cursor=…` | items <=50: kind/id/name/parentId/order/revision, Material Source ID/locator/UID; column summary, nextCursor=null or treeRevision:offset |
+| GET `/v1/worldbook/materials/:id` | Exact material with Description plus its column summary |
+| GET `/v1/worldbook/sources?page=1` | Referenced source metadata <=50: id/locator/displayName; total/nextPage |
+| POST `/v1/worldbook/runtime` | `{token?,offset,bindings:[{locator,uid}],complete}` <=100/batch; returns token/received/complete/expiresAt |
+| POST `/v1/worldbook/commands` | `{commandId,action,data}`; confirmed minimal acknowledgment, affected columns <=2, sourcesAdded/sourceIdsRemoved, replayed; column reorder also sets summaryChanged |
+
+Catalog also accepts runtimeToken for temporary native-enabled intersection, or sourceId + uid to browse individual same-source Materials. Runtime batch offsets allow exact replay, reject modified replay and expire after 60 seconds; tokens are user/context bound and never persisted. Global Catalog filters before grouping by stable Source ID + UID and sorting/paging. Stable tie breakers include Column ID and Material ID. Dataset changes may change later pages; Tree continuation explicitly rejects a changed stamp.
+
+Card: id, columnId, parentId, order, revision, name, materialType, summary, tags, favorite, source `{sourceId,locator,uid,title}`, optional memberCount. Detail adds description. No enabled/mode/native body/keywords/media/cover fields are accepted or returned as business data. Source in writes is explicitly `{locator,uid,title}`, with a new/reused Source ID allocated by Server.
+
+Commands and required data:
+
+- column-create: profile `{title,description,icon:{type,value},accent,order?}`, materials? <=100 with explicit source and metadata.
+- column-update: id, revision, profile; column-delete: id, revision, structureRevision; column-reorder: id/revision/targetId/targetRevision. Builtin appearance/delete/reorder is forbidden.
+- material-create: columnId, parentId (null=root), structureRevision, material `{name,source,materialType?,summary?,description?,tags?,favorite?}`.
+- material-update: id, revision, fields (nonempty metadata/source subset).
+- material-copy / material-move: id, revision, source structureRevision, target columnId/parentId/targetStructureRevision, beforeId?; material-delete: id, revision, structureRevision.
+- folder-create: columnId, parentId, structureRevision, name; folder-update: id, revision, structureRevision, name.
+- folder-move: id, revision, structureRevision, parentId, beforeId? (within its Column); folder-delete: id, revision, structureRevision, deleteContents (false lifts children; true deletes subtree contents).
+
+`commandId`: 13-digit milliseconds + hyphen + UUID, <=5 minutes in the future and <=7 days old. Receipt/digest and entity writes commit atomically. Same ID/content replays the original acknowledgment after restart; changed content fails WORLDBOOK_IDEMPOTENCY_MISMATCH, expired IDs fail WORLDBOOK_COMMAND_EXPIRED, future clock skew fails WORLDBOOK_CLOCK_SKEW. Abort is not rollback. Clients retain uncertain IDs and explicitly retry original content rather than invent a new Create/Copy. A historical receipt returns replayed=true; the client refreshes bounded Column/Source summaries to observe current state instead of applying old membership deltas. Uncertain forms keep their original command and locked inputs until confirmed.
+
+Typed errors: WORLDBOOK_VALIDATION (400), WORLDBOOK_NOT_FOUND (404), WORLDBOOK_CONFLICT / WORLDBOOK_TREE_CHANGED / command mismatch/expiry/runtime expiry/clock skew (409), WORLDBOOK_BUILTIN / CSRF_REJECTED (403), RESOURCE_BUSY (429), schema/capacity/capability/connection failure (503). Unavailable write operations do not disable valid reads. Logs never include private command/query payloads. Existing Business, Media, Audio, Localization and Governance schemas are unchanged.

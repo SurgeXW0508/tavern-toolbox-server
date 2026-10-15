@@ -2,6 +2,10 @@
 
 Current architecture, scalability findings, lifecycle and future development rules: [Engineering](docs/ENGINEERING.md). Public contracts: [Protocol](protocol/README.md). Phase acceptance files are historical evidence; their old branch instructions and temporary non-goals do not override the current baseline.
 
+## Phase 10B — Worldbook Core candidate
+
+Active paired stage: `stage/phase-10-worldbook-server`, based on Server main `79b2a116b27772a408532ced12a8e8b233c8aeea`. Additive `worldbook.core` 1.0 owns independent per-ST-user Column/Folder/Material/Source metadata, bounded queries and atomic revision/idempotency-protected commands. It does not store or mutate native ST Entry content/runtime, migrate Local data, or integrate Media. See [Worldbook ownership, limits, persistence and gate](docs/WORLDBOOK.md) and [wire contract](protocol/README.md#worldbook-core-10). The candidate awaits independent review and Desktop/Phone/NAS smoke; no release bump, merge or 10C work.
+
 ## Current release v0.9.0 — Phase 9 Image Domain
 
 Paired with Frontend v0.52.0 / Protocol 1.0. Phase 9 is complete and released. The user accepted the core desktop Image workflows on SillyTavern 1.19.0 Docker / NAS; complete physical-phone coverage and large real-NAS catalog benchmarks are not claimed. See [Phase 9 acceptance](PHASE-9-ACCEPTANCE.md), [Protocol](protocol/README.md) and [Engineering](docs/ENGINEERING.md).
