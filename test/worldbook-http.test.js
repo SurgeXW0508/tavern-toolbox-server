@@ -124,3 +124,20 @@ test('Worldbook capability keeps readable surfaces when write Origin policy is u
     assert.equal(cap.operations.find((row) => row.id === 'command').available, false);
     assert.equal((await env.request('/v1/worldbook/summary')).status, 200);
 });
+
+test('observed Runtime HTTP transfer accepts enabled=false, drives bounded Roll/Discovery and exact-state plans without persisting or logging ST data',async t=>{
+ const env=await fixture(t);
+ const created=await env.request('/v1/worldbook/commands',{data:command('column-create',{profile:{title:'范围',description:'',icon:{type:'builtin',value:'book'},accent:'#123456'},materials:Array.from({length:60},(_,i)=>({name:`资料 ${i}`,description:'PRIVATE_CONTENT',source:{locator:'PRIVATE_SOURCE',uid:i,title:`Entry ${i}`}}))})});assert.equal(created.status,200);
+ const bindings=Array.from({length:101},(_,i)=>({locator:'PRIVATE_SOURCE',uid:i,enabled:i%5===0}));
+ const first=await env.request('/v1/worldbook/runtime',{data:{mode:'observed',unknownBooks:[],offset:0,bindings:bindings.slice(0,100),complete:false}});assert.equal(first.status,200);
+ const last=await env.request('/v1/worldbook/runtime',{data:{mode:'observed',token:first.body.data.token,offset:100,bindings:bindings.slice(100),complete:true}});assert.equal(last.status,200);const runtimeToken=last.body.data.token;
+ const enabled=await env.request('/v1/worldbook/catalog?status=enabled&runtimeToken='+runtimeToken);assert.equal(enabled.body.data.total,12);
+ const roll=await env.request('/v1/worldbook/features',{data:{kind:'roll',scope:{columnId:created.body.data.column.id},runtimeToken,limit:20}});assert.equal(roll.status,200);assert.equal(roll.body.data.items.length,20);assert.equal(roll.body.data.scopeTotal,48);assert(roll.body.data.items.every(row=>!('description'in row)&&row.source.uid%5!==0));
+ const next=await env.request('/v1/worldbook/features',{data:{kind:'roll',sessionId:roll.body.data.sessionId,cursor:roll.body.data.nextCursor,runtimeToken,limit:20}});assert.equal(next.status,200);assert.equal(next.body.data.items.length,20);assert(!next.body.data.items.some(row=>roll.body.data.items.some(previous=>previous.source.uid===row.source.uid)));
+ const discovery=await env.request('/v1/worldbook/features',{data:{kind:'discovery',runtimeToken,scope:{}}});assert.equal(discovery.status,200);assert.equal(discovery.body.data.candidateCount,20);
+ assert.equal((await env.request('/v1/worldbook/features',{data:{kind:'discovery',runtimeToken,aiKey:'PRIVATE_AI_KEY'}})).status,400);
+ const preset=await env.request('/v1/worldbook/commands',{data:command('preset-create',{name:'精确',columnId:created.body.data.column.id})});assert.equal(preset.status,200);
+ const missing=await env.request('/v1/worldbook/runtime',{data:{mode:'observed',unknownBooks:[],offset:0,bindings:bindings.slice(0,1),complete:true}});assert.equal(missing.status,200);
+ const plan=await env.request('/v1/worldbook/features',{data:{kind:'plan',presetId:preset.body.data.presetId,revision:1,runtimeToken:missing.body.data.token}});assert.equal(plan.status,409);assert.equal(plan.body.error.code,'WORLDBOOK_RUNTIME_UNAVAILABLE');
+ assert.doesNotMatch(JSON.stringify(env.logs),/PRIVATE_SOURCE|PRIVATE_CONTENT|PRIVATE_AI_KEY/);
+});

@@ -42,6 +42,7 @@ export function attachWorldbookRoutes(router, { worldbook, registry, config, sen
                 fail(feature?.reasonCode || cap?.reasonCode || 'WORLDBOOK_UNAVAILABLE');
             let result;
             if (operation === 'command') result = await worldbook.command(context, await body(req));
+            else if (operation === 'features') result = await worldbook.read(context,'features',await body(req));
             else if (operation === 'runtime') result = await worldbook.runtime(context, await body(req));
             else {
                 let input;
@@ -80,11 +81,15 @@ export function attachWorldbookRoutes(router, { worldbook, registry, config, sen
                           ? 429
                           : [
                                   'WORLDBOOK_CONFLICT',
+                                  'WORLDBOOK_DUPLICATE',
+                                  'WORLDBOOK_SOURCE_COLLISION',
                                   'WORLDBOOK_TREE_CHANGED',
                                   'WORLDBOOK_IDEMPOTENCY_MISMATCH',
                                   'WORLDBOOK_COMMAND_EXPIRED',
                                   'WORLDBOOK_CLOCK_SKEW',
                                   'WORLDBOOK_RUNTIME_EXPIRED',
+                                  'WORLDBOOK_RUNTIME_UNAVAILABLE',
+                                  'WORLDBOOK_SESSION_EXPIRED',
                                   'PROTOCOL_INCOMPATIBLE',
                                   'CONTEXT_CHANGED',
                               ].includes(code)
@@ -124,5 +129,6 @@ export function attachWorldbookRoutes(router, { worldbook, registry, config, sen
     router.get('/v1/worldbook/columns/:id/tree', route('tree'));
     router.get('/v1/worldbook/materials/:id', route('detail'));
     router.post('/v1/worldbook/runtime', route('runtime'));
+    router.post('/v1/worldbook/features', route('features'));
     router.post('/v1/worldbook/commands', route('command'));
 }

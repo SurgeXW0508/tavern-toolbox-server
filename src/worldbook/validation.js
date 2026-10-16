@@ -30,6 +30,7 @@ export const LIMITS = Object.freeze({
     maxResponseBytes: 131072,
     runtimeBatchSize: 100,
     maxRuntimeBindings: 8192,
+    maxObservedBindings: 65536,
     runtimeTtlMs: 60000,
     commandTtlMs: 7 * 86400000,
     maxCommandReceipts: 16384,
@@ -137,7 +138,7 @@ export function page(value = '1') {
     return integer(Number(value), 1, 1000000);
 }
 export function query(value = {}) {
-    object(value, ['columnId', 'q', 'type', 'tags', 'favorite', 'page', 'runtimeToken', 'sourceId', 'uid']);
+    object(value, ['columnId', 'q', 'type', 'tags', 'favorite', 'page', 'runtimeToken', 'sourceId', 'uid', 'status', 'sort']);
     const result = {
         columnId: value.columnId ? id(value.columnId) : '',
         q: folded(text(value.q ?? '', LIMITS.maxQuery)),
@@ -154,6 +155,10 @@ export function query(value = {}) {
     }
     if (value.favorite !== undefined && !['true', 'false'].includes(value.favorite)) fail('WORLDBOOK_VALIDATION');
     result.favorite = value.favorite === 'true';
+    if (value.status !== undefined && !['all','enabled','disabled','detached','unknown'].includes(value.status)) fail('WORLDBOOK_VALIDATION');
+    if (value.sort !== undefined && !['default','recent','frequent'].includes(value.sort)) fail('WORLDBOOK_VALIDATION');
+    if (value.status) result.status = value.status;
+    if (value.sort) result.sort = value.sort;
     if (value.runtimeToken) result.runtimeToken = id(value.runtimeToken);
     if (value.uid !== undefined && !value.sourceId) fail('WORLDBOOK_VALIDATION');
     if (value.sourceId) {

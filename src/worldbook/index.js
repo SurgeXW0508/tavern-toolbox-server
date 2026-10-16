@@ -1,5 +1,6 @@
+import { WorldbookCandidateSessions } from './candidate-sessions.js';
 import { WorldbookStore } from './store.js';
-import { LIMITS, WorldbookFailure, fail, object, integer, source, id, newId } from './validation.js';
+import { LIMITS, WorldbookFailure, fail, object, integer, source, id, newId, text } from './validation.js';
 export { WorldbookFailure, LIMITS } from './validation.js';
 
 // Only Worldbook business data. ST runtime query inputs expire in memory and
@@ -8,6 +9,7 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
     const stores = new Map(),
         failures = new Map(),
         runtime = new Map();
+    const selections = new WorldbookCandidateSessions(now);
     let DatabaseSync,
         stopped = false;
     async function store(context) {
@@ -27,7 +29,10 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
             return item;
         } catch (error) {
             stores.delete(context.userRoot);
-            failures.set(context.userRoot, error instanceof WorldbookFailure ? error.code : 'WORLDBOOK_UNAVAILABLE');
+            failures.set(
+                context.userRoot,
+                error instanceof WorldbookFailure ? error.code : 'WORLDBOOK_UNAVAILABLE',
+            );
             throw error;
         }
     }
@@ -37,9 +42,14 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
     function runtimeInput(context, token) {
         expire();
         const value = runtime.get(id(token));
-        if (!value || !value.complete || value.contextId !== context.contextId || value.userRoot !== context.userRoot)
+        if (
+            !value ||
+            !value.complete ||
+            value.contextId !== context.contextId ||
+            value.userRoot !== context.userRoot
+        )
             fail('WORLDBOOK_RUNTIME_EXPIRED');
-        return value.bindings;
+        return { bindings: value.bindings, observed: value.observed, unknownBooks: value.unknownBooks || [] };
     }
     return {
         definition: {
@@ -50,7 +60,16 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
                 {
                     id: 'worldbook.core',
                     contract: { major: 1, minMinor: 0, maxMinor: 0 },
-                    operations: ['summary', 'catalog', 'tree', 'detail', 'sources', 'runtime', 'command'].map((id) => ({
+                    operations: [
+                        'summary',
+                        'catalog',
+                        'tree',
+                        'detail',
+                        'sources',
+                        'runtime',
+                        'command',
+                        'features',
+                    ].map((id) => ({
                         id,
                         available: true,
                     })),
@@ -67,6 +86,8 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
                     limits: LIMITS,
                     constraints: {
                         schemaVersion: 1,
+                        storageSchemaVersion: 2,
+                        featureVersion: 1,
                         scope: 'st-user',
                         storage: 'sqlite',
                         identity: 'independent-material-and-source',
@@ -93,6 +114,7 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
             shutdown: async () => {
                 stopped = true;
                 runtime.clear();
+                selections.clear();
                 for (const pending of stores.values()) {
                     try {
                         (await pending).close();
@@ -104,22 +126,51 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
         store,
         async read(context, operation, input) {
             const target = await store(context);
+            if (operation === 'features') {
+                const transient = input.runtimeToken ? runtimeInput(context, input.runtimeToken) : null;
+                if (['roll', 'discovery', 'session-end'].includes(input.kind))
+                    return selections.read(context, target, input, transient);
+                return target.features.read(input, transient);
+            }
             if (operation === 'summary') return target.summary(input.page);
             if (operation === 'sources') return target.sources(input.page);
             if (operation === 'detail') return target.detail(input.id);
             if (operation === 'tree') return target.tree(input.id, input);
             if (operation === 'catalog')
-                return target.catalog(input, input.runtimeToken ? runtimeInput(context, input.runtimeToken) : null);
+                return target.catalog(
+                    input,
+                    input.runtimeToken ? runtimeInput(context, input.runtimeToken) : null,
+                );
             fail('WORLDBOOK_VALIDATION');
         },
         async command(context, value) {
-            return (await store(context)).execute(value);
+            return (await store(context)).execute(value, {
+                getRuntime: (token) => runtimeInput(context, token),
+            });
         },
         async runtime(context, value) {
             await store(context);
             expire();
-            object(value, ['token', 'offset', 'bindings', 'complete'], ['offset', 'bindings', 'complete']);
-            integer(value.offset, 0, LIMITS.maxRuntimeBindings);
+            object(
+                value,
+                ['token', 'offset', 'bindings', 'complete', 'mode', 'unknownBooks'],
+                ['offset', 'bindings', 'complete'],
+            );
+            if (value.mode !== undefined && value.mode !== 'observed') fail('WORLDBOOK_VALIDATION');
+            const observed = value.mode === 'observed',
+                maxBindings = observed ? LIMITS.maxObservedBindings : LIMITS.maxRuntimeBindings;
+            if (
+                value.unknownBooks !== undefined &&
+                (!observed ||
+                    value.offset !== 0 ||
+                    !Array.isArray(value.unknownBooks) ||
+                    value.unknownBooks.length > LIMITS.maxSources)
+            )
+                fail('WORLDBOOK_VALIDATION');
+            const unknownBooks = [
+                ...new Set((value.unknownBooks || []).map((name) => text(name, 240, true))),
+            ];
+            integer(value.offset, 0, maxBindings);
             if (
                 !Array.isArray(value.bindings) ||
                 value.bindings.length > LIMITS.runtimeBatchSize ||
@@ -127,9 +178,18 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
             )
                 fail('WORLDBOOK_VALIDATION');
             const bindings = value.bindings.map((item) => {
-                object(item, ['locator', 'uid'], ['locator', 'uid']);
-                const clean = source({ ...item, title: 'runtime' });
-                return { locator: clean.locator, uid: clean.uid };
+                object(
+                    item,
+                    ['locator', 'uid', ...(observed ? ['enabled'] : [])],
+                    ['locator', 'uid', ...(observed ? ['enabled'] : [])],
+                );
+                if (observed && typeof item.enabled !== 'boolean') fail('WORLDBOOK_VALIDATION');
+                const clean = source({ locator: item.locator, uid: item.uid, title: 'runtime' });
+                return {
+                    locator: clean.locator,
+                    uid: clean.uid,
+                    ...(observed ? { enabled: item.enabled } : {}),
+                };
             });
             let entry,
                 token = value.token;
@@ -137,6 +197,12 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
                 entry = runtime.get(id(token));
                 if (!entry || entry.contextId !== context.contextId || entry.userRoot !== context.userRoot)
                     fail('WORLDBOOK_RUNTIME_EXPIRED');
+                if (
+                    entry.observed !== observed ||
+                    (value.unknownBooks &&
+                        JSON.stringify(unknownBooks) !== JSON.stringify(entry.unknownBooks))
+                )
+                    fail('WORLDBOOK_VALIDATION');
             } else {
                 if (value.offset !== 0) fail('WORLDBOOK_VALIDATION');
                 const owned = [...runtime.entries()].filter(([, row]) => row.userRoot === context.userRoot);
@@ -147,6 +213,9 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
                     contextId: context.contextId,
                     userRoot: context.userRoot,
                     bindings: [],
+                    observed,
+                    unknownBooks,
+                    locatorStrings: new Map(),
                     expiresAt: now() + LIMITS.runtimeTtlMs,
                     complete: false,
                 };
@@ -164,14 +233,24 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
                 if (
                     entry.complete ||
                     value.offset !== entry.bindings.length ||
-                    entry.bindings.length + bindings.length > LIMITS.maxRuntimeBindings
+                    entry.bindings.length + bindings.length > maxBindings
                 )
                     fail('WORLDBOOK_VALIDATION');
-                entry.bindings.push(...bindings);
+                for (const binding of bindings) {
+                    if (!entry.locatorStrings.has(binding.locator))
+                        entry.locatorStrings.set(binding.locator, binding.locator);
+                    binding.locator = entry.locatorStrings.get(binding.locator);
+                    entry.bindings.push(binding);
+                }
             }
             entry.complete ||= value.complete;
             runtime.set(token, entry);
-            return { token, received: entry.bindings.length, complete: entry.complete, expiresAt: entry.expiresAt };
+            return {
+                token,
+                received: entry.bindings.length,
+                complete: entry.complete,
+                expiresAt: entry.expiresAt,
+            };
         },
     };
 }

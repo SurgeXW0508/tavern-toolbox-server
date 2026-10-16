@@ -1,4 +1,4 @@
-# Worldbook Core — Phase 10B candidate
+# Worldbook — Phase 10C candidate
 
 `worldbook.core` contract 1.0 is an independent business module, not an Outfit
 collection or a Media/Reference Provider. Protocol remains 1.0; release versions
@@ -16,7 +16,7 @@ restarts. This stage does not implement a backup product; with ST stopped,
 preserve the complete `worldbook-v1` directory for an operator backup. A code
 rollback does not roll back this database.
 
-Schema is explicitly `PRAGMA user_version=1`. The recognized earlier unreleased v1 two-column Tag table receives an atomic additive position column/backfill, retaining its previously displayed alphabetical order and all entity IDs/data; subsequent writes preserve entered order. No other unknown table shape is upgraded. A future version, nonempty
+Schema is explicitly `PRAGMA user_version=2`. Opening schema 1 upgrades it in one SQLite transaction, preserving all existing identities and metadata. Failure rolls back; no reset/replacement is performed. The recognized earlier unreleased v1 two-column Tag table receives an atomic additive position column/backfill, retaining its previously displayed alphabetical order and all entity IDs/data; subsequent writes preserve entered order. No other unknown table shape is upgraded. A future version, nonempty
 unversioned database or missing required tables fails closed; startup never
 resets existing records. The two product builtins (`xp-worldbook`,
 `fate-worldbook`) are initialized only with a new schema, empty of Materials.
@@ -35,14 +35,13 @@ Their appearance/deletion is protected; their contents remain editable.
 Same-source Materials are independent cards. Move preserves Material ID; Copy
 creates a new one. Rename and explicit source rebind preserve ID. Source locator
 is used to find/reuse a Source row; the Source's identity is its persistent ID,
-not its display name. Advanced rename/repair/detached lifecycle is deferred.
+not its display name. Binding lifecycle is active/detached; read failure remains transient unknown. See the 10C rules below.
 Source identities survive while referenced. The command transaction removes rows after their last Material reference disappears, then checks the 256-Source final-set budget. Shared Sources remain; rebind at capacity can replace its last old reference; overflow rolls back the entire command. Receipts are independent of Source rows and still resolve uncertain retries. Earlier orphan rows are reclaimed by the next successful command.
 
 ST exclusively owns Entry body, keywords, existence, Enabled and Mode. The Server
 does not read/write ST worldbooks, store their runtime or create placeholder
 Entries. Explicit imports and manual rebinding identify a real selected locator
-and UID. Last-known title is descriptive, not the Material identity. Native UID
-reuse/repair semantics beyond this explicit binding belong to 10C.
+and UID. Last-known title is descriptive, not the Material identity. A detached Binding never revives from UID reuse; explicit repair or continuity confirmation is required.
 
 ## Query and resource bounds
 
@@ -62,7 +61,7 @@ unchanged. The wire surface is listed in [Protocol](../protocol/README.md).
 | Tree | 50 lightweight nodes/response; view auto-loads at most 4 chunks (200 nodes), then explicitly appends the same preorder prefix; parent-before-child; `treeRevision:offset` continuation rejects changed trees; no long text or per-folder request fan-out |
 | Detail | One exact Material, including Description; frontend keeps at most 8 recent Details in memory |
 | Referenced Sources | 50/page, maximum 256 retained Source identities; no Entry data |
-| Runtime lookup | Temporary session: 100 locator/UID inputs/batch, maximum 8192; 60 seconds, 2/user and 8 globally, bound to user/context |
+| Runtime lookup | Temporary session: 100 locator/UID inputs/batch, maximum 8192 legacy enabled bindings or 65536 observed UID/enabled inputs; 60 seconds, 2/user and 8 globally, bound to user/context |
 | Commands | 256 KiB request, 100 import Materials/command, maximum 50,000 Materials and 10,000 Folders/user, Folder depth 16 |
 
 Names are at most 80 UTF-16 units, type 60, Summary 160, Description 20,000,
@@ -76,7 +75,7 @@ Runtime generation waits for the frontend Lorebook index loadedTrackingVersion t
 temporary JSON-input relation with indexed Source/Material identities before
 grouping; it does not parse all runtime inputs again for every Material. The
 frontend never downloads the full Server Catalog to calculate native counts.
-Unsupported derived filters/sorts are absent in 10B.
+Catalog now supports persisted detached and runtime enabled/disabled/unknown filters plus SQL recent/frequent sorting.
 
 Bounded response does not mean O(pageSize) database work. SQL window grouping and
 substring search may scan the matching scope; Description search reads long
@@ -138,31 +137,77 @@ schema incompatibility, unavailable capability/connection and Origin/CSRF failur
 Logs contain request ID, operation, duration and code, not payloads, descriptions,
 summaries, tag arrays or original Source names.
 
-## Candidate and remaining gate
+## 10C domain and query contracts
 
-Both repositories use `stage/phase-10-worldbook-server`. Do not merge, bump a
-release version, tag/release or start 10C before independent review and the
-Desktop/Phone/NAS gate. Frontend selection is device-local; switching cancels old
-requests, clears Provider caches, replaces tracked books and returns Home. Local
-and Server never migrate, sync or fall back to each other. Existing Local Cover,
-Backup, Preset, Roll and Discovery keep their original data paths. Server does
-not expose those capabilities or load their Local data.
+Schema 2 adds wb_bindings, wb_usage, wb_relation_versions, wb_companions,
+wb_presets and wb_preset_members, with FK/triggers for atomic move/delete cleanup.
+The original worldbook-v1 location and Core 1.0 wire shape remain; capability
+constraints advertise storageSchemaVersion=2 and featureVersion=1. Metadata,
+Binding, Companion and Preset revisions are independent. Usage uses SQL increment
+and the existing durable receipt, not an absolute client-supplied count.
 
-Automated Store/HTTP coverage includes restart, per-user isolation, explicit
-Source, stable identities, query bounds/grouping/filter/search, tree continuation,
-entity/structure conflicts, atomic rollback, folder delete intents, copy/create/
-delete retry after restart, maximal Unicode payloads and runtime expiry. Paired
-frontend tests and real Chromium/HTTP fixtures cover isolation, source switching,
-late requests, rapid input, draft conflict/retry, read-only/failure, native source
-tracking and responsive presentation. These are code-side evidence. Local full
-check encounters the sandbox's existing abstract Unix socket policy-lock EPERM;
-diagnostic selection is not a full-suite pass. CI runs the unchanged complete
-check and privacy audit.
+Binding observations contain expected Material/Source/locator/UID/revision.
+Stale evidence is skipped, unknown cannot be persisted, title updates do not
+change custom Material names. Whole-book rebind keeps Source ID, rejects a target
+owned by another Source, marks an explicit repair intent, then frontend native
+observations classify every affected binding. Read failures leave repair pending.
 
-Real-device gate: carry forward the seven short 10A polish checks, then verify
-independent empty Server data, non-active-worldbook import, Material edit,
-Folder/Move/Copy, search/page/detail, browser refresh and Server/container restart,
-same ST account on Phone, distinct-Material concurrent edits, same-Material stale
-conflict preserving input, temporary outage with no fallback, recovery and
-repeated Local/Server isolation. 10C retains Companion/Presets/Roll/Discovery/
-Usage/Recent/Frequent/Missing and Source Lifecycle; 10D retains Cover/Media.
+Companion uses Material IDs, max 64 outgoing, no self/duplicate; copy outgoing
+only, move preserves, delete cleans both directions. Presets use Material IDs,
+max 1024 entities, independent entity CAS; membership changes <=100 add/remove.
+Column plans are exact-state logical Source/UID projections with selected ON
+precedence. Global plans are additive. Detached members remain stored and are
+reported skipped. An exact plan rejects incomplete observed runtime before any
+ST change. Capture-current uses server SQL and a transient runtime token;
+receipt replay works even after the runtime token expires.
+
+POST /v1/worldbook/features is a protected read operation, not a business writer.
+All inputs have strict field whitelists. Bounds: bindings 50 compact records with
+keyset continuation; relationship picker 20/page including SQL-projected draft
+add/remove before selected pagination; Preset list 20/page; facets 50/page;
+Preset execution plan 50/page; classification search 10 hits plus <=160 ancestors.
+No Description enters bindings, relationship or candidate windows.
+
+Observed runtime adds mode=observed, enabled booleans and a first-batch unknownBooks
+list. It is user/context bound, in memory only, 100 inputs/batch, 60-second TTL.
+No SQLite enabled/mode/body copy exists. Normal 10B enabled-only runtime remains
+accepted. Random Roll/Discovery windows require complete observed runtime;
+SQL filters and groups logical sources before seeded keyset traversal. Each
+session stores only seed/scope/cursor and the last bounded reply, <=20 cards,
+15-minute TTL, 4/user and 16 global. No full browser/server session ID pool.
+Discovery returns lightweight metadata and <=16 folder names, never Description.
+Server rejects AI keys/chat/prompt fields; frontend owns the single AI request.
+
+Bounds describe response/memory growth, not constant execution time. Substring
+search, facets/counts and seeded ordering may scan the relevant SQL scope.
+Native ST reads remain whole-book. No claim about NAS/phone latency follows from
+cloud tests.
+
+## Candidate, upgrade and remaining gate
+
+Both repositories use stage/phase-10-worldbook-server. Keep frontend/server paired;
+no main merge, release bump or 10D before review and real-device acceptance.
+
+For a NAS update: stop ST/container; back up each ST user's complete
+`tavern-toolbox-server/worldbook-v1` directory outside the code checkout; update
+this stage branch with a fast-forward pull and run the normal dependency install
+for the deployed Node 24 runtime, preserve the ST data volume, then restart.
+Import the paired frontend candidate with its stable script ID using overwrite.
+Opening an old Worldbook database performs the schema 1→2 transaction; never
+remove the database to make an upgrade succeed. Code rollback alone cannot make
+10B understand schema 2: stop ST and restore the complete pre-upgrade directory
+when an explicit rollback is required.
+
+Automated tests cover migration rollback/reopen, CAS, relationship/preset cleanup,
+two SQLite connections incrementing Usage, idempotent capture/retry, lifecycle
+and stale evidence, Source collision, bounded searches and candidate traversal,
+HTTP observed-runtime batching, privacy and Unicode response budgets. Frontend
+Chromium tests use this real HTTP/SQLite implementation with synthetic native ST
+and AI; they do not replace real-user data/device evidence.
+
+The remaining real-device gate is migration with existing data/restart,
+PC↔Phone identity/data persistence, Companion order/partial failure, Column vs
+Global Preset semantics/CAS, Usage transitions/recent/frequent, rename/missing/
+unreadable/UID reuse/explicit repairs, beyond-page Roll/no repeats, Discovery
+single request/window/confirmation, classification ancestor search, unavailable
+Server without Local fallback and retry recovery. See paired frontend TESTING.md.

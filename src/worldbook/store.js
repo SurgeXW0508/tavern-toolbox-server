@@ -1,3 +1,5 @@
+import { migrateWorldbookFeatures } from './features-schema.js';
+import { WorldbookFeatures, FEATURE_COMMANDS } from './features.js';
 import path from 'node:path';
 import { mkdir, lstat, chmod } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -40,14 +42,22 @@ export class WorldbookStore {
         const db = new this.DatabaseSync(file);
         try {
             db.function('wb_fold', { deterministic: true }, folded);
+            db.function('wb_rank', { deterministic: true }, (key, seed) =>
+                createHash('sha256')
+                    .update(String(seed) + ':' + String(key))
+                    .digest('hex')
+                    .slice(0, 12),
+            );
             await chmod(file, 0o600);
             db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=1000; PRAGMA synchronous=FULL;');
             const version = db.prepare('PRAGMA user_version').get().user_version;
-            if (version !== 0 && version !== 1) fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
+            if (version !== 0 && version !== 1 && version !== 2) fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
             if (version === 0) {
                 if (
                     db
-                        .prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+                        .prepare(
+                            "SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+                        )
                         .get().n
                 )
                     fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
@@ -73,7 +83,14 @@ export class WorldbookStore {
                     CREATE INDEX command_expiry ON commands(issued_at); PRAGMA user_version=1;`);
                 const insert = db.prepare('INSERT INTO columns VALUES (?,?,?,?,?,?,1,1,1,1)');
                 for (const row of BUILTINS)
-                    insert.run(row.id, row.title, row.description, JSON.stringify(row.icon), row.accent, row.order);
+                    insert.run(
+                        row.id,
+                        row.title,
+                        row.description,
+                        JSON.stringify(row.icon),
+                        row.accent,
+                        row.order,
+                    );
                 db.exec('COMMIT');
             }
             try {
@@ -99,13 +116,20 @@ export class WorldbookStore {
                         WITH ordered AS (SELECT material_id,tag,row_number() OVER(PARTITION BY material_id ORDER BY tag)-1 position FROM tags)
                         UPDATE tags SET position=(SELECT position FROM ordered o WHERE o.material_id=tags.material_id AND o.tag=tags.tag);
                         COMMIT;`);
-                } else if (tagColumns.join(',') !== 'material_id,tag,position') fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
+                } else if (tagColumns.join(',') !== 'material_id,tag,position')
+                    fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
             } catch {
                 fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
             }
-            if (BUILTINS.some((row) => db.prepare('SELECT builtin FROM columns WHERE id=?').get(row.id)?.builtin !== 1))
+            if (
+                BUILTINS.some(
+                    (row) => db.prepare('SELECT builtin FROM columns WHERE id=?').get(row.id)?.builtin !== 1,
+                )
+            )
                 fail('WORLDBOOK_DATA_INVALID');
+            migrateWorldbookFeatures(db);
             this.db = db;
+            this.features = new WorldbookFeatures(this);
         } catch (error) {
             try {
                 db.exec('ROLLBACK');
@@ -168,13 +192,14 @@ export class WorldbookStore {
         ).n;
         return {
             items: this.all(
-                'SELECT s.id,s.locator,s.display_name FROM sources s WHERE EXISTS(SELECT 1 FROM materials m WHERE m.source_id=s.id) ORDER BY s.id LIMIT ? OFFSET ?',
+                'SELECT s.id,s.locator,s.display_name,s.revision FROM sources s WHERE EXISTS(SELECT 1 FROM materials m WHERE m.source_id=s.id) ORDER BY s.id LIMIT ? OFFSET ?',
                 LIMITS.sourcePageSize,
                 (page - 1) * LIMITS.sourcePageSize,
             ).map((row) => ({
                 id: row.id,
                 locator: row.locator,
                 displayName: row.display_name,
+                revision: row.revision,
             })),
             total,
             nextPage: page * LIMITS.sourcePageSize < total ? page + 1 : null,
@@ -195,6 +220,7 @@ export class WorldbookStore {
             ),
             favorite: row.favorite === 1,
             revision: row.revision,
+            ...this.features.state(row.id),
             source: {
                 sourceId: row.source_id,
                 locator: row.locator,
@@ -202,6 +228,7 @@ export class WorldbookStore {
                 title: row.entry_title,
             },
             ...(row.member_count ? { memberCount: row.member_count } : {}),
+            ...(row.rank_value ? { rank: row.rank_value } : {}),
         };
     }
     detail(materialId) {
@@ -228,6 +255,7 @@ export class WorldbookStore {
         if (query.columnId) this.column(query.columnId);
         const clauses = [],
             args = [];
+        if (query.empty) clauses.push('0');
         if (query.columnId) {
             clauses.push('m.column_id=?');
             args.push(query.columnId);
@@ -251,25 +279,86 @@ export class WorldbookStore {
             clauses.push('m.source_id=? AND m.entry_uid=?');
             args.push(query.sourceId, query.uid);
         }
-        if (runtime) args.unshift(JSON.stringify(runtime));
-        const grouping = !query.columnId && !query.sourceId;
-        const base = `WITH ${runtime ? "runtime_bindings AS MATERIALIZED(SELECT DISTINCT json_extract(value,'$.locator') locator,json_extract(value,'$.uid') uid FROM json_each(?))," : ''} selected AS (SELECT m.id,m.column_id,m.parent_id,m.position,m.name,m.material_type,m.summary,m.favorite,m.source_id,m.entry_uid,m.entry_title,m.revision,s.locator,c.position column_order,
+        if (query.excludeId) {
+            clauses.push('m.id<>?');
+            args.push(id(query.excludeId));
+        }
+        if (query.member) {
+            const companion = query.member.kind === 'companion';
+            const exists = companion
+                ? 'EXISTS(SELECT 1 FROM wb_companions rel WHERE rel.subject_id=? AND rel.companion_id=m.id)'
+                : 'EXISTS(SELECT 1 FROM wb_preset_members rel WHERE rel.preset_id=? AND rel.material_id=m.id)';
+            clauses.push(
+                `((${exists} OR m.id IN(SELECT value FROM json_each(?))) AND m.id NOT IN(SELECT value FROM json_each(?)))`,
+            );
+            args.push(
+                query.member.id,
+                JSON.stringify(query.draftAdd ?? []),
+                JSON.stringify(query.draftRemove ?? []),
+            );
+        }
+        const observed = runtime && !Array.isArray(runtime) && runtime.observed;
+        if (query.status === 'detached') clauses.push("b.lifecycle='detached'");
+        else if (runtime) {
+            clauses.push("b.lifecycle='active'");
+            const unknown = 'EXISTS(SELECT 1 FROM unknown_books ub WHERE ub.locator=s.locator)';
+            if (query.status === 'unknown')
+                clauses.push(`(${unknown}${observed ? ' OR r.uid IS NULL' : ''})`);
+            else {
+                clauses.push(`NOT (${unknown})`);
+                clauses.push(
+                    query.status === 'disabled'
+                        ? observed
+                            ? 'r.uid IS NOT NULL AND r.enabled=0'
+                            : 'r.uid IS NULL'
+                        : 'r.uid IS NOT NULL AND r.enabled=1',
+                );
+            }
+        } else if (['enabled', 'disabled', 'unknown'].includes(query.status))
+            fail('WORLDBOOK_RUNTIME_EXPIRED');
+        if (runtime)
+            args.unshift(
+                JSON.stringify(Array.isArray(runtime) ? runtime : runtime.bindings),
+                JSON.stringify(runtime.unknownBooks || []),
+            );
+        if (query.seed && !/^[a-f0-9]{24,40}$/.test(query.seed)) fail('WORLDBOOK_VALIDATION');
+        const grouping = query.grouping ?? (!query.columnId && !query.sourceId);
+        const aggregateUsage = grouping && ['recent', 'frequent'].includes(query.sort);
+        const base = `WITH ${runtime ? "runtime_bindings AS MATERIALIZED(SELECT DISTINCT json_extract(value,'$.locator') locator,json_extract(value,'$.uid') uid,coalesce(json_extract(value,'$.enabled'),1) enabled FROM json_each(?)),unknown_books AS(SELECT value locator FROM json_each(?))," : ''} selected AS (SELECT m.id,m.column_id,m.parent_id,m.position,m.name,m.material_type,m.summary,m.favorite,m.source_id,m.entry_uid,m.entry_title,m.revision,s.locator,c.position column_order,u.enable_count,u.last_enabled_at,${aggregateUsage ? 'SUM(u.enable_count) OVER(PARTITION BY m.source_id,m.entry_uid)' : 'u.enable_count'} group_enable_count,${aggregateUsage ? 'MAX(u.last_enabled_at) OVER(PARTITION BY m.source_id,m.entry_uid)' : 'u.last_enabled_at'} group_last_enabled_at,${query.seed ? `wb_rank(m.source_id||':'||m.entry_uid,'${query.seed}')` : "''"} rank_value,
             ROW_NUMBER() OVER(PARTITION BY ${grouping ? 'm.source_id,m.entry_uid' : 'm.id'} ORDER BY c.position,c.id,m.position,m.id) member_number,
             COUNT(*) OVER(PARTITION BY ${grouping ? 'm.source_id,m.entry_uid' : 'm.id'}) member_count
-            FROM materials m JOIN sources s ON s.id=m.source_id JOIN columns c ON c.id=m.column_id ${runtime ? 'JOIN runtime_bindings r ON r.locator=s.locator AND r.uid=m.entry_uid' : ''} ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''})`;
+            FROM materials m JOIN sources s ON s.id=m.source_id JOIN columns c ON c.id=m.column_id JOIN wb_bindings b ON b.material_id=m.id JOIN wb_usage u ON u.material_id=m.id ${runtime ? 'LEFT JOIN runtime_bindings r ON r.locator=s.locator AND r.uid=m.entry_uid' : ''} ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''})`;
         const total = this.one(base + ' SELECT COUNT(*) n FROM selected WHERE member_number=1', ...args).n;
+        const tail =
+            query.seed && query.afterRank
+                ? ' AND (rank_value>? OR (rank_value=? AND (source_id>? OR (source_id=? AND entry_uid>?))))'
+                : '';
+        const tailArgs = tail
+            ? [query.afterRank, query.afterRank, query.afterSource, query.afterSource, query.afterUid]
+            : [];
+        const sort = query.seed
+            ? 'rank_value,source_id,entry_uid'
+            : `${query.sort === 'recent' ? 'group_last_enabled_at DESC,' : query.sort === 'frequent' ? 'group_enable_count DESC,group_last_enabled_at DESC,' : ''}column_order,column_id,position,id`;
         const rows = this.all(
-            base +
-                ' SELECT * FROM selected WHERE member_number=1 ORDER BY column_order,column_id,position,id LIMIT ? OFFSET ?',
+            base + ` SELECT * FROM selected WHERE member_number=1${tail} ORDER BY ${sort} LIMIT ? OFFSET ?`,
             ...args,
-            LIMITS.pageSize,
-            (query.page - 1) * LIMITS.pageSize,
+            ...tailArgs,
+            query.limit ?? LIMITS.pageSize,
+            query.seed ? 0 : (query.page - 1) * LIMITS.pageSize,
         );
+        const remaining = query.seed
+            ? this.one(
+                  base + ` SELECT COUNT(*) n FROM selected WHERE member_number=1${tail}`,
+                  ...args,
+                  ...tailArgs,
+              ).n
+            : total;
         const columns = [...new Set(rows.map((row) => row.column_id))].map((columnId) =>
             this.columnView(this.column(columnId)),
         );
         return {
             items: rows.map((row) => this.material(row)),
+            ...(query.seed ? { remaining } : {}),
             columns,
             total,
             page: query.page,
@@ -299,6 +388,7 @@ export class WorldbookStore {
                 revision: row.revision,
                 ...(row.kind === 'material'
                     ? {
+                          ...this.features.state(row.id),
                           source: {
                               sourceId: row.source_id,
                               locator: row.locator,
@@ -355,7 +445,8 @@ export class WorldbookStore {
             'SELECT id,position FROM folders WHERE column_id=? AND parent_id IS ? UNION ALL SELECT id,position FROM materials WHERE column_id=? AND parent_id IS ?';
         if (!beforeId)
             return integer(
-                (this.one(`SELECT MAX(position) n FROM (${all})`, columnId, parentId, columnId, parentId).n ?? -1) + 1,
+                (this.one(`SELECT MAX(position) n FROM (${all})`, columnId, parentId, columnId, parentId).n ??
+                    -1) + 1,
                 0,
                 1000000000,
             );
@@ -409,7 +500,7 @@ export class WorldbookStore {
         );
         return materialId;
     }
-    execute(body) {
+    execute(body, options = {}) {
         object(body, ['commandId', 'action', 'data'], ['commandId', 'action', 'data']);
         const issuedAt = commandToken(body.commandId, this.now());
         text(body.action, 40, true);
@@ -432,11 +523,15 @@ export class WorldbookStore {
                     'SELECT s.id FROM sources s WHERE EXISTS(SELECT 1 FROM materials m WHERE m.source_id=s.id)',
                 ).map((row) => row.id),
             );
-            const result = this.mutate(body.action, body.data);
-            this.run('DELETE FROM sources WHERE NOT EXISTS(SELECT 1 FROM materials m WHERE m.source_id=sources.id)');
+            const result = this.mutate(body.action, body.data, options);
+            this.run(
+                'DELETE FROM sources WHERE NOT EXISTS(SELECT 1 FROM materials m WHERE m.source_id=sources.id)',
+            );
             this.capacity('sources', LIMITS.maxSources, 0);
             result.replayed = false;
-            result.columns = [...new Set([result.columnId, result.fromColumnId, result.column?.id].filter(Boolean))]
+            result.columns = [
+                ...new Set([result.columnId, result.fromColumnId, result.column?.id].filter(Boolean)),
+            ]
                 .filter((columnId) => this.one('SELECT id FROM columns WHERE id=?', columnId))
                 .map((columnId) => this.columnView(this.column(columnId)));
             const after = this.all(
@@ -457,7 +552,8 @@ export class WorldbookStore {
             throw error;
         }
     }
-    mutate(action, data) {
+    mutate(action, data, options = {}) {
+        if (FEATURE_COMMANDS.has(action)) return this.features.mutate(action, data, options);
         if (action === 'column-reorder') {
             object(
                 data,
@@ -467,7 +563,10 @@ export class WorldbookStore {
             const current = this.column(data.id),
                 target = this.column(data.targetId);
             if (current.builtin || target.builtin || current.id === target.id) fail('WORLDBOOK_BUILTIN');
-            if (current.revision !== integer(data.revision) || target.revision !== integer(data.targetRevision))
+            if (
+                current.revision !== integer(data.revision) ||
+                target.revision !== integer(data.targetRevision)
+            )
                 fail('WORLDBOOK_CONFLICT');
             const rows = this.all('SELECT id,position FROM columns WHERE builtin=0 ORDER BY position,id'),
                 from = rows.findIndex((row) => row.id === current.id),
@@ -476,7 +575,11 @@ export class WorldbookStore {
             rows.forEach((row, index) => {
                 const position = 100 + index * 10;
                 if (row.position !== position)
-                    this.run('UPDATE columns SET position=?,revision=revision+1 WHERE id=?', position, row.id);
+                    this.run(
+                        'UPDATE columns SET position=?,revision=revision+1 WHERE id=?',
+                        position,
+                        row.id,
+                    );
             });
             return {
                 column: this.columnView(this.column(current.id)),
@@ -490,7 +593,9 @@ export class WorldbookStore {
             if (!Array.isArray(rows) || rows.length > LIMITS.maxImportItems) fail('WORLDBOOK_VALIDATION');
             const materials = rows.map((row) => metadata(row));
             const folderName =
-                data.importFolderName === undefined ? profile.title : text(data.importFolderName, LIMITS.maxName, true);
+                data.importFolderName === undefined
+                    ? profile.title
+                    : text(data.importFolderName, LIMITS.maxName, true);
             this.capacity('columns', LIMITS.maxColumns);
             const columnId = newId('worldbook-user');
             this.run(
@@ -571,10 +676,19 @@ export class WorldbookStore {
             if (fields.tags) {
                 this.run('DELETE FROM tags WHERE material_id=?', data.id);
                 fields.tags.forEach((tag, position) =>
-                    this.run('INSERT INTO tags(material_id,tag,position) VALUES(?,?,?)', data.id, tag, position),
+                    this.run(
+                        'INSERT INTO tags(material_id,tag,position) VALUES(?,?,?)',
+                        data.id,
+                        tag,
+                        position,
+                    ),
                 );
             }
-            if (fields.source)
+            if (fields.source) {
+                this.run(
+                    "UPDATE wb_bindings SET lifecycle='active',revision=revision+1 WHERE material_id=?",
+                    data.id,
+                );
                 this.run(
                     'UPDATE materials SET source_id=?,entry_uid=?,entry_title=? WHERE id=?',
                     this.ensureSource(fields.source),
@@ -582,6 +696,7 @@ export class WorldbookStore {
                     fields.source.title,
                     data.id,
                 );
+            }
             this.run('UPDATE materials SET revision=revision+1 WHERE id=?', data.id);
             this.bump(current.columnId);
             return this.ack(data.id);
@@ -642,6 +757,11 @@ export class WorldbookStore {
                         },
                     },
                     position,
+                );
+                this.run(
+                    'INSERT INTO wb_companions SELECT ?,companion_id FROM wb_companions WHERE subject_id=?',
+                    materialId,
+                    current.id,
                 );
                 this.bump(data.columnId, true);
                 return this.ack(materialId);
@@ -708,7 +828,8 @@ export class WorldbookStore {
                 );
                 if (
                     descendants.some((row) => row.id === data.parentId) ||
-                    this.parent(current.column_id, data.parentId) + Math.max(...descendants.map((row) => row.depth)) >
+                    this.parent(current.column_id, data.parentId) +
+                        Math.max(...descendants.map((row) => row.depth)) >
                         LIMITS.maxDepth ||
                     data.beforeId === current.id
                 )
