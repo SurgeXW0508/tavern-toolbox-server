@@ -1,0 +1,62 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import { WorldbookStore } from '../src/worldbook/store.js';
+const token = () => `${Date.now()}-${randomUUID()}`;
+async function fixture(t) {
+    const root = await mkdtemp(path.join(tmpdir(), 'ttb-reconcile-'));
+    const s = new WorldbookStore(root, DatabaseSync); await s.initialize();
+    t.after(async () => { s.close(); await rm(root, { recursive: true, force: true }); });
+    const send = (action, data, commandId = token()) => s.execute({ commandId, action, data });
+    const read = value => s.features.read(value);
+    const columnId = s.summary(1).columns[0].id;
+    const context = () => read({ kind: 'import-context', columnId });
+    const batch = (entries, destination = { parentId: null }, snapshot = context()) => ({ columnId, structureRevision: snapshot.column.structureRevision, folderToken: snapshot.folderToken, locator: 'XP', destination, entries });
+    return { s, send, read, columnId, context, batch };
+}
+const entries = n => Array.from({ length: n }, (_, uid) => ({ uid, title: `Entry ${uid}` }));
+test('builtin batch import 63; duplicate-safe concurrent preview, replay and additions retain exact identities under Schema 3', async t => {
+    const e = await fixture(t), preview = e.context(), data = e.batch(entries(63), { parentId: null }, preview);
+    e.send('column-import', e.batch(entries(3)));
+    const commandId = token(), result = e.send('column-import', data, commandId);
+    assert.equal(result.added, 60); assert.equal(result.existing, 3);
+    assert.equal(e.send('column-import', data, commandId).replayed, true);
+    assert.equal(e.send('column-import', e.batch(entries(63))).added, 0);
+    assert.equal(e.send('column-import', e.batch(entries(68))).added, 5);
+    assert.equal(e.s.one('SELECT COUNT(*) n FROM materials').n, 68);
+    assert.equal(e.s.one('SELECT COUNT(DISTINCT id) n FROM materials').n, 68);
+    assert.equal(e.s.one('PRAGMA user_version').user_version, 3);
+    assert.throws(() => e.send('column-import', e.batch(entries(101))), { code: 'WORLDBOOK_VALIDATION' });
+});
+test('folder changes reject stale destinations; no partial imports or accidental reposition', async t => {
+    const e = await fixture(t), preview = e.context();
+    e.send('column-import', e.batch(entries(1), { newFolderName: 'XP' }));
+    assert.throws(() => e.send('column-import', e.batch(entries(63), { parentId: null }, preview)), { code: 'WORLDBOOK_TREE_CHANGED' });
+    assert.equal(e.s.one('SELECT COUNT(*) n FROM materials').n, 1);
+});
+test('column-scoped Sources and guarded global migration show both columns, protect unrelated sources and stable identity', async t => {
+    const e = await fixture(t), other = e.s.summary(1).columns[1].id;
+    e.send('column-import', e.batch(entries(60)));
+    const c = e.read({ kind: 'import-context', columnId: other });
+    e.send('column-import', { ...e.batch(entries(3)), columnId: other, structureRevision: c.column.structureRevision, folderToken: c.folderToken });
+    e.send('column-import', { ...e.batch([{ uid: 90, title: 'Skill' }]), locator: 'Skill' });
+    const sources = e.read({ kind: 'column-sources', columnId: other });
+    assert.deepEqual(sources.items.map(r => r.locator), ['XP']);
+    const sourceId = sources.items[0].id, before = e.read({ kind: 'source-impact', columnId: other, sourceId });
+    assert.equal(before.columns.length, 2); assert.equal(before.total, 63);
+    assert.equal(e.s.one('SELECT locator FROM sources WHERE id=?', sourceId).locator, 'XP', 'preview/cancel is read-only');
+    const skill = e.s.one("SELECT * FROM sources WHERE locator='Skill'");
+    assert.throws(() => e.read({ kind: 'source-impact', columnId: other, sourceId: skill.id }), { code: 'WORLDBOOK_NOT_FOUND' });
+    e.send('column-import', e.batch([{ uid: 200, title: 'Concurrent' }]));
+    assert.throws(() => e.send('source-migrate', { columnId: other, id: sourceId, revision: before.source.revision, locator: 'XP v2', impactToken: before.impactToken }), { code: 'WORLDBOOK_CONFLICT' });
+    const latest = e.read({ kind: 'source-impact', columnId: other, sourceId });
+    e.send('source-migrate', { columnId: other, id: sourceId, revision: latest.source.revision, locator: 'XP v2', impactToken: latest.impactToken });
+    assert.equal(e.s.one('SELECT locator FROM sources WHERE id=?', sourceId).locator, 'XP v2');
+    assert.equal(e.s.one('SELECT COUNT(*) n FROM wb_bindings WHERE repair_pending=1').n, 64);
+    assert.throws(() => e.send('column-import', { ...e.batch(entries(1)), expectedSource: { id: sourceId, revision: 1 } }), { code: 'WORLDBOOK_CONFLICT' });
+    assert.deepEqual(e.s.one('SELECT * FROM sources WHERE id=?', skill.id), skill);
+});

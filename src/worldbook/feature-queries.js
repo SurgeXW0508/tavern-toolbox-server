@@ -1,4 +1,5 @@
 import { fail, id, integer, object, query as catalogQuery } from './validation.js';
+import { RECONCILE_READS, readReconcile } from './reconcile.js';
 export function featureScope(scope = {}) {
     object(scope, ['columnId', 'q', 'type', 'tags', 'favorite', 'status', 'sort']);
     return catalogQuery({
@@ -22,6 +23,7 @@ const memberSelect = (s, input) => {
     return { kind: 'preset', id: preset.id, columnId: preset.column_id };
 };
 export function readWorldbookFeature(s, input, runtime = null) {
+    if (RECONCILE_READS.has(input?.kind)) return readReconcile(s, input);
     const keys = {
         bindings: ['scope', 'after', 'sourceId', 'id', 'materialIds'],
         picker: [

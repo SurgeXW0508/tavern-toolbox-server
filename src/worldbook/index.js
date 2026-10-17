@@ -90,6 +90,7 @@ export function createWorldbook(config, { now = () => Date.now(), media, coordin
                         schemaVersion: 1,
                         storageSchemaVersion: 3,
                         featureVersion: 1,
+                        reconcileVersion: 1,
                         scope: 'st-user',
                         storage: 'sqlite',
                         identity: 'independent-material-and-source',

@@ -1,6 +1,7 @@
 import { migrateWorldbookMedia, WorldbookMedia, MEDIA_COMMANDS } from './media.js';
 import { migrateWorldbookFeatures } from './features-schema.js';
 import { WorldbookFeatures, FEATURE_COMMANDS } from './features.js';
+import { RECONCILE_COMMANDS, mutateReconcile } from './reconcile.js';
 import path from 'node:path';
 import { mkdir, lstat, chmod } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -557,6 +558,7 @@ export class WorldbookStore {
         }
     }
     mutate(action, data, options = {}) {
+        if (RECONCILE_COMMANDS.has(action)) return mutateReconcile(this, action, data);
         if (MEDIA_COMMANDS.has(action)) return this.media.mutate(action, data, options);
         if (FEATURE_COMMANDS.has(action)) return this.features.mutate(action, data, options);
         if (action === 'column-reorder') {

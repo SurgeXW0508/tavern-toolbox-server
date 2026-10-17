@@ -231,3 +231,16 @@ Catalog and Roll carry only a light Cover relation, no Gallery or technical meta
 ### Upgrade and rollback
 
 With writes stopped, take one consistent backup of complete **worldbook-v1 and media-v1** before the first real upgrade (include SQLite companion files as applicable; do not copy a live main database alone). Schema 2→3 adds only Media tables/trigger in an atomic transaction, preserving all 10C identities and aggregates. Migration failure retains schema 2. Schema 3 cannot be opened by 10C: restoring the pre-upgrade paired backup is required for rollback; reverting plugin code alone is insufficient. Protocol 1.0 and formal release versions stay unchanged. New media workflows await NAS/phone A–L acceptance; no 10E work.
+
+## Review B maintenance (Schema 3 unchanged)
+
+Optional `worldbook.core.constraints.reconcileVersion=1` adds feature reads:
+`column-sources {columnId,after?}` (50 actually referenced Sources/page),
+`import-context {columnId,after?,locator?}` (50 folders, current Column, folder graph token, unique same-name top folder suggestion), and
+`source-impact {columnId,sourceId}` (at most 128 affected Columns/counts and an impact token). Source impact requires an actual Material reference in the requesting Column. These are explicit maintenance reads; ordinary Catalog/Tree/Detail remain unchanged.
+
+`column-import` uses existing command receipts/transactions, with Column/structure revision, confirmed folder token, destination (root/existing/new folder), locator, optional expected Source ID/revision, and 1..100 UID/title entries. The transaction rechecks canonical Source+UID duplicates in this Column, reports added/existing, preserves old Materials and historical duplicates, and never moves existing placements. Concurrent Material appends can advance structureRevision while the exact folder graph stays identical; changed folders reject with WORLDBOOK_TREE_CHANGED. The frontend retains selections and asks for a new destination confirmation. Source changes reject, rather than implicitly recreating a migrated identity. Larger imports require explicit continuation batches; uncertain responses retry the same receipt.
+
+`source-migrate {columnId,id,revision,locator,impactToken}` checks the current Column reference, full placement/revision impact digest and Source CAS inside the same transaction, then delegates to existing whole-book continuity mutation. Stable Source ID remains, locator collision rejects, and all related Bindings become repair-pending. Old `source-rebind` remains wire-compatible for older candidates; the new frontend uses guarded migration with a visible global impact confirmation. Material rebind remains Binding-only. No database schema change, reset or data migration occurs.
+
+The frontend shows seven reconcile decisions, never automatically deletes Materials or overwrites curated metadata/media. Read failure is unknown and never detached; proposals/ambiguity require explicit single-Material rebind. Native body viewing is a fresh frontend ST read, not content persistence. Normal page refresh does not create Materials. Old servers without reconcileVersion retain basic Core functionality and hide new maintenance actions. Local repositories/data formats/executors remain separate and regression protected.
