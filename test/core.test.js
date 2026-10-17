@@ -29,6 +29,25 @@ function hostRouter() {
     };
 }
 
+test('Media presentation HTTP is authenticated, context-bound, bounded, private and isolated without requiring write capability',async t=>{
+ const core=await createCore({logger:quiet,policyOptions:{configPath:'/fixture/config',read:async()=>JSON.stringify({schemaVersion:1,core:{allowedOrigins:['https://example.invalid']},network:{enabled:false}})}}),app=await host(core);
+ t.after(async()=>{await core.shutdown();await app.close();});
+ const status=await request(app.url,'/v1/status',{protocol:'1.0'}),contextId=status.body.data.contextId;
+ assert.equal(status.body.data.capabilities.find(row=>row.id==='media.assets').operations.find(row=>row.id==='presentation').available,true);
+ const bytes=await sharp({create:{width:3,height:2,channels:3,background:'blue'}}).png().toBuffer();
+ const uploaded=await request(app.url,'/v1/media/import/local',{method:'POST',protocol:'1.0',headers:{Origin:'https://example.invalid','X-CSRF-Token':'fixture-csrf-token','Content-Type':'image/png'},body:bytes});
+ const id=uploaded.body.data.mediaRef.assetId,path='/v1/media/presentation?'+new URLSearchParams({assetIds:JSON.stringify([id])});
+ const headers={'X-TTB-Protocol':'1.0','x-test-user':'alice','X-TTB-Context':contextId};
+ const response=await fetch(app.url+path,{headers});assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
+ assert.deepEqual((await response.json()).data,{items:[{assetId:id,width:3,height:2,animated:false}],missingAssetIds:[]});
+ assert.equal((await fetch(app.url+path,{headers:{...headers,'X-TTB-Context':'wrong'}})).status,409);
+ assert.equal((await fetch(app.url+path,{headers:{...headers,'X-TTB-Protocol':'wrong'}})).status,409);
+ assert.equal((await fetch(app.url+path)).status,403);
+ const bob=await request(app.url,'/v1/status',{protocol:'1.0',user:'bob'});
+ const other=await fetch(app.url+path,{headers:{...headers,'x-test-user':'bob','X-TTB-Context':bob.body.data.contextId}});assert.deepEqual((await other.json()).data,{items:[],missingAssetIds:[id]});
+ for(const ids of [[],[id,id],['file:///private'],Array(49).fill(id)]){const path='/v1/media/presentation?'+new URLSearchParams({assetIds:JSON.stringify(ids)});assert.equal((await fetch(app.url+path,{headers})).status,400);}
+});
+
 async function host(core) {
     const router = hostRouter();
     core.attach(router);

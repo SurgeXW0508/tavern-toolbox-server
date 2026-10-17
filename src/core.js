@@ -317,6 +317,13 @@ export async function createCore({ policyOptions, registerModules, networkOption
                     result = await media.read(context, req.params.id, req.params.variant === 'thumbnail');
                 }
                 else if (operation === 'metadata') result = await media.metadata(context, req.params.id);
+                else if (operation === 'presentation') {
+                    if(req.get('X-TTB-Context')!==context.contextId)throw new MediaFailure('CONTEXT_CHANGED');
+                    const query=new URL(req.url,'http://localhost').searchParams;
+                    if([...query.keys()].some(key=>key!=='assetIds')||query.getAll('assetIds').length!==1||query.get('assetIds').length>2000)throw new MediaFailure('INVALID_REQUEST');
+                    let ids;try{ids=JSON.parse(query.get('assetIds'));}catch{throw new MediaFailure('INVALID_REQUEST');}
+                    result=await media.presentation(context,ids);
+                }
                 else if (operation === 'delete') result = await governance.delete(context, req.params.id);
                 else if (operation === 'rebuildThumbnail') result = await media.rebuild(context, req.params.id);
                 else if (operation === 'cleanupTechnicalGarbage') result = await media.cleanup(context);
@@ -332,7 +339,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
                 return send(res, 200, result, requestId, true, config.policy.core.maxStatusResponseBytes);
             } catch (error) {
                 code = error instanceof MediaFailure || error instanceof NetworkFailure ? error.code : 'MEDIA_UNAVAILABLE';
-                const statusCode = { INVALID_REQUEST: 400, PROTOCOL_INCOMPATIBLE: 409, CSRF_REJECTED: 403,
+                const statusCode = { INVALID_REQUEST: 400, PROTOCOL_INCOMPATIBLE: 409, CONTEXT_CHANGED:409, CSRF_REJECTED: 403,
                     MEDIA_NOT_FOUND: 404, MEDIA_REFERENCED: 409, REFERENCE_ANALYSIS_INCOMPLETE: 503, MEDIA_CORRUPT: 503, DERIVED_UNAVAILABLE: 503,
                     MEDIA_TOO_LARGE: 413, UNSUPPORTED_MEDIA_TYPE: 415, MIME_MISMATCH: 415,
                     ANIMATION_UNSUPPORTED: 415, INVALID_MEDIA: 422, MEDIA_COMPLEXITY_EXCEEDED: 422,
@@ -350,6 +357,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
         router.post('/v1/media/import/local', mediaRoute('localImport', { mutation: true, upload: true }));
         router.post('/v1/media/import/remote', mediaRoute('remoteImport', { mutation: true }));
         router.get('/v1/media/storage', mediaRoute('storage'));
+        router.get('/v1/media/presentation', mediaRoute('presentation'));
         router.get('/v1/media/assets/:id', mediaRoute('metadata'));
         router.delete('/v1/media/assets/:id', mediaRoute('delete', { mutation: true }));
         router.post('/v1/media/assets/:id/rebuild-thumbnail', mediaRoute('rebuildThumbnail', { mutation: true }));
