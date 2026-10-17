@@ -209,7 +209,7 @@ Commands and required data:
 - column-create: profile `{title,description,icon:{type,value},accent,order?}`, materials? <=100 with explicit source and metadata, optional importFolderName <=80 (source grouping name, independent of profile.title).
 - column-update: id, revision, profile; column-delete: id, revision, structureRevision; column-reorder: id/revision/targetId/targetRevision. Builtin appearance/delete/reorder is forbidden.
 - material-create: columnId, parentId (null=root), structureRevision, material `{name,source,materialType?,summary?,description?,tags?,favorite?}`.
-- material-update: id, revision, fields (nonempty metadata/source subset).
+- material-update: id, revision, fields (nonempty metadata subset only). New source mutations through fields.source are rejected; use binding-rebind with bindingRevision. Creation still requires an explicit source.
 - material-copy / material-move: id, revision, source structureRevision, target columnId/parentId/targetStructureRevision, beforeId?; material-delete: id, revision, structureRevision.
 - folder-create: columnId, parentId, structureRevision, name; folder-update: id, revision, structureRevision, name.
 - folder-move: id, revision, structureRevision, parentId, beforeId? (within its Column); folder-delete: id, revision, structureRevision, deleteContents (false lifts children; true deletes subtree contents).

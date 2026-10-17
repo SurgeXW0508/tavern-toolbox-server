@@ -141,3 +141,18 @@ test('observed Runtime HTTP transfer accepts enabled=false, drives bounded Roll/
  const plan=await env.request('/v1/worldbook/features',{data:{kind:'plan',presetId:preset.body.data.presetId,revision:1,runtimeToken:missing.body.data.token}});assert.equal(plan.status,409);assert.equal(plan.body.error.code,'WORLDBOOK_RUNTIME_UNAVAILABLE');
  assert.doesNotMatch(JSON.stringify(env.logs),/PRIVATE_SOURCE|PRIVATE_CONTENT|PRIVATE_AI_KEY/);
 });
+
+test('HTTP Metadata draft survives another device Binding rebind, and source mutation via Metadata is rejected atomically',async t=>{
+ const env=await fixture(t);
+ const created=await env.request('/v1/worldbook/commands',{data:command('column-create',{profile:{title:'并发',description:'',icon:{type:'builtin',value:'book'},accent:'#123456'},materials:[{name:'自定义名称',description:'原描述',source:{locator:'书A',uid:1,title:'Entry A'}}]})});assert.equal(created.status,200);
+ const original=(await env.request('/v1/worldbook/catalog')).body.data.items[0];
+ const phone=command('binding-rebind',{id:original.id,bindingRevision:original.bindingRevision,source:{locator:'书B',uid:7,title:'Entry B'}});
+ assert.equal((await env.request('/v1/worldbook/commands',{data:phone})).status,200);
+ const pc=await env.request('/v1/worldbook/commands',{data:command('material-update',{id:original.id,revision:original.revision,fields:{description:'PC 已保存的草稿'}})});assert.equal(pc.status,200);
+ const saved=(await env.request('/v1/worldbook/materials/'+original.id)).body.data.material;
+ assert.equal(saved.description,'PC 已保存的草稿');assert.equal(saved.name,'自定义名称');assert.equal(saved.source.locator,'书B');assert.equal(saved.bindingRevision,original.bindingRevision+1);assert.equal(saved.revision,original.revision+1);
+ const legacy=await env.request('/v1/worldbook/commands',{data:command('material-update',{id:saved.id,revision:saved.revision,fields:{description:'不得部分提交',source:{locator:'书C',uid:9,title:'拒绝'}}})});assert.equal(legacy.status,400);
+ assert.deepEqual((await env.request('/v1/worldbook/materials/'+original.id)).body.data.material,saved);
+ assert.equal((await env.request('/v1/worldbook/commands',{data:phone})).body.data.replayed,true);
+ assert.equal((await env.request('/v1/worldbook/materials/'+original.id)).body.data.material.source.locator,'书B');
+});

@@ -99,12 +99,10 @@ test('metadata CAS is per Material; stale writes do not alter saved content and 
     let saved = env.store.detail(a.id).material;
     assert.equal(saved.description, '设备 A 的编辑');
     assert.equal(saved.name, '自己的名称');
-    env.send('material-update', {
+    env.send('binding-rebind', {
         id: a.id,
-        revision: saved.revision,
-        fields: {
-            source: { locator: '新版书', uid: 9, title: 'Entry renamed' },
-        },
+        bindingRevision: saved.bindingRevision,
+        source: { locator: '新版书', uid: 9, title: 'Entry renamed' },
     });
     saved = env.store.detail(a.id).material;
     assert.equal(saved.id, a.id);
@@ -544,10 +542,10 @@ test('unreferenced Sources are cleaned transactionally; shared references and un
         col = create(env, 'A', [material(1), material(2)]);
     const [a, b] = page(env.store, { columnId: col.id }).items;
     const sourceId = a.source.sourceId;
-    env.send('material-update', {
+    env.send('binding-rebind', {
         id: a.id,
-        revision: 1,
-        fields: { source: { locator: 'B', uid: 1, title: 'B' } },
+        bindingRevision: a.bindingRevision,
+        source: { locator: 'B', uid: 1, title: 'B' },
     });
     assert.ok(env.store.one('SELECT id FROM sources WHERE id=?', sourceId), 'shared original Source survives');
     const commandId = token();
@@ -567,12 +565,10 @@ test('unreferenced Sources are cleaned transactionally; shared references and un
     );
     for (let i = 0; i < 270; i++) {
         const current = env.store.detail(a.id).material;
-        env.send('material-update', {
+        env.send('binding-rebind', {
             id: a.id,
-            revision: current.revision,
-            fields: {
-                source: { locator: `替换 ${i}`, uid: 1, title: '选中条目' },
-            },
+            bindingRevision: current.bindingRevision,
+            source: { locator: `替换 ${i}`, uid: 1, title: '选中条目' },
         });
         assert.equal(env.store.one('SELECT COUNT(*) n FROM sources').n, 1);
     }
@@ -603,10 +599,10 @@ test('Source capacity checks the final referenced set, allowing replacement at c
         );
     }
     const row = page(env.store).items[0];
-    const saved = env.send('material-update', {
+    const saved = env.send('binding-rebind', {
         id: row.id,
-        revision: row.revision,
-        fields: { source: { locator: '替换书', uid: 1, title: 'Entry' } },
+        bindingRevision: row.bindingRevision,
+        source: { locator: '替换书', uid: 1, title: 'Entry' },
     });
     assert.equal(saved.sourcesAdded.length, 1);
     assert.equal(saved.sourceIdsRemoved.length, 1);

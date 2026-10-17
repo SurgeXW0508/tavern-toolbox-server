@@ -99,7 +99,9 @@ export function source(value) {
 }
 export function metadata(value, partial = false) {
     const keys = ['name', 'materialType', 'summary', 'description', 'tags', 'favorite'];
-    object(value, [...keys, 'source'], partial ? [] : ['name', 'source']);
+    // Existing Materials change sources only through Binding CAS. Creation still
+    // requires an explicit source, independently of metadata edits.
+    object(value, partial ? keys : [...keys, 'source'], partial ? [] : ['name', 'source']);
     const result = partial ? {} : { materialType: '', summary: '', description: '', tags: [], favorite: false };
     for (const [key, val] of Object.entries(value)) {
         if (key === 'source') result.source = source(val);

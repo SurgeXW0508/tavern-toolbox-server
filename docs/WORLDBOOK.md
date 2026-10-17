@@ -146,6 +146,13 @@ constraints advertise storageSchemaVersion=2 and featureVersion=1. Metadata,
 Binding, Companion and Preset revisions are independent. Usage uses SQL increment
 and the existing durable receipt, not an absolute client-supplied count.
 
+Manual binding-rebind checks/increments only bindingRevision and leaves Material
+metadata revision intact, so an unrelated metadata draft survives a rebind.
+New material-update commands reject fields.source, including mixed metadata/source
+updates, without partial changes. Creation still requires source. Use the paired
+10C frontend; old unreleased 10B candidates cannot issue new source updates through
+Metadata CAS. Existing durable command receipts still replay before mutation checks.
+
 Binding observations contain expected Material/Source/locator/UID/revision.
 Stale evidence is skipped, unknown cannot be persisted, title updates do not
 change custom Material names. Whole-book rebind keeps Source ID, rejects a target

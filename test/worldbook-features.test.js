@@ -291,10 +291,10 @@ test('bounded binding and relationship reads exclude long detail fields; Picker 
 test('Column exact-state projects same-source ON precedence, Global plans stay additive and preserve detached membership', async (t) => {
     const e = await fixture(t),
         [a, b] = e.rows;
-    e.send('material-update', {
+    e.send('binding-rebind', {
         id: b.id,
-        revision: b.revision,
-        fields: { source: { locator: a.source.locator, uid: a.source.uid, title: a.source.title } },
+        bindingRevision: b.bindingRevision,
+        source: { locator: a.source.locator, uid: a.source.uid, title: a.source.title },
     });
     const exact = e.send('preset-create', { columnId: e.col.id, name: '精确', memberIds: [a.id] });
     const plan = e.store.features.read({
@@ -590,4 +590,67 @@ test('candidate scope preserves status filters and rejects hidden data in compac
         () => store.features.read({ kind: 'bindings', scope: { columnId: col.id, aiKey: 'forbidden' } }),
         'WORLDBOOK_VALIDATION',
     );
+});
+
+test('Phone Binding rebind preserves PC metadata draft revision; Binding CAS stays independent and legacy source writes are rejected', async (t) => {
+    const { store, send, rows } = await fixture(t),
+        a = rows[0],
+        pcDraft = store.detail(a.id).material;
+    const observation = {
+        id: a.id,
+        sourceId: a.source.sourceId,
+        locator: a.source.locator,
+        uid: a.source.uid,
+        bindingRevision: 1,
+        lifecycle: 'detached',
+    };
+    send('binding-observe', { observations: [observation] });
+    send('source-rebind', { id: a.source.sourceId, revision: 1, locator: '书A v2' });
+    const pending = store.detail(a.id).material;
+    assert.equal(pending.repairPending, true);
+    const source = { locator: '书B', uid: 99, title: '明确的新来源' };
+    send('binding-rebind', { id: a.id, bindingRevision: pending.bindingRevision, source });
+    const phoneSaved = store.detail(a.id).material;
+    assert.equal(phoneSaved.revision, pcDraft.revision);
+    assert.equal(phoneSaved.bindingRevision, pending.bindingRevision + 1);
+    assert.equal(phoneSaved.lifecycle, 'active');
+    assert.equal(phoneSaved.repairPending, false);
+    send('material-update', {
+        id: a.id,
+        revision: pcDraft.revision,
+        fields: { description: 'PC 未受来源变化影响的草稿' },
+    });
+    const saved = store.detail(a.id).material;
+    assert.equal(saved.description, 'PC 未受来源变化影响的草稿');
+    assert.equal(saved.source.locator, '书B');
+    assert.equal(saved.source.uid, 99);
+    assert.equal(saved.bindingRevision, phoneSaved.bindingRevision);
+    expect(
+        () =>
+            send('binding-rebind', {
+                id: a.id,
+                bindingRevision: pending.bindingRevision,
+                source: { locator: '错目标', uid: 12, title: '过期' },
+            }),
+        'WORLDBOOK_CONFLICT',
+    );
+    expect(
+        () =>
+            send('material-update', {
+                id: a.id,
+                revision: saved.revision,
+                fields: { source: { locator: '旧路径', uid: 8, title: '禁止' } },
+            }),
+        'WORLDBOOK_VALIDATION',
+    );
+    expect(
+        () =>
+            send('material-update', {
+                id: a.id,
+                revision: saved.revision,
+                fields: { description: '不应部分保存', source: { locator: '旧路径', uid: 8, title: '禁止' } },
+            }),
+        'WORLDBOOK_VALIDATION',
+    );
+    assert.deepEqual(store.detail(a.id).material, saved);
 });

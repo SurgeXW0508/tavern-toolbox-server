@@ -684,19 +684,6 @@ export class WorldbookStore {
                     ),
                 );
             }
-            if (fields.source) {
-                this.run(
-                    "UPDATE wb_bindings SET lifecycle='active',revision=revision+1 WHERE material_id=?",
-                    data.id,
-                );
-                this.run(
-                    'UPDATE materials SET source_id=?,entry_uid=?,entry_title=? WHERE id=?',
-                    this.ensureSource(fields.source),
-                    fields.source.uid,
-                    fields.source.title,
-                    data.id,
-                );
-            }
             this.run('UPDATE materials SET revision=revision+1 WHERE id=?', data.id);
             this.bump(current.columnId);
             return this.ack(data.id);

@@ -267,7 +267,7 @@ export class WorldbookFeatures {
                 binding = source(data.source);
             if (material.bindingRevision !== integer(data.bindingRevision)) fail('WORLDBOOK_CONFLICT');
             s.run(
-                'UPDATE materials SET source_id=?,entry_uid=?,entry_title=?,revision=revision+1 WHERE id=?',
+                'UPDATE materials SET source_id=?,entry_uid=?,entry_title=? WHERE id=?',
                 s.ensureSource(binding),
                 binding.uid,
                 binding.title,
