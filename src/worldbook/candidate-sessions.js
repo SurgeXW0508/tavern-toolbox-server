@@ -61,6 +61,7 @@ export class WorldbookCandidateSessions {
         const result = store.catalog(
             {
                 ...session.scope,
+                includeMedia: input.kind !== 'discovery',
                 status: 'disabled',
                 empty: ['enabled', 'detached', 'unknown'].includes(session.scope.status),
                 grouping: true,

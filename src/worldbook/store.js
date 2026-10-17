@@ -1,3 +1,4 @@
+import { migrateWorldbookMedia, WorldbookMedia, MEDIA_COMMANDS } from './media.js';
 import { migrateWorldbookFeatures } from './features-schema.js';
 import { WorldbookFeatures, FEATURE_COMMANDS } from './features.js';
 import path from 'node:path';
@@ -51,7 +52,7 @@ export class WorldbookStore {
             await chmod(file, 0o600);
             db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=1000; PRAGMA synchronous=FULL;');
             const version = db.prepare('PRAGMA user_version').get().user_version;
-            if (version !== 0 && version !== 1 && version !== 2) fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
+            if (version !== 0 && version !== 1 && version !== 2 && version !== 3) fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
             if (version === 0) {
                 if (
                     db
@@ -128,8 +129,10 @@ export class WorldbookStore {
             )
                 fail('WORLDBOOK_DATA_INVALID');
             migrateWorldbookFeatures(db);
+            migrateWorldbookMedia(db);
             this.db = db;
             this.features = new WorldbookFeatures(this);
+            this.media = new WorldbookMedia(this);
         } catch (error) {
             try {
                 db.exec('ROLLBACK');
@@ -205,7 +208,7 @@ export class WorldbookStore {
             nextPage: page * LIMITS.sourcePageSize < total ? page + 1 : null,
         };
     }
-    material(row, detail = false) {
+    material(row, detail = false, includeMedia = true) {
         return {
             id: row.id,
             columnId: row.column_id,
@@ -218,6 +221,7 @@ export class WorldbookStore {
             tags: this.all('SELECT tag FROM tags WHERE material_id=? ORDER BY position,tag', row.id).map(
                 (item) => item.tag,
             ),
+            ...(includeMedia ? { cover: this.media.cover(row.id) } : {}),
             favorite: row.favorite === 1,
             revision: row.revision,
             ...this.features.state(row.id),
@@ -357,7 +361,7 @@ export class WorldbookStore {
             this.columnView(this.column(columnId)),
         );
         return {
-            items: rows.map((row) => this.material(row)),
+            items: rows.map((row) => this.material(row, false, query.includeMedia !== false)),
             ...(query.seed ? { remaining } : {}),
             columns,
             total,
@@ -553,6 +557,7 @@ export class WorldbookStore {
         }
     }
     mutate(action, data, options = {}) {
+        if (MEDIA_COMMANDS.has(action)) return this.media.mutate(action, data, options);
         if (FEATURE_COMMANDS.has(action)) return this.features.mutate(action, data, options);
         if (action === 'column-reorder') {
             object(

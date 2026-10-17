@@ -48,6 +48,8 @@ test('v1 migration preserves identities, metadata, tags, sources; migration fail
         for (const row of store.all("SELECT name FROM sqlite_master WHERE type='trigger'"))
             store.db.exec(`DROP TRIGGER ${row.name}`);
         for (const table of [
+            'wb_media',
+            'wb_media_versions',
             'wb_companions',
             'wb_preset_members',
             'wb_presets',
@@ -75,7 +77,7 @@ test('v1 migration preserves identities, metadata, tags, sources; migration fail
     db.close();
     await store.initialize();
     const current = store.detail(env.rows[0].id);
-    assert.equal(store.one('PRAGMA user_version').user_version, 2);
+    assert.equal(store.one('PRAGMA user_version').user_version, 3);
     assert.deepEqual(current, original);
     store.close();
     await store.initialize();

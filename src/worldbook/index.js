@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { MEDIA_COMMANDS } from './media.js';
 import { WorldbookCandidateSessions } from './candidate-sessions.js';
 import { WorldbookStore } from './store.js';
 import { LIMITS, WorldbookFailure, fail, object, integer, source, id, newId, text } from './validation.js';
@@ -5,7 +7,7 @@ export { WorldbookFailure, LIMITS } from './validation.js';
 
 // Only Worldbook business data. ST runtime query inputs expire in memory and
 // never enter SQLite, media/governance stores or application logs.
-export function createWorldbook(config, { now = () => Date.now() } = {}) {
+export function createWorldbook(config, { now = () => Date.now(), media, coordinate = async (_context, action) => action() } = {}) {
     const stores = new Map(),
         failures = new Map(),
         runtime = new Map();
@@ -51,7 +53,7 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
             fail('WORLDBOOK_RUNTIME_EXPIRED');
         return { bindings: value.bindings, observed: value.observed, unknownBooks: value.unknownBooks || [] };
     }
-    return {
+    const api = {
         definition: {
             id: 'worldbook',
             version: '0.1.0',
@@ -86,14 +88,14 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
                     limits: LIMITS,
                     constraints: {
                         schemaVersion: 1,
-                        storageSchemaVersion: 2,
+                        storageSchemaVersion: 3,
                         featureVersion: 1,
                         scope: 'st-user',
                         storage: 'sqlite',
                         identity: 'independent-material-and-source',
                         revision: 'entity-and-column-structure',
                         runtime: 'frontend-owned',
-                        media: false,
+                        optionalMediaCapability: 'worldbook.media',
                     },
                 },
             ],
@@ -144,6 +146,7 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
             fail('WORLDBOOK_VALIDATION');
         },
         async command(context, value) {
+            if (MEDIA_COMMANDS.has(value?.action)) fail('WORLDBOOK_VALIDATION');
             return (await store(context)).execute(value, {
                 getRuntime: (token) => runtimeInput(context, token),
             });
@@ -253,4 +256,44 @@ export function createWorldbook(config, { now = () => Date.now() } = {}) {
             };
         },
     };
+    api.mediaDefinition = { id:'worldbook-media', version:'0.1.0', dependsOn:['core','worldbook','media'],
+        capabilities:[{ id:'worldbook.media', contract:{major:1,minMinor:0,maxMinor:0},
+            operations:['read','command'].map(id=>({id,available:true})),
+            operationAvailability:()=>({command:{available:config.policy.core.allowedOrigins.length>0,reasonCode:'ORIGIN_POLICY_MISSING'}}),
+            limits:{maxGallery:6,maxReadMaterials:20},constraints:{kinds:['image'],revision:'material-media-cas',mediaRefProvider:'server'} }],
+        health: async context=>{await store(context);return media.definition.health(context);} };
+    api.readMedia = async (context,input) => {
+        object(input,['materialIds','coversOnly'],['materialIds']);
+        if(!Array.isArray(input.materialIds)||input.materialIds.length<1||input.materialIds.length>20||new Set(input.materialIds).size!==input.materialIds.length
+            ||input.coversOnly!==undefined&&typeof input.coversOnly!=='boolean') fail('WORLDBOOK_VALIDATION');
+        const target=await store(context);
+        return {items:input.materialIds.map(value=>{id(value);const revision=target.media.revision(value);
+            return input.coversOnly?{id:value,revision,cover:target.media.cover(value)}:target.media.read(value);})};
+    };
+    api.mediaCommand = async (context,value) => coordinate(context,async()=>{
+        object(value,['commandId','action','data'],['commandId','action','data']);
+        if(!MEDIA_COMMANDS.has(value.action)) fail('WORLDBOOK_VALIDATION');
+        const target=await store(context);
+        // Replays retain the original receipt even after a later unlink or asset removal.
+        if(typeof value.commandId==='string'&&target.one('SELECT id FROM commands WHERE id=?',value.commandId))
+            return target.execute(value,{mediaValidated:true});
+        const refs=target.media.validate(value.action,value.data);
+        if(target.media.revision(value.data.id)!==value.data.revision) fail('WORLDBOOK_MEDIA_CONFLICT');
+        for(const ref of refs) {
+            try {const asset=await media.metadata(context,ref.assetId),health=await media.health(context,ref.assetId);
+                if(asset.kind!=='image'||health.original!=='healthy') fail('WORLDBOOK_MEDIA_UNAVAILABLE');}
+            catch {fail('WORLDBOOK_MEDIA_UNAVAILABLE');}
+        }
+        return target.execute(value,{mediaValidated:true});
+    });
+    api.referenceProvider={id:'worldbook',consumer:'worldbook',label:'世界书',contextBound:true,
+        enumerate:async context=>(await store(context)).media.groups(),
+        mutate:async(context,body)=>{
+            if(!['unlink','replace'].includes(body.action)) fail('WORLDBOOK_VALIDATION');
+            const result=await api.mediaCommand(context,{commandId:`${now()}-${randomUUID()}`,action:`media-reference-${body.action}`,
+                data:{id:body.groupId,revision:body.revision,referenceId:body.referenceId,
+                    ...(body.action==='replace'?{kind:'image',mediaRef:body.mediaRef}:{})}});
+            return {revision:result.media.revision};
+        }};
+    return api;
 }

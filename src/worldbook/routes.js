@@ -34,14 +34,17 @@ export function attachWorldbookRoutes(router, { worldbook, registry, config, sen
         try {
             if (req.get('X-TTB-Protocol') !== '1.0') fail('PROTOCOL_INCOMPATIBLE');
             if (req.get('X-TTB-Context') !== context.contextId) fail('CONTEXT_CHANGED');
-            if (['runtime', 'command'].includes(operation) && !mutationGate(req, config.policy.core.allowedOrigins))
+            if (['runtime', 'command', 'media-command'].includes(operation) && !mutationGate(req, config.policy.core.allowedOrigins))
                 fail('CSRF_REJECTED');
-            const cap = (await registry.snapshot(context)).capabilities.find((row) => row.id === 'worldbook.core'),
-                feature = cap?.operations.find((row) => row.id === operation);
-            if (cap?.moduleId !== 'worldbook' || feature?.available !== true)
+            const media = operation.startsWith('media-');
+            const cap = (await registry.snapshot(context)).capabilities.find((row) => row.id === (media ? 'worldbook.media' : 'worldbook.core')),
+                feature = cap?.operations.find((row) => row.id === (media ? operation.slice(6) : operation));
+            if (cap?.moduleId !== (media ? 'worldbook-media' : 'worldbook') || feature?.available !== true)
                 fail(feature?.reasonCode || cap?.reasonCode || 'WORLDBOOK_UNAVAILABLE');
             let result;
-            if (operation === 'command') result = await worldbook.command(context, await body(req));
+            if (operation === 'media-read') result = await worldbook.readMedia(context,await body(req));
+            else if (operation === 'media-command') result = await worldbook.mediaCommand(context,await body(req));
+            else if (operation === 'command') result = await worldbook.command(context, await body(req));
             else if (operation === 'features') result = await worldbook.read(context,'features',await body(req));
             else if (operation === 'runtime') result = await worldbook.runtime(context, await body(req));
             else {
@@ -81,6 +84,7 @@ export function attachWorldbookRoutes(router, { worldbook, registry, config, sen
                           ? 429
                           : [
                                   'WORLDBOOK_CONFLICT',
+                                  'WORLDBOOK_MEDIA_CONFLICT',
                                   'WORLDBOOK_DUPLICATE',
                                   'WORLDBOOK_SOURCE_COLLISION',
                                   'WORLDBOOK_TREE_CHANGED',
@@ -94,7 +98,7 @@ export function attachWorldbookRoutes(router, { worldbook, registry, config, sen
                                   'CONTEXT_CHANGED',
                               ].includes(code)
                             ? 409
-                            : 503;
+                            : code === 'WORLDBOOK_MEDIA_UNAVAILABLE' ? 422 : 503;
             if (!res.destroyed)
                 send(
                     res,
@@ -131,4 +135,6 @@ export function attachWorldbookRoutes(router, { worldbook, registry, config, sen
     router.post('/v1/worldbook/runtime', route('runtime'));
     router.post('/v1/worldbook/features', route('features'));
     router.post('/v1/worldbook/commands', route('command'));
+    router.post('/v1/worldbook/media/read', route('media-read'));
+    router.post('/v1/worldbook/media/commands', route('media-command'));
 }

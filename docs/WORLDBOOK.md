@@ -1,7 +1,7 @@
-# Worldbook — Phase 10C candidate
+# Worldbook — Phase 10D candidate
 
 `worldbook.core` contract 1.0 is an independent business module, not an Outfit
-collection or a Media/Reference Provider. Protocol remains 1.0; release versions
+collection; its optional Media consumer has a separate Reference Provider. Protocol remains 1.0; release versions
 remain Server 0.9.0 / Frontend 0.52.0 until formal acceptance and release.
 
 ## Ownership and storage
@@ -16,7 +16,7 @@ restarts. This stage does not implement a backup product; with ST stopped,
 preserve the complete `worldbook-v1` directory for an operator backup. A code
 rollback does not roll back this database.
 
-Schema is explicitly `PRAGMA user_version=2`. Opening schema 1 upgrades it in one SQLite transaction, preserving all existing identities and metadata. Failure rolls back; no reset/replacement is performed. The recognized earlier unreleased v1 two-column Tag table receives an atomic additive position column/backfill, retaining its previously displayed alphabetical order and all entity IDs/data; subsequent writes preserve entered order. No other unknown table shape is upgraded. A future version, nonempty
+Schema is explicitly `PRAGMA user_version=3`. Opening schema 1 or 2 upgrades it in one SQLite transaction, preserving all existing identities and metadata. Failure rolls back; no reset/replacement is performed. The recognized earlier unreleased v1 two-column Tag table receives an atomic additive position column/backfill, retaining its previously displayed alphabetical order and all entity IDs/data; subsequent writes preserve entered order. No other unknown table shape is upgraded. A future version, nonempty
 unversioned database or missing required tables fails closed; startup never
 resets existing records. The two product builtins (`xp-worldbook`,
 `fate-worldbook`) are initialized only with a new schema, empty of Materials.
@@ -218,3 +218,16 @@ Global Preset semantics/CAS, Usage transitions/recent/frequent, rename/missing/
 unreadable/UID reuse/explicit repairs, beyond-page Roll/no repeats, Discovery
 single request/window/confirmation, classification ancestor search, unavailable
 Server without Local fallback and retry recovery. See paired frontend TESTING.md.
+
+
+## Optional Worldbook Media 1.0 (10D)
+
+`worldbook.media` belongs to module `worldbook-media`, independent of Core operation availability. It stores only canonical `{provider:"server",assetId:UUID}` plus image kind, cover/gallery role and position. `wb_media_versions` owns independent CAS; `wb_media` has FK Material cleanup, one-cover uniqueness and Material/Asset uniqueness. Gallery commands enforce at most six items. Metadata/Binding revisions do not change. Material Copy starts with no media; Material deletion cascades references, never files.
+
+New references require same-user existing image metadata and a healthy Original; old broken references remain readable/unlinkable. The Domain's Reference Provider exposes one Material group with Column/Material label and cover/gallery references. Its replace/unlink use Media revision, with current Context required at HTTP. Every new/replaced reference and Governance hard delete share the same user coordinator. Shared references, unavailable providers and incomplete analysis prohibit hard deletion. No automatic repair, GC or deletion on failed binding.
+
+Catalog and Roll carry only a light Cover relation, no Gallery or technical metadata. Discovery candidates use zero media reads; only displayed recommendations can request bounded covers-only reads. Bytes, dimensions, animation and Original/Thumbnail health stay in Media Domain. The frontend uses public MediaAccess acquisition/preview/view/detail; ordinary GIF previews are static and Original is explicit.
+
+### Upgrade and rollback
+
+With writes stopped, take one consistent backup of complete **worldbook-v1 and media-v1** before the first real upgrade (include SQLite companion files as applicable; do not copy a live main database alone). Schema 2→3 adds only Media tables/trigger in an atomic transaction, preserving all 10C identities and aggregates. Migration failure retains schema 2. Schema 3 cannot be opened by 10C: restoring the pre-upgrade paired backup is required for rollback; reverting plugin code alone is insufficient. Protocol 1.0 and formal release versions stay unchanged. New media workflows await NAS/phone A–L acceptance; no 10E work.

@@ -6,11 +6,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import sharp from 'sharp';
 import { createCore } from '../src/core.js';
-async function fixture(t, write = true) {
+async function fixture(t, write = true, mediaUnavailable = false) {
     const root = await mkdtemp(path.join(tmpdir(), 'ttb-wb-http-')),
         logs = [];
     const core = await createCore({
+        ...(mediaUnavailable?{registerModules:registry=>registry.register({id:'media',version:'fixture',dependsOn:[],capabilities:[]})}:{}),
         logger: { info: (row) => logs.push(row), error: (row) => logs.push(row) },
         policyOptions: {
             configPath: '/fixture/policy',
@@ -60,7 +62,7 @@ async function fixture(t, write = true) {
         });
         return { status: response.status, body: await response.json() };
     };
-    return { request, status: status.data, logs };
+    return { request, status: status.data, logs, url };
 }
 const command = (action, data) => ({ commandId: `${Date.now()}-${randomUUID()}`, action, data });
 test('Worldbook HTTP uses host auth/context/protocol/CSRF and private bounded error envelope without metadata logs', async (t) => {
@@ -155,4 +157,29 @@ test('HTTP Metadata draft survives another device Binding rebind, and source mut
  assert.deepEqual((await env.request('/v1/worldbook/materials/'+original.id)).body.data.material,saved);
  assert.equal((await env.request('/v1/worldbook/commands',{data:phone})).body.data.replayed,true);
  assert.equal((await env.request('/v1/worldbook/materials/'+original.id)).body.data.material.source.locator,'书B');
+});
+
+test('Worldbook Media HTTP is an optional context-bound capability, independent of Core; Governance uses Media revision and context',async t=>{
+ const f=await fixture(t),cap=f.status.capabilities.find(row=>row.id==='worldbook.media');
+ assert.equal(cap.operations.find(row=>row.id==='command').available,true);
+ const created=await f.request('/v1/worldbook/commands',{data:command('column-create',{profile:{title:'媒体HTTP',description:'',icon:{type:'builtin',value:'book'},accent:'#112233'},materials:[{name:'资料',source:{locator:'书',uid:1,title:'条目'}}]})});
+ const page=await f.request('/v1/worldbook/catalog'),id=page.body.data.items[0].id;
+ assert.equal((await f.request('/v1/worldbook/media/read',{data:{materialIds:[]}})).status,400);
+ assert.equal((await f.request('/v1/worldbook/media/read',{data:{materialIds:Array(21).fill(id)}})).status,400);
+ assert.equal((await f.request('/v1/worldbook/media/commands',{data:command('media-set-cover',{id,revision:1,kind:'image',mediaRef:{provider:'server',assetId:'12345678-1234-4123-8123-123456789abc'}})})).status,422);
+ const bytes=await sharp({create:{width:16,height:12,channels:3,background:'red'}}).png().toBuffer();
+ const response=await fetch(f.url+'/v1/media/import/local',{method:'POST',headers:{'X-TTB-Protocol':'1.0',Origin:'https://example.invalid','X-CSRF-Token':'worldbook-fixture-csrf','Content-Type':'image/png'},body:bytes});
+ const ref=(await response.json()).data.mediaRef;
+ const write=command('media-set-cover',{id,revision:1,kind:'image',mediaRef:ref});
+ const denied=await f.request('/v1/worldbook/media/commands',{data:write,headers:{'X-TTB-Context':'wrong'}});assert.equal(denied.body.error.code,'CONTEXT_CHANGED');
+ const saved=await f.request('/v1/worldbook/media/commands',{data:write});assert.equal(saved.body.data.media.revision,2);
+ const detail=await f.request(`/v1/governance/assets/${ref.assetId}`);assert.equal(detail.body.data.references.total,1);
+ const body={providerId:'worldbook',groupId:id,referenceId:'cover',revision:1,action:'unlink'};
+ assert.equal((await f.request('/v1/governance/action',{data:body})).body.error.code,'WORLDBOOK_MEDIA_CONFLICT');
+ const wrong=await f.request('/v1/governance/action',{data:{...body,revision:2},headers:{'X-TTB-Context':'wrong'}});assert.equal(wrong.body.error.code,'CONTEXT_CHANGED');
+ const unlinked=await f.request('/v1/governance/action',{data:{...body,revision:2}});assert.equal(unlinked.body.data.revision,3);
+ assert.equal((await f.request('/v1/worldbook/media/read',{data:{materialIds:[id],coversOnly:true}})).body.data.items[0].cover,null);
+ const old=await fixture(t,true,true);assert.equal(old.status.capabilities.find(row=>row.id==='worldbook.core').operations.find(row=>row.id==='catalog').available,true);
+ assert.equal(old.status.capabilities.find(row=>row.id==='worldbook.media').operations.find(row=>row.id==='read').available,false);
+ assert.equal((await old.request('/v1/worldbook/catalog')).status,200);
 });

@@ -61,10 +61,10 @@ test('Worldbook restart persistence, empty shared builtins, schema version and i
     assert.equal(env.store.detail(first.id).column.id, col.id);
     assert.equal(env.store.detail(first.id).material.source.sourceId, first.source.sourceId);
     const dbFile = path.join(env.root, 'tavern-toolbox-server/worldbook-v1/worldbook.sqlite');
-    assert.equal(env.store.one('PRAGMA user_version').user_version, 2);
+    assert.equal(env.store.one('PRAGMA user_version').user_version, 3);
     env.store.close();
     const db = new DatabaseSync(dbFile);
-    db.exec('PRAGMA user_version=3');
+    db.exec('PRAGMA user_version=4');
     db.close();
     await assert.rejects(env.store.initialize(), {
         code: 'WORLDBOOK_SCHEMA_INCOMPATIBLE',
@@ -683,7 +683,7 @@ test('earlier v1 candidate tag table upgrades additively without changing busine
     for (const tag of ['Z', 'A', 'M']) env.store.run('INSERT INTO tags VALUES(?,?)', row.id, tag);
     env.store.close();
     await env.store.initialize();
-    assert.equal(env.store.one('PRAGMA user_version').user_version, 2);
+    assert.equal(env.store.one('PRAGMA user_version').user_version, 3);
     assert.equal(env.store.detail(row.id).column.id, col.id);
     assert.equal(env.store.detail(row.id).material.source.sourceId, row.source.sourceId);
     assert.deepEqual(

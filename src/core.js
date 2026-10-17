@@ -11,7 +11,7 @@ import { createAudioRoutingPreferences } from './preferences/audio-routing.js';
 import { attachAudioRoutingPreferenceRoutes } from './preferences/audio-routing-routes.js';
 import { createAudioLibrary } from './audio-library/store.js';
 import { attachAudioLibraryRoutes } from './audio-library/routes.js';
-import { createWorldbook } from './worldbook/index.js';
+import { createWorldbook, WorldbookFailure } from './worldbook/index.js';
 import { attachWorldbookRoutes } from './worldbook/routes.js';
 import { createAudioSources } from './audio-sources/store.js';
 import { attachAudioSourceRoutes } from './audio-sources/routes.js';
@@ -78,11 +78,12 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(audioSources.assets.definition);
     const audioLibrary = createAudioLibrary(config, audioSources.assets);
     registry.register(audioLibrary.definition);
-    const worldbook = createWorldbook(config, { now });
-    registry.register(worldbook.definition);
     const media = createMedia(config, network);
-    registry.register(media.definition);
     const coordinate = createReferenceCoordinator();
+    const worldbook = createWorldbook(config, { now, media, coordinate });
+    registry.register(worldbook.definition);
+    registry.register(media.definition);
+    registry.register(worldbook.mediaDefinition);
     const business = createBusiness(config, media, coordinate);
     registry.register(business.definition);
     const localization = createLocalization(media, coordinate);
@@ -90,6 +91,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
     const governance = createGovernance(media, coordinate, { mutations: config.policy.core.allowedOrigins.length > 0 });
     governance.register(localization.referenceProvider);
     governance.register(business.referenceProvider);
+    governance.register(worldbook.referenceProvider);
     registry.register(governance.definition);
     registerModules?.(registry); // Test fixture or a future trusted composition root; not callable over HTTP.
     await registry.initialize();
@@ -461,6 +463,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
                 if (mutation && (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers?.['content-type'] || '')
                     || !req.body || typeof req.body !== 'object' || Array.isArray(req.body)
                     || Buffer.byteLength(JSON.stringify(req.body)) > 8192)) throw new MediaFailure('INVALID_REQUEST');
+                if (mutation && governance.requiresContext(req.body.providerId) && req.get('X-TTB-Context') !== context.contextId) throw new MediaFailure('CONTEXT_CHANGED');
                 let result;
                 if (operation === 'summary') result = await governance.summary(context);
                 else if (operation === 'assets' || operation === 'groups' || operation === 'groupOverview') result = await governance[operation](context, req.query);
@@ -474,11 +477,12 @@ export async function createCore({ policyOptions, registerModules, networkOption
                 }
                 return send(res, 200, result, requestId, true, 256 * 1024);
             } catch (error) {
-                code = error instanceof MediaFailure || error instanceof BusinessFailure ? error.code : 'MEDIA_UNAVAILABLE';
+                code = error instanceof MediaFailure || error instanceof BusinessFailure || error instanceof WorldbookFailure ? error.code : 'MEDIA_UNAVAILABLE';
                 const statusCode = { INVALID_REQUEST: 400, PROTOCOL_INCOMPATIBLE: 409, CSRF_REJECTED: 403,
                     MEDIA_NOT_FOUND: 404, REFERENCE_NOT_FOUND: 404, MEDIA_REFERENCED: 409,
                     LOCALIZATION_NOT_FOUND: 404, LOCALIZATION_CONFLICT: 409, BUSINESS_CONFLICT: 409,
                     HOST_IDENTITY_UNAVAILABLE: 409, LOCALIZATION_SCOPE_CONFLICT: 409,
+                    WORLDBOOK_MEDIA_CONFLICT:409, WORLDBOOK_VALIDATION:400, WORLDBOOK_NOT_FOUND:404, WORLDBOOK_MEDIA_UNAVAILABLE:422, CONTEXT_CHANGED:409,
                     MEDIA_CORRUPT: 422, REFERENCE_ANALYSIS_INCOMPLETE: 503 }[code] || 503;
                 return send(res, statusCode, failure(code, '媒体治理操作未完成'), requestId, true, 4096);
             } finally {

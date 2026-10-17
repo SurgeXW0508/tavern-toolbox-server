@@ -220,7 +220,7 @@ Typed errors: WORLDBOOK_VALIDATION (400), WORLDBOOK_NOT_FOUND (404), WORLDBOOK_C
 
 ### Additive Worldbook 10C features
 
-Core 1.0 / Summary wire schema 1 stay compatible; capability constraints expose storageSchemaVersion 2 / featureVersion 1. Card/detail add lifecycle=active|detached, bindingRevision, repairPending, relationRevision, enableCount and lastEnabledAt. Source summaries add revision. Unknown is transient and never a persistent lifecycle.
+Core 1.0 / Summary wire schema 1 stay compatible; capability constraints expose storageSchemaVersion 3 / featureVersion 1. Card/detail add lifecycle=active|detached, bindingRevision, repairPending, relationRevision, enableCount and lastEnabledAt. Source summaries add revision. Unknown is transient and never a persistent lifecycle.
 
 POST `/v1/worldbook/features`: `kind=bindings|picker|companions|presets|facets|plan|tree-search|roll|discovery|session-end`. Bindings use after/sourceId/id/materialIds (<=50)/scope.columnId and return <=50 compact rows/nextCursor. Picker uses subjectId or presetId, scope `{columnId?,q?,type?,tags?,favorite?}`, selected/page and draftAdd/draftRemove<=100; <=20 cards, selectedCount and owner revision. Presets scope.columnId absent means Global, 20/page. Facets id=types|tags, scope/page, 50/page. Plan requires presetId/revision, runtimeToken for exact Column plans, <=50 compact desired-state bindings/page. Tree-search scope.columnId/q/page returns <=10 matches and necessary ancestors.
 
@@ -229,3 +229,15 @@ Runtime observed mode: `{mode:'observed',token?,offset,bindings:[{locator,uid,en
 Roll/Discovery take scope/runtimeToken/limit<=20, optional sessionId/cursor. Replies include sessionId,nextCursor|null,scopeTotal,candidateCount,seen,remaining and bounded cards/columns; folderPath <=16 names, no Description. Sessions 15 minutes, 4/user/16 global, context/TTL protected; exact cursor retries return the last bounded acknowledgment. Session-end uses sessionId.
 
 New commands share the original durable commandId/digest transaction: companions-save `{id,revision,memberIds<=64}`; companions-members `{id,revision,add,remove}`; preset-create `{name,columnId|null,memberIds?}`; preset-update/delete/members `{id,revision,name?|add/remove?}`; preset-capture `{id,revision,runtimeToken}`; usage-increment `{materialIds<=100,at}`; binding-observe `{observations<=100}` expected id/sourceId/locator/uid/bindingRevision and observed active|detached/title; binding-rebind `{id,bindingRevision,source}`; source-rebind `{id,revision,locator}`. No ST writes occur on Server. Source collision/duplicate/expired selection session and runtime unavailable are typed 409 errors.
+
+
+### Optional Worldbook Media 1.0
+
+Capability `worldbook.media`, module `worldbook-media`, contract 1.0, operations `read`/`command`; maxGallery=6, maxReadMaterials=20. Missing capability does not disable `worldbook.core`. Both POST routes require authenticated session/Protocol/current Context; command additionally requires Origin/CSRF. Core command does not accept Media actions.
+
+- POST `/v1/worldbook/media/read`: `{materialIds:[id]}` (1..20 unique), optional `coversOnly:true`. Returns `{items:[{id,revision,cover:null|relation,gallery?}]}`; covers-only omits Gallery.
+- POST `/v1/worldbook/media/commands`: `{commandId,action,data}` with durable digest/receipt semantics. Returns Media state and replay marker.
+- Relation: `{kind:"image",role:"cover"|"gallery",position,mediaRef:{provider:"server",assetId:UUID}}`. No bytes, URLs or technical metadata.
+- Actions: `media-set-cover {id,revision,kind,mediaRef}`, `media-clear-cover {id,revision}`, `media-gallery-add {id,revision,items:[{kind,mediaRef}]}`, `media-gallery-remove {id,revision,assetId}`, `media-gallery-reorder {id,revision,assetIds}` (complete set), `media-to-cover {id,revision,assetId}`, `media-to-gallery {id,revision}`, `media-reference-unlink {id,revision,referenceId}`, `media-reference-replace {id,revision,referenceId,kind,mediaRef}`. Reference IDs are cover or gallery:UUID.
+
+Media revision conflict returns `WORLDBOOK_MEDIA_CONFLICT` (409); invalid shape/provider/kind returns validation 400, unhealthy/missing new asset returns `WORLDBOOK_MEDIA_UNAVAILABLE` (422). Metadata and Binding revisions are unaffected. Governance reference action for Provider worldbook requires current Context and Media CAS. Existing broken refs can be removed without rereading the asset. See paired-backup/rollback requirements in [Worldbook](../docs/WORLDBOOK.md#upgrade-and-rollback).

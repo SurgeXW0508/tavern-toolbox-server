@@ -2,9 +2,11 @@
 
 Current architecture, scalability findings, lifecycle and future development rules: [Engineering](docs/ENGINEERING.md). Public contracts: [Protocol](protocol/README.md). Phase acceptance files are historical evidence; their old branch instructions and temporary non-goals do not override the current baseline.
 
-## Phase 10C — Worldbook daily features candidate
+## Phase 10D — Worldbook Media and Governance candidate
 
-Active paired stage: `stage/phase-10-worldbook-server`, based on Server main `79b2a116b27772a408532ced12a8e8b233c8aeea`. Additive `worldbook.core` 1.0 owns independent per-ST-user Column/Folder/Material/Source metadata, bounded queries and atomic revision/idempotency-protected commands. It does not store or mutate native ST Entry content/runtime, migrate Local data, or integrate Media. See [Worldbook ownership, limits, persistence and gate](docs/WORLDBOOK.md) and [wire contract](protocol/README.md#worldbook-core-10). The candidate awaits independent review and Desktop/Phone/NAS smoke; no release bump, merge or 10D work. Schema 2 adds directed Companion, entity-CAS Presets, atomic Usage and active/detached Binding state. Bounded features reads and transient candidate sessions extend Core 1.0; native ST runtime and all AI execution remain frontend-owned.
+Active paired stage: `stage/phase-10-worldbook-server`. Core 1.0 remains independently bounded, with Schema 2 Companion/Presets/Usage/Binding. Optional `worldbook.media` adds one Cover and up to six Gallery relations, independent Media CAS and a formal Worldbook Reference Provider. Schema 2→3 is atomic and additive; media bytes and technical metadata remain in Media Store. Existing 10C IDs/data and Local storage are preserved. No automatic GC, Local migration or Core fallback. See [Worldbook ownership, limits and upgrade safety](docs/WORLDBOOK.md) and [wire contract](protocol/README.md#worldbook-core-10).
+
+Before the first NAS upgrade, stop writes and consistently back up **both `worldbook-v1` and `media-v1`**. Returning to 10C requires restoring that backup, not just reverting code. Automated/browser evidence is separate from the pending real-device media A–L gate. No release bump, merge or 10E work.
 
 ## Current release v0.9.0 — Phase 9 Image Domain
 
