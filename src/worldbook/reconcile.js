@@ -42,7 +42,7 @@ export function mutateReconcile(s, action, data) {
         object(data, ['columnId', 'id', 'revision', 'locator', 'impactToken'], ['columnId', 'id', 'revision', 'locator', 'impactToken']);
         const current = impact(s, data.id, data.columnId);
         if (current.impactToken !== data.impactToken) fail('WORLDBOOK_CONFLICT');
-        return s.features.mutate('source-rebind', { id: data.id, revision: data.revision, locator: data.locator });
+        return s.features.rebindSource({ id: data.id, revision: data.revision, locator: data.locator }, { singleColumnOnly: false });
     }
     object(data, ['columnId', 'structureRevision', 'folderToken', 'destination', 'locator', 'entries', 'expectedSource'], ['columnId', 'structureRevision', 'folderToken', 'destination', 'locator', 'entries']);
     const column = s.column(id(data.columnId)); integer(data.structureRevision);

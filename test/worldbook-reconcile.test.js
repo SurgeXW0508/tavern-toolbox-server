@@ -60,3 +60,37 @@ test('column-scoped Sources and guarded global migration show both columns, prot
     assert.throws(() => e.send('column-import', { ...e.batch(entries(1)), expectedSource: { id: sourceId, revision: 1 } }), { code: 'WORLDBOOK_CONFLICT' });
     assert.deepEqual(e.s.one('SELECT * FROM sources WHERE id=?', skill.id), skill);
 });
+
+test('legacy Source rebind permits one Column only; shared Sources require guarded migration, while receipts still replay', async t => {
+    const e = await fixture(t);
+    e.send('column-import', e.batch(entries(3)));
+    const source = e.read({ kind: 'column-sources', columnId: e.columnId }).items[0];
+    const commandId = token(), legacy = { id: source.id, revision: source.revision, locator: 'XP v1' };
+    e.send('source-rebind', legacy, commandId);
+    const other = e.s.summary(1).columns[1].id, context = e.read({ kind: 'import-context', columnId: other });
+    e.send('column-import', { ...e.batch(entries(2)), columnId: other, locator: 'XP v1', structureRevision: context.column.structureRevision, folderToken: context.folderToken });
+    const beforeSource = e.s.one('SELECT * FROM sources WHERE id=?', source.id);
+    const beforeBindings = e.s.all('SELECT * FROM wb_bindings ORDER BY material_id');
+    assert.throws(() => e.send('source-rebind', { id: source.id, revision: 2, locator: 'XP v2' }), { code: 'WORLDBOOK_CONFLICT' });
+    assert.deepEqual(e.s.one('SELECT * FROM sources WHERE id=?', source.id), beforeSource);
+    assert.deepEqual(e.s.all('SELECT * FROM wb_bindings ORDER BY material_id'), beforeBindings);
+    assert.equal(e.send('source-rebind', legacy, commandId).replayed, true);
+    assert.deepEqual(e.s.one('SELECT * FROM sources WHERE id=?', source.id), beforeSource);
+    assert.throws(() => e.send('source-rebind', { id: source.id, revision: 2, locator: 'XP v2', allowShared: true }), { code: 'WORLDBOOK_VALIDATION' });
+    const impact = e.read({ kind: 'source-impact', columnId: e.columnId, sourceId: source.id });
+    e.send('source-migrate', { columnId: e.columnId, id: source.id, revision: 2, locator: 'XP v2', impactToken: impact.impactToken });
+    assert.equal(e.s.one('SELECT locator FROM sources WHERE id=?', source.id).locator, 'XP v2');
+    assert.equal(e.s.one('SELECT COUNT(*) n FROM wb_bindings WHERE repair_pending=1').n, 5);
+});
+
+test('a fully concurrent-existing batch creates no empty folder; a later batch can fulfill the same new-folder intent', async t => {
+    const e = await fixture(t), preview = e.context();
+    e.send('column-import', e.batch(entries(100)));
+    const first = e.send('column-import', e.batch(entries(100), { newFolderName: 'XP' }, preview));
+    assert.equal(first.added, 0); assert.equal(first.existing, 100); assert.equal(first.parentId, null);
+    assert.equal(e.s.one('SELECT COUNT(*) n FROM folders').n, 0);
+    const second = e.send('column-import', e.batch(entries(150).slice(100), { newFolderName: 'XP' }));
+    assert.equal(second.added, 50); assert(second.parentId);
+    assert.equal(e.s.one('SELECT COUNT(*) n FROM materials WHERE parent_id=?', second.parentId).n, 50);
+    assert.equal(e.s.one('SELECT COUNT(*) n FROM materials WHERE parent_id IS NULL').n, 100);
+});

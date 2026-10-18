@@ -58,6 +58,33 @@ export class WorldbookFeatures {
             s.run('INSERT OR IGNORE INTO wb_preset_members VALUES(?,?)', preset.id, memberId);
         }
     }
+    // Internal Source mutation; only the legacy and impact-verified command paths call this.
+    rebindSource(data, { singleColumnOnly = true } = {}) {
+        const s = this.store;
+        object(data, ['id', 'revision', 'locator'], ['id', 'revision', 'locator']);
+        id(data.id);
+        text(data.locator, 240, true);
+        const current = s.one('SELECT * FROM sources WHERE id=?', data.id);
+        if (!current) fail('WORLDBOOK_NOT_FOUND');
+        if (current.revision !== integer(data.revision)) fail('WORLDBOOK_CONFLICT');
+        if (singleColumnOnly && s.one('SELECT COUNT(DISTINCT column_id) n FROM materials WHERE source_id=?', current.id).n > 1)
+            fail('WORLDBOOK_CONFLICT');
+        if (s.one('SELECT id FROM sources WHERE locator=? AND id<>?', data.locator, current.id))
+            fail('WORLDBOOK_SOURCE_COLLISION');
+        s.run(
+            'UPDATE sources SET locator=?,display_name=?,revision=revision+1 WHERE id=?',
+            data.locator,
+            data.locator,
+            current.id,
+        );
+        // The explicit continuity decision invalidates all old observations. A
+        // successful target read, not this command, classifies each UID.
+        s.run(
+            'UPDATE wb_bindings SET repair_pending=1,revision=revision+1 WHERE material_id IN(SELECT id FROM materials WHERE source_id=?)',
+            current.id,
+        );
+        return { sourceId: current.id, sourcesChanged: true };
+    }
     mutate(action, data, options = {}) {
         const s = this.store;
         if (action === 'companions-members') {
@@ -280,29 +307,7 @@ export class WorldbookFeatures {
             s.bump(material.columnId);
             return s.ack(material.id);
         }
-        if (action === 'source-rebind') {
-            object(data, ['id', 'revision', 'locator'], ['id', 'revision', 'locator']);
-            id(data.id);
-            text(data.locator, 240, true);
-            const current = s.one('SELECT * FROM sources WHERE id=?', data.id);
-            if (!current) fail('WORLDBOOK_NOT_FOUND');
-            if (current.revision !== integer(data.revision)) fail('WORLDBOOK_CONFLICT');
-            if (s.one('SELECT id FROM sources WHERE locator=? AND id<>?', data.locator, current.id))
-                fail('WORLDBOOK_SOURCE_COLLISION');
-            s.run(
-                'UPDATE sources SET locator=?,display_name=?,revision=revision+1 WHERE id=?',
-                data.locator,
-                data.locator,
-                current.id,
-            );
-            // The explicit continuity decision invalidates all old observations. A
-            // successful target read, not this command, classifies each UID.
-            s.run(
-                'UPDATE wb_bindings SET repair_pending=1,revision=revision+1 WHERE material_id IN(SELECT id FROM materials WHERE source_id=?)',
-                current.id,
-            );
-            return { sourceId: current.id, sourcesChanged: true };
-        }
+        if (action === 'source-rebind') return this.rebindSource(data);
         fail('WORLDBOOK_VALIDATION');
     }
 }
