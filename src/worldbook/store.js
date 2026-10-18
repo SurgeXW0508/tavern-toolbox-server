@@ -265,6 +265,12 @@ export class WorldbookStore {
             clauses.push('m.column_id=?');
             args.push(query.columnId);
         }
+        if (query.folderId) {
+            // Only Candidate Sessions can supply this internal boundary. The
+            // public Catalog query contract still rejects folderId.
+            clauses.push('m.parent_id IN(WITH RECURSIVE branch(id) AS(SELECT id FROM folders WHERE id=? AND column_id=? UNION SELECT f.id FROM folders f JOIN branch b ON f.parent_id=b.id WHERE f.column_id=?) SELECT id FROM branch)');
+            args.push(query.folderId,query.columnId,query.columnId);
+        }
         if (query.q) {
             clauses.push(
                 '(instr(wb_fold(m.name),?)>0 OR instr(wb_fold(m.material_type),?)>0 OR instr(wb_fold(m.summary),?)>0 OR EXISTS(SELECT 1 FROM tags t WHERE t.material_id=m.id AND instr(wb_fold(t.tag),?)>0) OR EXISTS(SELECT 1 FROM material_details d WHERE d.material_id=m.id AND instr(d.description_folded,?)>0))',

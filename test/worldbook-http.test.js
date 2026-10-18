@@ -183,3 +183,25 @@ test('Worldbook Media HTTP is an optional context-bound capability, independent 
  assert.equal(old.status.capabilities.find(row=>row.id==='worldbook.media').operations.find(row=>row.id==='read').available,false);
  assert.equal((await old.request('/v1/worldbook/catalog')).status,200);
 });
+
+
+test('Folder Candidate capability is additive over HTTP; tree changes reject replay and continuation',async t=>{
+ const e=await fixture(t),cap=e.status.capabilities.find(row=>row.id==='worldbook.core');
+ assert.equal(cap.constraints.storageSchemaVersion,3);assert.equal(cap.constraints.featureVersion,2);assert.ok(cap.constraints.candidateScopes.includes('folder'));
+ const send=async(action,data)=>{const r=await e.request('/v1/worldbook/commands',{data:command(action,data)});assert.equal(r.status,200);return r.body.data;};
+ const column=(await send('column-create',{profile:{title:'Folder HTTP',description:'',icon:{type:'builtin',value:'book'},accent:'#123456'},materials:[]})).column.id;
+ const summary=async()=> (await e.request('/v1/worldbook/summary')).body.data.columns.find(row=>row.id===column);
+ let c=await summary();
+ const f=await send('folder-create',{columnId:column,parentId:null,name:'完整分组',structureRevision:c.structureRevision});
+ c=await summary();
+ await send('material-create',{columnId:column,parentId:f.folderId,structureRevision:c.structureRevision,material:{name:'子孙资料',source:{locator:'HTTP_BOOK',uid:7,title:'Entry'}}});
+ const rt=await e.request('/v1/worldbook/runtime',{data:{mode:'observed',offset:0,bindings:[{locator:'HTTP_BOOK',uid:7,enabled:false}],unknownBooks:[],complete:true}});assert.equal(rt.status,200);
+ const runtimeToken=rt.body.data.token,scope={columnId:column,folderId:f.folderId};
+ const candidate=await e.request('/v1/worldbook/features',{data:{kind:'roll',runtimeToken,scope,limit:1}});assert.equal(candidate.status,200);assert.equal(candidate.body.data.scopeTotal,1);assert.deepEqual(candidate.body.data.folderScope.path,['完整分组']);
+ assert.equal((await e.request('/v1/worldbook/features',{data:{kind:'facets',id:'tags',scope}})).status,400);
+ assert.equal((await e.request('/v1/worldbook/features',{data:{kind:'session-end',sessionId:candidate.body.data.sessionId,scope}})).status,400);
+ c=await summary();await send('folder-create',{columnId:column,parentId:null,name:'结构已变化',structureRevision:c.structureRevision});
+ for(const cursor of [0,1]){const r=await e.request('/v1/worldbook/features',{data:{kind:'roll',sessionId:candidate.body.data.sessionId,cursor,runtimeToken}});assert.equal(r.status,409);assert.equal(r.body.error.code,'WORLDBOOK_TREE_CHANGED');}
+ const legacy=await e.request('/v1/worldbook/features',{data:{kind:'discovery',scope:{columnId:column},runtimeToken}});assert.equal(legacy.status,200);assert.equal(legacy.body.data.scopeTotal,1);assert.equal('folderScope'in legacy.body.data,false);
+ assert.equal((await e.request('/v1/worldbook/features',{data:{kind:'session-end',sessionId:candidate.body.data.sessionId}})).status,200);
+});

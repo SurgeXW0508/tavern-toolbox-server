@@ -89,7 +89,8 @@ export function createWorldbook(config, { now = () => Date.now(), media, coordin
                     constraints: {
                         schemaVersion: 1,
                         storageSchemaVersion: 3,
-                        featureVersion: 1,
+                        featureVersion: 2,
+                        candidateScopes: ['global', 'column', 'filtered', 'folder'],
                         reconcileVersion: 1,
                         scope: 'st-user',
                         storage: 'sqlite',
