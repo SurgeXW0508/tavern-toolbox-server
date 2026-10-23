@@ -4,7 +4,7 @@ This is the current cross-module engineering guide. README owns installation and
 
 ## Reviewed baseline and assessment
 
-Current release: Server v0.9.0 paired with Frontend v0.52.0, Protocol 1.0. Phase 9's formal Image Domain and Group Governance are delivered. Desktop core acceptance on SillyTavern 1.19.0 Docker / NAS is user-confirmed; a complete physical-phone matrix and large real-NAS catalog benchmark are unclaimed. Immutable version tags identify the release commits on main; the active paired Phase 10B branch is `stage/phase-10-worldbook-server`, based directly on that formal main. Existing schemas are unchanged; the independent Worldbook schema is v1. Final Phase 9 identities and acceptance boundaries remain recorded in PHASE-9-ACCEPTANCE.md.
+Reviewed formal baseline: Server **v0.10.0** paired with Frontend **v0.53.0**, Protocol **1.0**, Worldbook Storage Schema **3**. Summary wire schemaVersion 1, featureVersion 2 with global/column/filtered/folder scopes, reconcileVersion 1; worldbook.core/media contracts remain 1.0. Immutable annotated tags identify formal main merge commits, preserving the Phase 10 stage ancestry. User-confirmed SillyTavern 1.19.0 Docker/NAS core/UI feedback is separate from automated and synthetic-host coverage; PHASE-10-ACCEPTANCE.md records remaining device/performance limits.
 
 The Server is a reasonably separated modular monolith for one ST process and its authenticated users. Core composes capability modules; Network owns transport/policy; Media and Audio own independent file/metadata stores; Business/Localization own image references; Governance obtains references through providers; Audio Library owns product metadata, not file retention. These boundaries should be preserved. The review does not justify a rewrite, microservices or distributed storage.
 
@@ -21,7 +21,7 @@ Local Audio streaming uses a bounded 64 KiB buffer, backpressure and cancellatio
 | Resource lifetime | User stores initialize lazily and Maps retain them until shutdown; jobs/streams have explicit cleanup | Suitable for current small-user deployment; many-user growth needs open-DB/file-descriptor and memory measurements. If adding idle eviction, protect in-flight operations and persist durable state first |
 | Composition | `src/core.js` composes modules but still contains substantial Image/Business/Localization/Governance routing; Audio routes are already extracted | New business routes belong to domain route modules, sharing authentication/protocol/error helpers. Do not add another independent security gate or a generic arbitrary-KV endpoint |
 
-Frontend incremental media observation and owned bootstrap cleanup are implemented on the paired released frontend. Its name-preserving compressed installer is approximately 3.54 MB, with separate readable debug JS and packaged-runtime regressions. This reduces distribution/code-input size; all code and CSS still load together, and installed-host startup/long-session cost remain separate gates. Moving more features to the Server does not automatically solve browser cost. Frontend ARCHITECTURE.md / HANDOFF.md own their findings and priority.
+Frontend incremental media observation and owned bootstrap cleanup are implemented on the paired released frontend. Its name-preserving compressed installer is approximately 3.9 MB, with separate readable debug JS and packaged-runtime regressions. This reduces distribution/code-input size; all code and CSS still load together, and installed-host startup/long-session cost remain separate gates. Moving more features to the Server does not automatically solve browser cost. Frontend ARCHITECTURE.md / HANDOFF.md own their findings and priority.
 
 ## Long-term development rules
 
@@ -75,12 +75,13 @@ On 2026-10-07, the product runtime dependency `sharp` was updated from 0.35.4 to
 
 Both repositories passed `npm ci --ignore-scripts`. The actual Linux Sharp load reports sharp 0.35.5 / vips 8.18.7 / rsvg 2.63.2; PNG encode/read and the existing Media/HTTP/Governance regressions pass locally. Frontend's complete `npm audit` and Server's `npm audit --omit=dev` report zero advisories at this checkpoint. This result is scoped to these lockfiles and the audit database at that time; it does not assess the installed ST host or prove future versions safe.
 
-Server's complete development audit still reports seven affected package nodes (one low, one moderate, five high). They are development-only host compatibility fixtures, absent from an `--omit=dev` plugin installation:
+The 2026-10-24 lockfile recheck reports eight affected development package nodes (one low, two moderate, five high); production `npm audit --omit=dev` remains zero. The additional moderate `ip-address` advisory is in the dev-only proxy fixture tree. They are development-only host compatibility fixtures, absent from an `--omit=dev` plugin installation:
 
 | Fixture path | Current advisory scope | Maintenance direction |
 | --- | --- | --- |
 | `body-parser` 1.20.4 | Low: invalid limit configuration may disable enforcement | Retain the pinned ST middleware baseline; fixture configuration uses an explicit valid limit. Upgrade the host baseline in a separate compatibility change |
 | `multer` 2.1.1 | High: multipart parsing, aborted upload cleanup and limit handling | Preserve the real raw-upload fixture for the reviewed host; a future baseline update must retain malformed/aborted upload and multipart-stream regressions |
+| `ip-address` through host proxy fixtures | Moderate: GHSA-rxp7-6hxx-x8q5; absent from runtime dependency tree | Update only with a separately validated host compatibility baseline |
 | `qs` 6.14.2 via host middleware | Moderate: parsing/stringification DoS advisories | Review with the middleware dependency tree when updating the compatibility baseline |
 | `proxy-agent` → `pac-proxy-agent` → `get-uri` → `basic-ftp` | Four high package nodes from the same FTP-listing parser advisory | Do not accept audit's proposed major downgrade to proxy-agent 5 merely to remove warnings. Validate the actual ST proxy stack and HTTPS/CONNECT behavior before changing this chain |
 

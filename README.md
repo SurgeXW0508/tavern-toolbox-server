@@ -2,13 +2,17 @@
 
 Current architecture, scalability findings, lifecycle and future development rules: [Engineering](docs/ENGINEERING.md). Public contracts: [Protocol](protocol/README.md). Phase acceptance files are historical evidence; their old branch instructions and temporary non-goals do not override the current baseline.
 
-## Phase 10D — Worldbook Media and Governance candidate
+## Current release v0.10.0 — Phase 10 Worldbook Server
 
-Active paired stage: `stage/phase-10-worldbook-server`. Core 1.0 remains independently bounded, with Schema 2 Companion/Presets/Usage/Binding. Optional `worldbook.media` adds one Cover and up to six Gallery relations, independent Media CAS and a formal Worldbook Reference Provider. Schema 2→3 is atomic and additive; media bytes and technical metadata remain in Media Store. Existing 10C IDs/data and Local storage are preserved. No automatic GC, Local migration or Core fallback. See [Worldbook ownership, limits and upgrade safety](docs/WORLDBOOK.md) and [wire contract](protocol/README.md#worldbook-core-10).
+Paired with **Frontend v0.53.0 / Protocol 1.0**. Phase 10 is formally released with Worldbook Storage Schema 3, Summary wire schemaVersion 1, featureVersion 2 (global/column/filtered/folder), reconcileVersion 1 and optional worldbook.core/media 1.0. See [final acceptance](PHASE-10-ACCEPTANCE.md), [Worldbook](docs/WORLDBOOK.md) and [Protocol](protocol/README.md).
 
-Before the first NAS upgrade, stop writes and consistently back up **both `worldbook-v1` and `media-v1`**. Returning to 10C requires restoring that backup, not just reverting code. Automated/browser evidence is separate from the pending real-device media A–L gate. No release bump, merge or 10E work.
+Worldbook is an independent per-ST-user business module with bounded browsing, stable Material/Source identity, Companion, Column/Global Presets, Usage/Recent/Frequent, guarded source maintenance and Import/Sync/Reconcile. Complete-scope Roll and bounded text-only Discovery support Folder Scope; ST exclusively owns Entry body and runtime. No automatic Local migration/fallback or full Catalog mirror.
 
-## Current release v0.9.0 — Phase 9 Image Domain
+Optional Media stores 0..1 Cover / 0..6 Gallery relations with independent CAS, governed through a Worldbook Reference Provider. Bytes, technical metadata and health remain in Media Domain. The paired frontend reads current bounded relations for Event-stable Cover/Gallery Dynamic Preview, only after AI accepts Discovery recommendations. AI Candidate/Prompt remains media-free; Thumbnail is lazy and Original explicit. No automatic GC.
+
+Before upgrading existing Phase 10 Candidate data, stop ST writes and consistently back up complete **worldbook-v1 and media-v1**, including applicable SQLite companion files; never copy a live main database alone. Recognized schema 1/2 upgrades to 3 are atomic, new stores use 3. Code rollback to old 10C/10B requires restoring the corresponding pre-upgrade data backup. Worldbook Backup UI remains deferred. Installed-host feedback and unverified performance/device boundaries are recorded honestly in the acceptance file.
+
+## Phase 9 — Image Domain (v0.9.0, historical release)
 
 Paired with Frontend v0.52.0 / Protocol 1.0. Phase 9 is complete and released. The user accepted the core desktop Image workflows on SillyTavern 1.19.0 Docker / NAS; complete physical-phone coverage and large real-NAS catalog benchmarks are not claimed. See [Phase 9 acceptance](PHASE-9-ACCEPTANCE.md), [Protocol](protocol/README.md) and [Engineering](docs/ENGINEERING.md).
 
@@ -64,17 +68,14 @@ The completed installed-host acceptance and automated evidence boundaries are in
 
 ## Release notes
 
-Server v0.9.0 pairs with Frontend v0.52.0. Protocol 1.0 and persistent schemas remain unchanged.
+Server **v0.10.0**, paired with Frontend **v0.53.0** — Phase 10 Worldbook Server. Protocol **1.0**; Worldbook Storage Schema **3**.
 
-- Add media.governance groupOverview: one Catalog/reference pass returns Provider health, exact complete counts and bounded safe previews; scoped Group paging supports Consumer collections.
-- Add Group detail with unique exclusive/shared/missing asset counts and groupAction for Consumer-owned atomic unlink/removal followed by optional fresh reference-safe cleanup.
-- Protect shared assets and fail closed under incomplete reference analysis. Cleanup receipts separate already-absent resources from retained/shared assets and genuine failures; hard delete always rechecks full current Reference Analysis.
-- Exclude Active zero-reference Groups before browse counts, previews and pagination. Retain empty Detached recovery records and all full-analysis/exact-read/mutation records; unavailable Providers remain unknown.
-- Maintain Active Character Groups using the Group-owned host identity, directory/proof checks and revision CAS, without requiring that character's active chat. Detached Rebind remains explicit and identity-checked.
-- Present Outfit Group types as 单品 / 穿搭组合 / 具体搭配 / 场景组 through Consumer-owned metadata, preserving Outfit schema and relations.
-- Omit Storage reads from non-summary queries while retaining fresh reference analysis and coordination boundaries. Governance still uses full Catalog/reference analysis, not an indexed large-library query.
-- Phase 9 desktop core accepted on SillyTavern 1.19.0 Docker / NAS; automated Store/HTTP/concurrency/privacy and responsive tests remain distinct from manual device evidence. No complete physical-phone matrix or large real-NAS benchmark is claimed.
-- No Media, Character or Outfit data migration, identity change, automatic GC or Protocol upgrade. Back up user data consistently; code rollback does not restore data.
+- Ship independent, per-ST-user Worldbook Core with bounded Summary/Catalog/Tree/Detail/Facet queries, stable Material/Source/Binding identity, Companion, Column/Global Presets, Usage/Recent/Frequent, source lifecycle/rebind/migrate and guarded Import/Sync/Reconcile.
+- Support complete-scope Roll and bounded text-only Discovery candidate sessions across global/column/filtered/folder scopes. ST remains the sole owner of Entry text and runtime Enabled/Mode; there is no full Catalog mirror or automatic Local fallback/migration.
+- Optional worldbook.media stores one Cover and up to six Gallery references with independent Media CAS and a formal Governance Reference Provider. The paired frontend derives stable Cover/Gallery Dynamic Previews after accepted recommendations; AI Candidate/Prompt payloads contain no images or media references.
+- Preserve commandId receipts, revision/CAS, explicit uncertain-write verification, coordinated reference-aware deletion and fail-closed incomplete analysis. No automatic GC or product-level Worldbook Backup UI.
+- Before upgrading existing Phase 10 Candidate data, stop ST writes and consistently back up complete **worldbook-v1 and media-v1**, including applicable SQLite companion files. Do not copy only a live SQLite main file. Recognized older schemas upgrade atomically to 3; new stores use 3 directly. Returning to 10C/10B requires the corresponding pre-upgrade backup: a code tag rollback is not a data rollback.
+- Frontend 2083 tests/build and Server 227 tests/syntax/privacy are release gates; production dependency audit is clean. User-confirmed SillyTavern 1.19.0 Docker/NAS core/UI feedback is separate from synthetic Chromium/HTTP/SQLite evidence. Complete phone/WebKit/keyboard matrices, large real-NAS Worldbook benchmarks and extreme concurrency remain unclaimed; see PHASE-10-ACCEPTANCE.md.
 
 ## Phase 4 Business Provider and Outfit
 
@@ -106,7 +107,7 @@ For development, run `npm ci --ignore-scripts` then `npm run check` for unit and
 
 ## Operator and review notes
 
-1. Pin `v0.9.0` or an exact reviewed commit before installing in `plugins/tavern-toolbox-server/`. Use the matching frontend `v0.52.0` for Media Center Audio, Server Outfit and Character Localization. Confirm the installed SillyTavern loader supports `init(router)` and exit hooks, `req.user.profile.handle` and `req.user.directories.root` in your real version. No separate administrator Web UI exists.
+1. Pin `v0.10.0` or an exact reviewed commit before installing in `plugins/tavern-toolbox-server/`. Use the paired frontend `v0.53.0` for Worldbook, Media Center, Server Outfit and Character Localization. Confirm the installed SillyTavern loader supports `init(router)` and exit hooks, `req.user.profile.handle` and `req.user.directories.root` in your real version. No separate administrator Web UI exists.
 2. Confirm `enableServerPlugins: true`, restart one active SillyTavern instance, sign in to the official Web client, open any module homepage in Toolbox, select **服务器与扩展能力**, and inspect `core.status` plus `network.remoteFetch` (disabled until the administrator enables it). Refresh once and preview diagnostics before copying; verify no personal path/cookie. Try the other ST account, if configured, to verify separate context IDs.
 3. Temporarily disable/remove this plugin, restart, and check that old outfit images, Genesis images, and lorebook editing still use their previous Local paths. Repeat in the actual TT client; TT never connects to this Server directly. Re-enable the plugin and check Docker container restart rotates boot/context IDs without modifying existing data.
 4. Check coexistence with installed 柏宝库 on the real NAS. The plugin ID, route and config filename are dedicated. Keep the actual ST dataRoot and plugin code volume mounted as intended and check UID/GID; config persistence requires the dataRoot volume. The plugin never writes into its own code folder.

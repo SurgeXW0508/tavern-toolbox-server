@@ -1,8 +1,7 @@
-# Worldbook — Phase 10D candidate
+# Worldbook — Core and Media 1.0
 
 `worldbook.core` contract 1.0 is an independent business module, not an Outfit
-collection; its optional Media consumer has a separate Reference Provider. Protocol remains 1.0; release versions
-remain Server 0.9.0 / Frontend 0.52.0 until formal acceptance and release.
+collection; its optional Media consumer has a separate Reference Provider. Protocol remains 1.0; formal releases are Server v0.10.0 / Frontend v0.53.0. Worldbook Storage Schema 3; Summary wire schemaVersion 1, featureVersion 2 (global/column/filtered/folder) and reconcileVersion 1.
 
 ## Ownership and storage
 
@@ -12,7 +11,7 @@ the database 0600, with foreign keys and SQLite FULL durability. Node with
 `node:sqlite` is required (use Node 24 as in CI). A connection is opened lazily
 per authenticated user and closed on module shutdown. No business data is kept
 in the plugin code directory. Preserve the ST data volume across container
-restarts. This stage does not implement a backup product; with ST stopped,
+restarts. The product does not implement a Worldbook Backup UI; with ST stopped,
 preserve the complete `worldbook-v1` directory for an operator backup. A code
 rollback does not roll back this database.
 
@@ -190,35 +189,13 @@ search, facets/counts and seeded ordering may scan the relevant SQL scope.
 Native ST reads remain whole-book. No claim about NAS/phone latency follows from
 cloud tests.
 
-## Candidate, upgrade and remaining gate
+## Upgrade, rollback and evidence
 
-Both repositories use stage/phase-10-worldbook-server. Keep frontend/server paired;
-no main merge, release bump or 10D before review and real-device acceptance.
+Install formal Server v0.10.0 with Frontend v0.53.0; no stage checkout is required. Stop ST/container writes before the first upgrade of earlier Phase 10 Candidate data, and consistently back up each user's complete **worldbook-v1 and media-v1** directories, including applicable SQLite companion files. A live SQLite main-file copy alone is not a consistent backup. Preserve the ST data volume and install dependencies for the deployed Node runtime (Node 24 is the verified CI baseline).
 
-For a NAS update: stop ST/container; back up each ST user's complete
-`tavern-toolbox-server/worldbook-v1` directory outside the code checkout; update
-this stage branch with a fast-forward pull and run the normal dependency install
-for the deployed Node 24 runtime, preserve the ST data volume, then restart.
-Import the paired frontend candidate with its stable script ID using overwrite.
-Opening an old Worldbook database performs the schema 1→2 transaction; never
-remove the database to make an upgrade succeed. Code rollback alone cannot make
-10B understand schema 2: stop ST and restore the complete pre-upgrade directory
-when an explicit rollback is required.
+Recognized older schema 1/2 databases atomically upgrade to current Schema 3, preserving identities and data; new stores use Schema 3 directly. Unknown future/corrupt schema fails closed, with no reset. A code Tag rollback does not revert data: returning to old 10C/10B requires the corresponding pre-upgrade paired backup. Import Frontend v0.53.0 with unchanged Script ID using overwrite. Operator-level consistent backup remains required; no Worldbook Backup UI exists.
 
-Automated tests cover migration rollback/reopen, CAS, relationship/preset cleanup,
-two SQLite connections incrementing Usage, idempotent capture/retry, lifecycle
-and stale evidence, Source collision, bounded searches and candidate traversal,
-HTTP observed-runtime batching, privacy and Unicode response budgets. Frontend
-Chromium tests use this real HTTP/SQLite implementation with synthetic native ST
-and AI; they do not replace real-user data/device evidence.
-
-The remaining real-device gate is migration with existing data/restart,
-PC↔Phone identity/data persistence, Companion order/partial failure, Column vs
-Global Preset semantics/CAS, Usage transitions/recent/frequent, rename/missing/
-unreadable/UID reuse/explicit repairs, beyond-page Roll/no repeats, Discovery
-single request/window/confirmation, classification ancestor search, unavailable
-Server without Local fallback and retry recovery. See paired frontend TESTING.md.
-
+User-confirmed SillyTavern 1.19.0 Docker/NAS core and UI feedback, automated Store/HTTP/SQLite tests and synthetic Chromium responsive evidence are distinct. See PHASE-10-ACCEPTANCE.md and paired Frontend TESTING.md. Whole-book native reads and scope-growing substring/facet/seeded SQL costs remain; complete physical phone/WebKit/keyboard, large real-NAS, long-session heap and extreme concurrency coverage is not claimed.
 
 ## Optional Worldbook Media 1.0 (10D)
 
@@ -226,11 +203,11 @@ Server without Local fallback and retry recovery. See paired frontend TESTING.md
 
 New references require same-user existing image metadata and a healthy Original; old broken references remain readable/unlinkable. The Domain's Reference Provider exposes one Material group with Column/Material label and cover/gallery references. Its replace/unlink use Media revision, with current Context required at HTTP. Every new/replaced reference and Governance hard delete share the same user coordinator. Shared references, unavailable providers and incomplete analysis prohibit hard deletion. No automatic repair, GC or deletion on failed binding.
 
-Catalog and Roll carry only a light Cover relation, no Gallery or technical metadata. Discovery candidates use zero media reads; only displayed recommendations can request bounded covers-only reads. Bytes, dimensions, animation and Original/Thumbnail health stay in Media Domain. The frontend uses public MediaAccess acquisition/preview/view/detail; ordinary GIF previews are static and Original is explicit.
+Core Catalog/Roll business DTOs do not carry Gallery as ordinary business payload. Separately, Preview Foundation reads formal Cover + Gallery relations for the current bounded Material IDs (at most 20 per request); Browser/Roll/accepted Discovery Results can derive Event-stable Dynamic Preview from these references. Business DTO, media relation read and presentation hydration are separate boundaries. AI Discovery Candidate metadata has no Media; only accepted/displayed results perform post-AI media hydration. Selected Thumbnail remains lazy/bounded; Original is an explicit Viewer read. Bytes, dimensions, animation and health stay in Media Domain. The frontend uses public MediaAccess and does not persist a selected Preview or change canonical Cover/Gallery.
 
 ### Upgrade and rollback
 
-With writes stopped, take one consistent backup of complete **worldbook-v1 and media-v1** before the first real upgrade (include SQLite companion files as applicable; do not copy a live main database alone). Schema 2→3 adds only Media tables/trigger in an atomic transaction, preserving all 10C identities and aggregates. Migration failure retains schema 2. Schema 3 cannot be opened by 10C: restoring the pre-upgrade paired backup is required for rollback; reverting plugin code alone is insufficient. Protocol 1.0 and formal release versions stay unchanged. New media workflows await NAS/phone A–L acceptance; no 10E work.
+With writes stopped, take one consistent backup of complete **worldbook-v1 and media-v1** before the first real upgrade (include SQLite companion files as applicable; do not copy a live main database alone). Schema 2→3 adds only Media tables/trigger in an atomic transaction, preserving all 10C identities and aggregates. Migration failure retains schema 2. Schema 3 cannot be opened by 10C: restoring the pre-upgrade paired backup is required for rollback; reverting plugin code alone is insufficient. Protocol remains 1.0. Formal releases are Server v0.10.0 / Frontend v0.53.0; device/performance evidence and limits are recorded in PHASE-10-ACCEPTANCE.md.
 
 ## Review B maintenance (Schema 3 unchanged)
 
