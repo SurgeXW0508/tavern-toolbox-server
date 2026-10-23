@@ -11,6 +11,19 @@ import { createMedia } from '../src/media/index.js';
 import { validatePolicy } from '../src/config.js';
 
 const policy = validatePolicy({ schemaVersion: 1, core: { allowedOrigins: ['https://example.com'] } }).media;
+
+test('bounded presentation projects only requested current-user rows with one SQL read and no Original/health I/O',async t=>{
+ const root=await temp(t),store=new MediaStore(root,policy,DatabaseSync);await store.initialize();t.after(()=>store.close());
+ const refs=[];for(let n=0;n<20;n++){const bytes=await fixture('png',`rgb(${n},20,60)`);refs.push((await store.import(bytes,await validateImage(bytes,'image/png',policy,sharp))).mediaRef.assetId);}
+ store.readOriginal=async()=>{throw Error('must not read Original');};store.metadata=async()=>{throw Error('no N+1 metadata');};
+ const prepare=store.db.prepare.bind(store.db),queries=[];store.db.prepare=sql=>{queries.push(sql);return prepare(sql);};
+ const missing='12345678-1234-4123-8123-123456789abc',result=await store.presentation([...refs,missing]);
+ assert.equal(queries.length,1);assert.match(queries[0],/WHERE id IN/);assert.equal(result.items.length,20);assert.deepEqual(result.missingAssetIds,[missing]);
+ assert.deepEqual(result.items.map(row=>row.assetId),refs);assert.deepEqual(Object.keys(result.items[0]).sort(),['animated','assetId','height','width']);assert.equal(result.items[0].width,4);
+ for(const ids of [[],[refs[0],refs[0]],['not-uuid'],Array.from({length:49},(_,n)=>`12345678-1234-4123-8123-${String(n).padStart(12,'0')}`)])await assert.rejects(store.presentation(ids),{code:'INVALID_REQUEST'});
+ const other=new MediaStore(await temp(t),policy,DatabaseSync);await other.initialize();t.after(()=>other.close());assert.deepEqual((await other.presentation(refs)).missingAssetIds,refs);
+ assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,1);
+});
 async function fixture(format, color) {
     return sharp({ create: { width: 4, height: 3, channels: 3, background: color } })
         .toFormat(format).toBuffer();

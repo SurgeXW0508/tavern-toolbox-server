@@ -29,6 +29,25 @@ function hostRouter() {
     };
 }
 
+test('Media presentation HTTP is authenticated, context-bound, bounded, private and isolated without requiring write capability',async t=>{
+ const core=await createCore({logger:quiet,policyOptions:{configPath:'/fixture/config',read:async()=>JSON.stringify({schemaVersion:1,core:{allowedOrigins:['https://example.invalid']},network:{enabled:false}})}}),app=await host(core);
+ t.after(async()=>{await core.shutdown();await app.close();});
+ const status=await request(app.url,'/v1/status',{protocol:'1.0'}),contextId=status.body.data.contextId;
+ assert.equal(status.body.data.capabilities.find(row=>row.id==='media.assets').operations.find(row=>row.id==='presentation').available,true);
+ const bytes=await sharp({create:{width:3,height:2,channels:3,background:'blue'}}).png().toBuffer();
+ const uploaded=await request(app.url,'/v1/media/import/local',{method:'POST',protocol:'1.0',headers:{Origin:'https://example.invalid','X-CSRF-Token':'fixture-csrf-token','Content-Type':'image/png'},body:bytes});
+ const id=uploaded.body.data.mediaRef.assetId,path='/v1/media/presentation?'+new URLSearchParams({assetIds:JSON.stringify([id])});
+ const headers={'X-TTB-Protocol':'1.0','x-test-user':'alice','X-TTB-Context':contextId};
+ const response=await fetch(app.url+path,{headers});assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
+ assert.deepEqual((await response.json()).data,{items:[{assetId:id,width:3,height:2,animated:false}],missingAssetIds:[]});
+ assert.equal((await fetch(app.url+path,{headers:{...headers,'X-TTB-Context':'wrong'}})).status,409);
+ assert.equal((await fetch(app.url+path,{headers:{...headers,'X-TTB-Protocol':'wrong'}})).status,409);
+ assert.equal((await fetch(app.url+path)).status,403);
+ const bob=await request(app.url,'/v1/status',{protocol:'1.0',user:'bob'});
+ const other=await fetch(app.url+path,{headers:{...headers,'x-test-user':'bob','X-TTB-Context':bob.body.data.contextId}});assert.deepEqual((await other.json()).data,{items:[],missingAssetIds:[id]});
+ for(const ids of [[],[id,id],['file:///private'],Array(49).fill(id)]){const path='/v1/media/presentation?'+new URLSearchParams({assetIds:JSON.stringify(ids)});assert.equal((await fetch(app.url+path,{headers})).status,400);}
+});
+
 async function host(core) {
     const router = hostRouter();
     core.attach(router);
@@ -177,10 +196,15 @@ test('real HTTP discovery: exact product, read-only routes, version contract and
     assert.equal(status.body.data.serverVersion, releaseVersion);
     assert.equal(status.body.data.core.version, releaseVersion);
     assert.deepEqual(status.body.meta.protocol, { major: 1, minor: 0 });
-    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'network.policy', 'network.remoteAudio', 'preferences.audioRouting', 'audio.sources', 'audio.assets', 'audio.library', 'media.assets', 'business.collections', 'localization.characters', 'media.governance']);
+    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'network.policy', 'network.remoteAudio', 'preferences.audioRouting', 'audio.sources', 'audio.assets', 'audio.library', 'worldbook.core', 'media.assets', 'worldbook.media', 'business.collections', 'localization.characters', 'media.governance']);
     assert.deepEqual(status.body.data.capabilities[0], fixture.status.data.capabilities[0]);
+    const worldbook = status.body.data.capabilities.find(item => item.id === 'worldbook.core');
+    assert.equal(worldbook.contract.major, 1);
+    assert.equal(worldbook.operations.find(item => item.id === 'summary').available, true);
+    assert.equal(worldbook.operations.find(item => item.id === 'command').available, false);
+    assert.equal(worldbook.constraints.schemaVersion, 1);
     assert.deepEqual(status.body.data.effectivePolicy, fixture.status.data.effectivePolicy);
-    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'network-audio', 'preferences', 'audio-sources', 'audio-assets', 'audio-library', 'media', 'business', 'localization', 'governance']);
+    assert.deepEqual(status.body.data.modules.map(item => item.id), ['core', 'network', 'network-audio', 'preferences', 'audio-sources', 'audio-assets', 'audio-library', 'worldbook', 'media', 'worldbook-media', 'business', 'localization', 'governance']);
     assert.equal(status.body.data.modules[1].state, 'disabled');
     assert.equal(status.body.data.core.state, 'ready');
     assert.equal(status.body.data.effectivePolicy.unsafeRequestsEnabled, false);

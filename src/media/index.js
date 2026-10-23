@@ -46,7 +46,7 @@ export function createMedia(config, network) {
 
     const definition = { id: 'media', version: '0.1.0', dependsOn: ['core'],
         capabilities: [{ id: 'media.assets', contract: { major: 1, minMinor: 0, maxMinor: 0 },
-            operations: ['localImport', 'remoteImport', 'metadata', 'read', 'delete', 'storage',
+            operations: ['localImport', 'remoteImport', 'metadata', 'presentation', 'read', 'delete', 'storage',
                 'rebuildThumbnail', 'cleanupTechnicalGarbage'].map(id => ({ id, available: true })),
             operationAvailability: () => {
                 const mutations = config.policy.core.allowedOrigins.length > 0;
@@ -61,7 +61,7 @@ export function createMedia(config, network) {
             },
             limits: { maxBytes: policy.maxBytes, quotaBytes: policy.quotaBytes, maxDimension: policy.maxDimension,
                 maxPixels: policy.maxPixels, maxFrames: policy.maxFrames, maxFramePixels: policy.maxFramePixels,
-                maxConcurrentImports: policy.maxConcurrentImports },
+                maxConcurrentImports: policy.maxConcurrentImports, maxPresentationAssets:48 },
             constraints: { profiles: ['image'], mimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
                 supportedAnimation: ['gif'], storage: 'sqlite-filesystem', refProvider: 'server' } }],
         initialize: async () => {
@@ -101,6 +101,7 @@ export function createMedia(config, network) {
         catalog: async context => (await store(context)).catalog(),
         health: async (context, id) => (await store(context)).health(id),
         metadata: async (context, id) => (await store(context)).metadata(id),
+        presentation: async (context, ids) => (await store(context)).presentation(ids),
         read: async (context, id, derived) => (await store(context)).read(id, derived),
         delete: async (context, id) => (await store(context)).delete(id),
         storage: async context => (await store(context)).usage(),

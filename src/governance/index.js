@@ -84,6 +84,7 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
     }
     const api = {
         register, analysis,
+        requiresContext: providerId => providers.get(providerId)?.contextBound === true,
         definition: { id: 'governance', version: '0.1.0', dependsOn: ['core', 'media'],
             capabilities: [{ id: 'media.governance', contract: { major: 1, minMinor: 0, maxMinor: 0 },
                 operations: ['summary', 'assets', 'groups', 'groupOverview', 'detail', 'group', 'action', 'groupAction', 'deleteBatch'].map(id => ({ id, available: true })),

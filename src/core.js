@@ -11,6 +11,8 @@ import { createAudioRoutingPreferences } from './preferences/audio-routing.js';
 import { attachAudioRoutingPreferenceRoutes } from './preferences/audio-routing-routes.js';
 import { createAudioLibrary } from './audio-library/store.js';
 import { attachAudioLibraryRoutes } from './audio-library/routes.js';
+import { createWorldbook, WorldbookFailure } from './worldbook/index.js';
+import { attachWorldbookRoutes } from './worldbook/routes.js';
 import { createAudioSources } from './audio-sources/store.js';
 import { attachAudioSourceRoutes } from './audio-sources/routes.js';
 import { NetworkFailure } from './network/destination.js';
@@ -77,8 +79,11 @@ export async function createCore({ policyOptions, registerModules, networkOption
     const audioLibrary = createAudioLibrary(config, audioSources.assets);
     registry.register(audioLibrary.definition);
     const media = createMedia(config, network);
-    registry.register(media.definition);
     const coordinate = createReferenceCoordinator();
+    const worldbook = createWorldbook(config, { now, media, coordinate });
+    registry.register(worldbook.definition);
+    registry.register(media.definition);
+    registry.register(worldbook.mediaDefinition);
     const business = createBusiness(config, media, coordinate);
     registry.register(business.definition);
     const localization = createLocalization(media, coordinate);
@@ -86,6 +91,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
     const governance = createGovernance(media, coordinate, { mutations: config.policy.core.allowedOrigins.length > 0 });
     governance.register(localization.referenceProvider);
     governance.register(business.referenceProvider);
+    governance.register(worldbook.referenceProvider);
     registry.register(governance.definition);
     registerModules?.(registry); // Test fixture or a future trusted composition root; not callable over HTTP.
     await registry.initialize();
@@ -147,6 +153,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
         attachAudioRoutingPreferenceRoutes(router, { preferences, registry, config, send, failure, logger, now });
         attachAudioSourceRoutes(router, { sources: audioSources, registry, config, send, failure, networkFailureDetails, logger, now });
         attachAudioLibraryRoutes(router, { library: audioLibrary, registry, config, send, failure, logger, now });
+        attachWorldbookRoutes(router, { worldbook, registry, config, send, failure, logger, now });
         const policyRoute = operation => async (req, res) => {
             const { requestId, context, start } = res.locals.ttbRequest;
             let code = 'OK';
@@ -310,6 +317,13 @@ export async function createCore({ policyOptions, registerModules, networkOption
                     result = await media.read(context, req.params.id, req.params.variant === 'thumbnail');
                 }
                 else if (operation === 'metadata') result = await media.metadata(context, req.params.id);
+                else if (operation === 'presentation') {
+                    if(req.get('X-TTB-Context')!==context.contextId)throw new MediaFailure('CONTEXT_CHANGED');
+                    const query=new URL(req.url,'http://localhost').searchParams;
+                    if([...query.keys()].some(key=>key!=='assetIds')||query.getAll('assetIds').length!==1||query.get('assetIds').length>2000)throw new MediaFailure('INVALID_REQUEST');
+                    let ids;try{ids=JSON.parse(query.get('assetIds'));}catch{throw new MediaFailure('INVALID_REQUEST');}
+                    result=await media.presentation(context,ids);
+                }
                 else if (operation === 'delete') result = await governance.delete(context, req.params.id);
                 else if (operation === 'rebuildThumbnail') result = await media.rebuild(context, req.params.id);
                 else if (operation === 'cleanupTechnicalGarbage') result = await media.cleanup(context);
@@ -325,7 +339,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
                 return send(res, 200, result, requestId, true, config.policy.core.maxStatusResponseBytes);
             } catch (error) {
                 code = error instanceof MediaFailure || error instanceof NetworkFailure ? error.code : 'MEDIA_UNAVAILABLE';
-                const statusCode = { INVALID_REQUEST: 400, PROTOCOL_INCOMPATIBLE: 409, CSRF_REJECTED: 403,
+                const statusCode = { INVALID_REQUEST: 400, PROTOCOL_INCOMPATIBLE: 409, CONTEXT_CHANGED:409, CSRF_REJECTED: 403,
                     MEDIA_NOT_FOUND: 404, MEDIA_REFERENCED: 409, REFERENCE_ANALYSIS_INCOMPLETE: 503, MEDIA_CORRUPT: 503, DERIVED_UNAVAILABLE: 503,
                     MEDIA_TOO_LARGE: 413, UNSUPPORTED_MEDIA_TYPE: 415, MIME_MISMATCH: 415,
                     ANIMATION_UNSUPPORTED: 415, INVALID_MEDIA: 422, MEDIA_COMPLEXITY_EXCEEDED: 422,
@@ -343,6 +357,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
         router.post('/v1/media/import/local', mediaRoute('localImport', { mutation: true, upload: true }));
         router.post('/v1/media/import/remote', mediaRoute('remoteImport', { mutation: true }));
         router.get('/v1/media/storage', mediaRoute('storage'));
+        router.get('/v1/media/presentation', mediaRoute('presentation'));
         router.get('/v1/media/assets/:id', mediaRoute('metadata'));
         router.delete('/v1/media/assets/:id', mediaRoute('delete', { mutation: true }));
         router.post('/v1/media/assets/:id/rebuild-thumbnail', mediaRoute('rebuildThumbnail', { mutation: true }));
@@ -456,6 +471,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
                 if (mutation && (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers?.['content-type'] || '')
                     || !req.body || typeof req.body !== 'object' || Array.isArray(req.body)
                     || Buffer.byteLength(JSON.stringify(req.body)) > 8192)) throw new MediaFailure('INVALID_REQUEST');
+                if (mutation && governance.requiresContext(req.body.providerId) && req.get('X-TTB-Context') !== context.contextId) throw new MediaFailure('CONTEXT_CHANGED');
                 let result;
                 if (operation === 'summary') result = await governance.summary(context);
                 else if (operation === 'assets' || operation === 'groups' || operation === 'groupOverview') result = await governance[operation](context, req.query);
@@ -469,11 +485,12 @@ export async function createCore({ policyOptions, registerModules, networkOption
                 }
                 return send(res, 200, result, requestId, true, 256 * 1024);
             } catch (error) {
-                code = error instanceof MediaFailure || error instanceof BusinessFailure ? error.code : 'MEDIA_UNAVAILABLE';
+                code = error instanceof MediaFailure || error instanceof BusinessFailure || error instanceof WorldbookFailure ? error.code : 'MEDIA_UNAVAILABLE';
                 const statusCode = { INVALID_REQUEST: 400, PROTOCOL_INCOMPATIBLE: 409, CSRF_REJECTED: 403,
                     MEDIA_NOT_FOUND: 404, REFERENCE_NOT_FOUND: 404, MEDIA_REFERENCED: 409,
                     LOCALIZATION_NOT_FOUND: 404, LOCALIZATION_CONFLICT: 409, BUSINESS_CONFLICT: 409,
                     HOST_IDENTITY_UNAVAILABLE: 409, LOCALIZATION_SCOPE_CONFLICT: 409,
+                    WORLDBOOK_MEDIA_CONFLICT:409, WORLDBOOK_VALIDATION:400, WORLDBOOK_NOT_FOUND:404, WORLDBOOK_MEDIA_UNAVAILABLE:422, CONTEXT_CHANGED:409,
                     MEDIA_CORRUPT: 422, REFERENCE_ANALYSIS_INCOMPLETE: 503 }[code] || 503;
                 return send(res, statusCode, failure(code, '媒体治理操作未完成'), requestId, true, 4096);
             } finally {

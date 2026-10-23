@@ -189,6 +189,19 @@ export class MediaStore {
 
     async metadata(id) { return this.locked(async () => this.info(this.row(id))); }
 
+    async presentation(assetIds) {
+        if (!Array.isArray(assetIds) || !assetIds.length || assetIds.length > 48
+            || new Set(assetIds).size !== assetIds.length
+            || assetIds.some(id => typeof id !== 'string' || !ASSET_ID.test(id))) throw new MediaFailure('INVALID_REQUEST');
+        return this.locked(async () => {
+            const rows = this.db.prepare(`SELECT id,width,height,frame_count FROM assets WHERE id IN (${assetIds.map(() => '?').join(',')})`).all(...assetIds);
+            const byId = new Map(rows.map(row => [row.id, row]));
+            return { items: assetIds.filter(id => byId.has(id)).map(assetId => { const row=byId.get(assetId);
+                return {assetId,width:row.width,height:row.height,animated:row.frame_count>1}; }),
+                missingAssetIds: assetIds.filter(id => !byId.has(id)) };
+        });
+    }
+
     async delete(id) {
         return this.locked(async () => {
             const row = this.row(id);
