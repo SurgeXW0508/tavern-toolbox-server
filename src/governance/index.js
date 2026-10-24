@@ -138,10 +138,15 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
             }) };
         },
         async detail(context, id, query = {}) {
-            const bounds = page(query), { items, refs, byAsset } = await catalog(context);
-            const asset = items.find(item => item.mediaRef.assetId === id);
-            if (!asset) fail('MEDIA_NOT_FOUND');
-            return { asset, health: await media.health(context, id), references: slice(byAsset.get(id) || [], bounds), complete: refs.complete };
+            const bounds = page(query);
+            // Detail needs one Asset's metadata. Reference truth is still freshly
+            // enumerated across every provider; no browse cache authorizes writes.
+            const metadata = await media.metadata(context, id);
+            const refs = await analysis(context);
+            const references = refs.references.filter(ref => ref.mediaRef.assetId === id);
+            const asset = { ...metadata, referenceState: stateOf(references, refs.complete),
+                referenceCount: references.length, consumers: [...new Set(references.map(ref => ref.consumer))] };
+            return { asset, health: await media.health(context, id), references: slice(references, bounds), complete: refs.complete };
         },
         async group(context, providerId, groupId, query = {}) {
             return coordinate(context, async () => {

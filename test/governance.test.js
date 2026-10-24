@@ -400,3 +400,19 @@ test('real empty Character records are hidden only while Active and remain eligi
     assert.equal((await f.governance.analysis(f.context)).groups.length, 0);
     assert.equal((await f.media.metadata(f.context, asset.mediaRef.assetId)).mediaRef.assetId, asset.mediaRef.assetId);
 });
+
+
+test('single image detail does not enumerate the Asset catalog and still rechecks providers', async t => {
+    const f = await fixture(t), asset = await f.image(), id = asset.mediaRef.assetId;
+    t.mock.method(f.media, 'catalog', () => { throw Error('detail must not scan every Asset'); });
+    let failProvider = false, calls = 0;
+    f.governance.register({ id: 'cost-check', consumer: 'worldbook', label: 'Worldbook', enumerate: async () => {
+        calls++; if (failProvider) throw Error('offline'); return [];
+    } });
+    const first = await f.governance.detail(f.context, id);
+    assert.equal(first.asset.referenceState, 'unreferenced'); assert.equal(calls, 1);
+    failProvider = true;
+    const second = await f.governance.detail(f.context, id);
+    assert.equal(second.asset.referenceState, 'unknown'); assert.equal(second.complete, false); assert.equal(calls, 2);
+    await assert.rejects(f.governance.delete(f.context, id), { code: 'REFERENCE_ANALYSIS_INCOMPLETE' });
+});

@@ -12,6 +12,8 @@ Local Audio streaming uses a bounded 64 KiB buffer, backpressure and cancellatio
 
 ## Concrete growth risks
 
+Candidate branch `stage/media-consumer-performance` optimizes single-image Governance detail to read only the requested Asset metadata. All reference Providers are still analyzed afresh; deletion and mutation checks are unchanged. Full-catalog browse remains a growth risk. This candidate has no schema/protocol changes and is not a release. Local governance/media tests pass; the full local suite is blocked by the environment denying abstract Unix-socket locks (`EPERM`, surfaced as `POLICY_READ_ONLY`) in network-policy tests. Real NAS latency and full supported-environment validation remain pending.
+
 | Area | Current behavior | Next-change constraint |
 | --- | --- | --- |
 | Audio Library paging | Negotiated browse captures validated metadata under the Audio coordinator, scans matching files outside it, then validates again; continuation checks only its page | 60-second bounded presentation snapshots, explicit conflict/refresh. Legacy list remains fresh full-scan compatible. Metadata validation is still O(N); no claim of indexed paging |
