@@ -14,6 +14,16 @@ Local Audio streaming uses a bounded 64 KiB buffer, backpressure and cancellatio
 
 Consumer group lists and overviews now read a fresh `SELECT id FROM assets` projection instead of constructing complete Asset metadata and per-Asset reference summaries that these views discard. This removes redundant projection/allocation, not the O(N) identity scan or all-Provider enumeration. It makes no file-health claim and adds no cache, wire API or schema. Image Asset listing, summary and exact Group usage retain their existing complete analysis; deletion still obtains fresh references under the coordinator. Tests cover user isolation, immediate missing identities after deletion, no metadata/Original reads and preserved reference protection. Frontend multi-Picker selection no longer requests another full Asset page on each toggle.
 
+The 2026-10-24 comparison used real temporary Media SQLite stores containing synthetic metadata rows, three in-memory Providers with one reference per Asset, and seven warm overview reads per variant. It compared the previous Governance implementation at `f4a2ff4` against `32e01c4`, asserting identical overview output. No image bytes, actual Character filesystem enumeration, HTTP, NAS or browser frames were measured. Timings are local samples, not acceptance thresholds:
+
+| Assets / Groups | Overview median before / after | Full metadata projections per overview before / after | Current Asset traversal at 48/page: pages / metadata projections |
+| --- | --- | --- | --- |
+| 200 | 1.01 / 0.58 ms | 200 / 0 | 5 / 1,000 |
+| 1,000 | 4.20 / 1.55 ms | 1,000 / 0 | 21 / 21,000 |
+| 5,000 | 20.74 / 5.78 ms | 5,000 / 0 | 105 / 525,000 |
+
+IDs and references still scan in overview. The Asset traversal counts confirm N×pages work; changing page size alone is insufficient. Indexed Asset queries or an explicit bounded browse snapshot contract are the next structural options, requiring freshness/concurrent mutation/Provider failure tests; no browse result may authorize deletion. The current candidate passed both complete remote CI workflows at `32e01c4`; local diagnostic selection excluding the eight established socket-policy cases passed 222 tests, with syntax/privacy checks. Real NAS cold/warm latency and browser long-session/frame measurements remain pending.
+
 Candidate branch `stage/media-consumer-performance` optimizes single-image Governance detail to read only the requested Asset metadata. All reference Providers are still analyzed afresh; deletion and mutation checks are unchanged. Full-catalog browse remains a growth risk. This candidate has no schema/protocol changes and is not a release. Local governance/media tests pass; the full local suite is blocked by the environment denying abstract Unix-socket locks (`EPERM`, surfaced as `POLICY_READ_ONLY`) in network-policy tests. Real NAS latency and full supported-environment validation remain pending.
 
 | Area | Current behavior | Next-change constraint |
