@@ -100,6 +100,7 @@ export function createMedia(config, network) {
         },
         catalog: async context => (await store(context)).catalog(),
         catalogIds: async context => (await store(context)).catalogIds(),
+        browse: async (context, query) => (await store(context)).browse(query),
         health: async (context, id) => (await store(context)).health(id),
         metadata: async (context, id) => (await store(context)).metadata(id),
         presentation: async (context, ids) => (await store(context)).presentation(ids),

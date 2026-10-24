@@ -429,3 +429,30 @@ test('Consumer browse reads only fresh asset identities and preserves missing-re
     assert.equal((await f.governance.groups(f.context, { broken: 'true' })).items[0].brokenCount, 1);
     assert.equal((await f.governance.groupOverview(f.context)).sections.find(row => row.id === 'outfit').items[0].brokenCount, 1);
 });
+
+test('SQL Asset pages preserve reference filters, Unicode search and incomplete-provider protection', async t => {
+    const f=await fixture(t), assets=[];
+    for(const color of ['red','blue','green','white'])assets.push(await f.image(color));
+    let offline=false;
+    f.governance.register({id:'query-test',consumer:'worldbook',label:'世界书',enumerate:async()=> {
+        if(offline)throw Error('offline');
+        return assets.slice(0,3).map((asset,n)=>({id:'query-'+n,label:n===1?'中文标签':'test',lifecycle:n===0?'active':'detached',revision:1,references:[{id:'cover',mediaRef:asset.mediaRef}]}));
+    }});
+    const all=await f.media.catalog(f.context);
+    t.mock.method(f.media,'catalog',()=>{throw Error('Asset paging must not load the full metadata catalog');});
+    const refs=await f.governance.analysis(f.context);
+    for(const state of ['', 'active','detached','unknown','unreferenced'])for(const consumer of ['', 'worldbook','absent'])for(const search of ['', '中文','世界书',assets[3].mediaRef.assetId]) {
+        const expected=all.filter(asset=>{
+            const rows=refs.references.filter(ref=>ref.mediaRef.assetId===asset.mediaRef.assetId);
+            const value=rows.some(ref=>ref.lifecycle==='active')?'active':rows.some(ref=>ref.lifecycle==='detached')?'detached':'unreferenced';
+            return (!state||state===value)&&(!consumer||rows.some(ref=>ref.consumer===consumer))&&(!search||[asset.mediaRef.assetId,...rows.flatMap(ref=>[ref.groupLabel,ref.consumerLabel])].some(text=>text.toLocaleLowerCase().includes(search.toLocaleLowerCase())));
+        });
+        const result=await f.governance.assets(f.context,{state,consumer,search,limit:2});
+        assert.equal(result.total,expected.length,JSON.stringify({state,consumer,search}));
+        assert.equal(result.items.length,Math.min(2,expected.length));
+    }
+    offline=true;
+    assert.equal((await f.governance.assets(f.context,{state:'unknown'})).total,4);
+    assert.equal((await f.governance.assets(f.context,{state:'unreferenced'})).total,0);
+    await assert.rejects(f.governance.delete(f.context,assets[3].mediaRef.assetId),{code:'REFERENCE_ANALYSIS_INCOMPLETE'});
+});

@@ -104,17 +104,30 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
                 unreferencedBytes: free.reduce((sum, item) => sum + item.originalBytes + item.derivedBytes, 0), brokenCount: broken.length };
         },
         async assets(context, query = {}) {
-            const bounds = page(query), { items, refs, byAsset } = await catalog(context);
-            const selected = items.filter(item => (!query.state || query.state === item.referenceState)
-                && (!query.consumer || item.consumers.includes(query.consumer)) && (!query.kind || query.kind === item.kind)
-                && (!bounds.search || [item.mediaRef.assetId, ...(byAsset.get(item.mediaRef.assetId) || [])
-                    .flatMap(ref => [ref.groupLabel, ref.consumerLabel])].some(value => value.toLocaleLowerCase().includes(bounds.search))));
-            const order = query.sort || 'newest';
-            selected.sort((a, b) => (order === 'largest' ? b.originalBytes - a.originalBytes
-                : order === 'smallest' ? a.originalBytes - b.originalBytes
-                    : order === 'oldest' ? a.createdAt.localeCompare(b.createdAt) : b.createdAt.localeCompare(a.createdAt))
-                || a.mediaRef.assetId.localeCompare(b.mediaRef.assetId));
-            return { ...slice(selected, bounds), complete: refs.complete, providers: refs.providers };
+            const bounds = page(query), refs = await analysis(context), byAsset = new Map();
+            for (const ref of refs.references) {
+                if (!byAsset.has(ref.mediaRef.assetId)) byAsset.set(ref.mediaRef.assetId, []);
+                byAsset.get(ref.mediaRef.assetId).push(ref);
+            }
+            let includeIds = null, excludeIds = [];
+            if (query.state) {
+                if (['unreferenced', 'unknown'].includes(query.state)) {
+                    if (query.state === (refs.complete ? 'unreferenced' : 'unknown')) excludeIds = [...byAsset.keys()];
+                    else includeIds = [];
+                } else includeIds = [...byAsset].filter(([, rows]) => stateOf(rows, refs.complete) === query.state).map(([id]) => id);
+            }
+            if (query.consumer) {
+                const matching = new Set([...byAsset].filter(([, rows]) => rows.some(ref => ref.consumer === query.consumer)).map(([id]) => id));
+                includeIds = includeIds === null ? [...matching] : includeIds.filter(id => matching.has(id));
+            }
+            const searchIds = bounds.search ? [...byAsset].filter(([, rows]) => rows.some(ref =>
+                [ref.groupLabel, ref.consumerLabel].some(value => value.toLocaleLowerCase().includes(bounds.search)))).map(([id]) => id) : [];
+            const result = await media.browse(context, { ...bounds, sort: query.sort || 'newest', includeIds, excludeIds, searchIds });
+            return { ...result, items: result.items.map(asset => {
+                const references = byAsset.get(asset.mediaRef.assetId) || [];
+                return { ...asset, referenceState: stateOf(references, refs.complete), referenceCount: references.length,
+                    consumers: [...new Set(references.map(ref => ref.consumer))] };
+            }), complete: refs.complete, providers: refs.providers };
         },
         async groups(context, query = {}) {
             const bounds = page(query), { refs, ids } = await groupInventory(context);
