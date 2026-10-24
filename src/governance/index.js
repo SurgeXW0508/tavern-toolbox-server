@@ -82,6 +82,10 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
         });
         return { items, refs, byAsset, ids, broken, storage };
     }
+    async function groupInventory(context) {
+        const [ids, refs] = await Promise.all([media.catalogIds(context), analysis(context)]);
+        return { ids: new Set(ids), refs };
+    }
     const api = {
         register, analysis,
         requiresContext: providerId => providers.get(providerId)?.contextBound === true,
@@ -113,7 +117,7 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
             return { ...slice(selected, bounds), complete: refs.complete, providers: refs.providers };
         },
         async groups(context, query = {}) {
-            const bounds = page(query), { refs, ids } = await catalog(context);
+            const bounds = page(query), { refs, ids } = await groupInventory(context);
             const groups = refs.groups.filter(browsableGroup).map(({ references, ...group }) => ({ ...group,
                 brokenCount: references.filter(ref => !ids.has(ref.mediaRef.assetId)).length }));
             return { ...slice(groups.filter(group => (!query.provider || group.providerId === query.provider) && (!query.consumer || group.consumer === query.consumer)
@@ -125,7 +129,7 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
         async groupOverview(context, query = {}) {
             const bounds = page(query), previewLimit = Number(query.previewLimit ?? 6);
             if (!Number.isSafeInteger(previewLimit) || previewLimit < 1 || previewLimit > 6 || bounds.offset) fail('INVALID_REQUEST');
-            const { refs, ids } = await catalog(context);
+            const { refs, ids } = await groupInventory(context);
             const matches = refs.groups.filter(group => browsableGroup(group) && (!query.consumer || group.consumer === query.consumer)
                 && (!query.state || group.lifecycle === query.state)
                 && (query.broken !== 'true' || group.references.some(ref => !ids.has(ref.mediaRef.assetId)))

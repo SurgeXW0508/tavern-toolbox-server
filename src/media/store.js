@@ -175,6 +175,12 @@ export class MediaStore {
         return this.locked(async () => this.db.prepare('SELECT * FROM assets').all().map(row => this.info(row)));
     }
 
+    // Internal existence projection for Consumer browse; no file I/O or health
+    // claim. Keep this fresh and under the same store lock as other reads.
+    async catalogIds() {
+        return this.locked(async () => this.db.prepare('SELECT id FROM assets').all().map(row => row.id));
+    }
+
     async health(id) {
         return this.locked(async () => {
             const row = this.row(id);

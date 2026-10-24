@@ -329,7 +329,7 @@ test('Group-owned host maintenance retains Server checks against another existin
 
 test('Consumer overview analyzes inventory once, bounds previews and preserves empty/unavailable identities', async () => {
     let catalogs = 0, storage = 0; const reads = new Map();
-    const governance = createGovernance({ async catalog() { catalogs++; return []; }, async storage() { storage++; throw Error('unexpected storage'); } }, (_context, work) => work());
+    const governance = createGovernance({ async catalogIds() { catalogs++; return []; }, async storage() { storage++; throw Error('unexpected storage'); } }, (_context, work) => work());
     for (const [consumer, count] of [['character', 100], ['outfit', 4], ['worldbook', 26], ['empty', 0], ['offline', null]]) governance.register({ id: consumer, consumer, label: consumer, async enumerate() {
         reads.set(consumer, (reads.get(consumer) || 0) + 1); if (count === null) throw Error('private');
         return Array.from({ length: count }, (_, n) => ({ id: `${consumer}-${n}`, label: `Group ${n}`, lifecycle: n % 2 ? 'detached' : 'active', revision: 1, references: [{ id: 'ref', mediaRef: { provider: 'server', assetId: '12345678-1234-4123-8123-123456789012' } }] }));
@@ -353,7 +353,7 @@ test('browse totals exclude Active empty scopes before pagination without changi
         { id: `empty-${n}`, label: `Empty ${n}`, lifecycle: 'active', revision: 1, references: [] },
         { id: `used-${n}`, label: `Used ${n}`, lifecycle: 'active', revision: 1, references: [{ id: 'image', mediaRef }] }
     ]).flat();
-    const governance = createGovernance({ catalog: async () => [{ mediaRef }] }, (_context, work) => work());
+    const governance = createGovernance({ catalog: async () => [{ mediaRef }], catalogIds: async () => [mediaRef.assetId] }, (_context, work) => work());
     governance.register({ id: 'characters', consumer: 'character', label: '角色本地化', enumerate: async () => records });
     governance.register({ id: 'offline', consumer: 'worldbook', label: '世界书', enumerate: async () => { throw Error('unavailable'); } });
     const overview = await governance.groupOverview({});
@@ -415,4 +415,17 @@ test('single image detail does not enumerate the Asset catalog and still recheck
     const second = await f.governance.detail(f.context, id);
     assert.equal(second.asset.referenceState, 'unknown'); assert.equal(second.complete, false); assert.equal(calls, 2);
     await assert.rejects(f.governance.delete(f.context, id), { code: 'REFERENCE_ANALYSIS_INCOMPLETE' });
+});
+
+test('Consumer browse reads only fresh asset identities and preserves missing-reference and deletion protection', async t => {
+    const f = await fixture(t), asset = await f.image(), id = asset.mediaRef.assetId;
+    await f.business.commit(f.context, 'outfit', 1, 0, outfit(asset.mediaRef));
+    t.mock.method(f.media, 'catalog', () => { throw Error('Consumer browse must not project full asset metadata'); });
+    const groups = await f.governance.groups(f.context);
+    assert.equal(groups.items[0].brokenCount, 0);
+    assert.equal((await f.governance.groupOverview(f.context)).sections.find(row => row.id === 'outfit').items[0].brokenCount, 0);
+    await assert.rejects(f.governance.delete(f.context, id), { code: 'MEDIA_REFERENCED' });
+    await f.media.delete(f.context, id); // Restore damage: the next browse must see missing identity immediately.
+    assert.equal((await f.governance.groups(f.context, { broken: 'true' })).items[0].brokenCount, 1);
+    assert.equal((await f.governance.groupOverview(f.context)).sections.find(row => row.id === 'outfit').items[0].brokenCount, 1);
 });

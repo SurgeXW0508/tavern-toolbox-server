@@ -248,3 +248,18 @@ test('a valid Image larger than 16 MiB passes actual Network and Media import wi
     await assert.rejects(validateImage(bytes, 'image/png', { ...policy, maxPixels: 100 }, sharp), { code: 'MEDIA_COMPLEXITY_EXCEEDED' });
     network.shutdown();
 });
+
+test('asset identity projection is user scoped, fresh and avoids full metadata and Original reads', async t => {
+    const store = new MediaStore(await temp(t), policy, DatabaseSync);
+    const other = new MediaStore(await temp(t), policy, DatabaseSync);
+    await store.initialize(); await other.initialize();
+    t.after(() => { store.close(); other.close(); });
+    const bytes = await fixture('png', 'blue');
+    const asset = await store.import(bytes, await validateImage(bytes, 'image/png', policy, sharp));
+    t.mock.method(store, 'info', () => { throw Error('must not project full metadata'); });
+    t.mock.method(store, 'readOriginal', () => { throw Error('must not read Original'); });
+    assert.deepEqual(await store.catalogIds(), [asset.mediaRef.assetId]);
+    assert.deepEqual(await other.catalogIds(), []);
+    await store.delete(asset.mediaRef.assetId);
+    assert.deepEqual(await store.catalogIds(), []);
+});

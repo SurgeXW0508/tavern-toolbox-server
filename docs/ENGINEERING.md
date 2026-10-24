@@ -12,6 +12,8 @@ Local Audio streaming uses a bounded 64 KiB buffer, backpressure and cancellatio
 
 ## Concrete growth risks
 
+Consumer group lists and overviews now read a fresh `SELECT id FROM assets` projection instead of constructing complete Asset metadata and per-Asset reference summaries that these views discard. This removes redundant projection/allocation, not the O(N) identity scan or all-Provider enumeration. It makes no file-health claim and adds no cache, wire API or schema. Image Asset listing, summary and exact Group usage retain their existing complete analysis; deletion still obtains fresh references under the coordinator. Tests cover user isolation, immediate missing identities after deletion, no metadata/Original reads and preserved reference protection. Frontend multi-Picker selection no longer requests another full Asset page on each toggle.
+
 Candidate branch `stage/media-consumer-performance` optimizes single-image Governance detail to read only the requested Asset metadata. All reference Providers are still analyzed afresh; deletion and mutation checks are unchanged. Full-catalog browse remains a growth risk. This candidate has no schema/protocol changes and is not a release. Local governance/media tests pass; the full local suite is blocked by the environment denying abstract Unix-socket locks (`EPERM`, surfaced as `POLICY_READ_ONLY`) in network-policy tests. Real NAS latency and full supported-environment validation remain pending.
 
 | Area | Current behavior | Next-change constraint |
