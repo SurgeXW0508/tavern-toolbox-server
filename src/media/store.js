@@ -60,6 +60,7 @@ export class MediaStore {
                     COMMIT;`);
             }
             this.db = db;
+            db.exec('CREATE INDEX IF NOT EXISTS assets_created_order ON assets(created_at,id); CREATE INDEX IF NOT EXISTS assets_size_order ON assets(original_size,id);');
             await this.cleanupStaging();
         } catch (error) { db.close(); throw error; }
     }
@@ -173,6 +174,36 @@ export class MediaStore {
 
     async catalog() {
         return this.locked(async () => this.db.prepare('SELECT * FROM assets').all().map(row => this.info(row)));
+    }
+
+    // Internal existence projection for Consumer browse; no file I/O or health
+    // claim. Keep this fresh and under the same store lock as other reads.
+    async catalogIds() {
+        return this.locked(async () => this.db.prepare('SELECT id FROM assets').all().map(row => row.id));
+    }
+
+    // Internal metadata paging. Reference semantics stay in Governance; sets
+    // are bound as JSON values, never interpolated SQL or retained snapshots.
+    async browse({ offset, limit, sort = 'newest', includeIds = null, excludeIds = [], search = '', searchIds = [] }) {
+        const orders = { newest: 'created_at DESC,id ASC', oldest: 'created_at ASC,id ASC',
+            largest: 'original_size DESC,id ASC', smallest: 'original_size ASC,id ASC' };
+        if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 48
+            || !Object.hasOwn(orders, sort) || typeof search !== 'string'
+            || !Array.isArray(excludeIds) || !Array.isArray(searchIds)
+            || [includeIds, excludeIds, searchIds].some(ids => ids !== null && (!Array.isArray(ids) || ids.some(id => typeof id !== 'string'))))
+            throw new MediaFailure('INVALID_REQUEST');
+        const clauses = [], values = [];
+        if (includeIds !== null) { clauses.push('id IN (SELECT value FROM json_each(?))'); values.push(JSON.stringify(includeIds)); }
+        if (excludeIds.length) { clauses.push('id NOT IN (SELECT value FROM json_each(?))'); values.push(JSON.stringify(excludeIds)); }
+        if (search) { clauses.push('(instr(lower(id),?)>0 OR id IN (SELECT value FROM json_each(?)))'); values.push(search, JSON.stringify(searchIds)); }
+        const where = clauses.length ? ' WHERE ' + clauses.join(' AND ') : '';
+        return this.locked(async () => {
+            // Both statements run synchronously within the owned store lock.
+            const total = this.db.prepare('SELECT COUNT(*) AS total FROM assets' + where).get(...values).total;
+            const rows = this.db.prepare('SELECT * FROM assets' + where + ' ORDER BY ' + orders[sort] + ' LIMIT ? OFFSET ?')
+                .all(...values, limit, offset);
+            return { items: rows.map(row => this.info(row)), total, offset, limit, hasMore: offset + limit < total };
+        });
     }
 
     async health(id) {

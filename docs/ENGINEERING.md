@@ -4,7 +4,7 @@ This is the current cross-module engineering guide. README owns installation and
 
 ## Reviewed baseline and assessment
 
-Reviewed formal baseline: Server **v0.10.0** paired with Frontend **v0.53.0**, Protocol **1.0**, Worldbook Storage Schema **3**. Summary wire schemaVersion 1, featureVersion 2 with global/column/filtered/folder scopes, reconcileVersion 1; worldbook.core/media contracts remain 1.0. Immutable annotated tags identify formal main merge commits, preserving the Phase 10 stage ancestry. User-confirmed SillyTavern 1.19.0 Docker/NAS core/UI feedback is separate from automated and synthetic-host coverage; PHASE-10-ACCEPTANCE.md records remaining device/performance limits.
+Reviewed formal baseline: Server **v0.10.1** paired with Frontend **v0.53.1**, Protocol **1.0**, Worldbook Storage Schema **3**. Summary wire schemaVersion 1, featureVersion 2 with global/column/filtered/folder scopes, reconcileVersion 1; worldbook.core/media contracts remain 1.0. Immutable annotated tags identify formal main merge commits, preserving the Phase 10 stage ancestry. User-confirmed SillyTavern 1.19.0 Docker/NAS core/UI feedback is separate from automated and synthetic-host coverage; PHASE-10-ACCEPTANCE.md records remaining device/performance limits.
 
 The Server is a reasonably separated modular monolith for one ST process and its authenticated users. Core composes capability modules; Network owns transport/policy; Media and Audio own independent file/metadata stores; Business/Localization own image references; Governance obtains references through providers; Audio Library owns product metadata, not file retention. These boundaries should be preserved. The review does not justify a rewrite, microservices or distributed storage.
 
@@ -12,12 +12,38 @@ Local Audio streaming uses a bounded 64 KiB buffer, backpressure and cancellatio
 
 ## Concrete growth risks
 
+Consumer group lists and overviews now read a fresh `SELECT id FROM assets` projection instead of constructing complete Asset metadata and per-Asset reference summaries that these views discard. This removes redundant projection/allocation, not the O(N) identity scan or all-Provider enumeration. It makes no file-health claim and adds no cache, wire API or schema. Image Asset listing, summary and exact Group usage retain their existing complete analysis; deletion still obtains fresh references under the coordinator. Tests cover user isolation, immediate missing identities after deletion, no metadata/Original reads and preserved reference protection. Frontend multi-Picker selection no longer requests another full Asset page on each toggle.
+
+The 2026-10-24 comparison used real temporary Media SQLite stores containing synthetic metadata rows, three in-memory Providers with one reference per Asset, and seven warm overview reads per variant. It compared the previous Governance implementation at `f4a2ff4` against `32e01c4`, asserting identical overview output. No image bytes, actual Character filesystem enumeration, HTTP, NAS or browser frames were measured. Timings are local samples, not acceptance thresholds:
+
+| Assets / Groups | Overview median before / after | Full metadata projections per overview before / after | Pre-SQL Asset traversal at 48/page: pages / metadata projections |
+| --- | --- | --- | --- |
+| 200 | 1.01 / 0.58 ms | 200 / 0 | 5 / 1,000 |
+| 1,000 | 4.20 / 1.55 ms | 1,000 / 0 | 21 / 21,000 |
+| 5,000 | 20.74 / 5.78 ms | 5,000 / 0 | 105 / 525,000 |
+
+IDs and references still scan in overview. The pre-SQL traversal above is the comparison baseline, not current behavior.
+
+The subsequent Asset-page implementation now passes fresh reference-derived ID sets to an internal Media SQL query. SQLite performs complete filtered counting, ordering and LIMIT/OFFSET; only returned rows become full Asset metadata. JSON-bound ID sets avoid SQL interpolation and variable-count limits. Additive timestamp/size indexes preserve schema version 1 and old readers; no wire API or snapshot cache is introduced. Count and page statements execute synchronously within the existing Media lock. Governance retains active-over-detached precedence, Unicode label search, ID substring search, Consumer intersections and incomplete-Provider protection. Mutations/deletion remain unchanged.
+
+On the same synthetic dataset, first-page metadata projections are 24 at each size; complete 48/page traversal projects 200 / 1,000 / 5,000 rows instead of 1,000 / 21,000 / 525,000. Local sampled traversal took 2.28 / 46.78 / 1,105.85 ms. Reference enumeration, ID-set construction, filtered counts and OFFSET still grow with the collection; this is not an O(pageSize) total-work claim. Tests compare all four orderings including ties, 60 state/Consumer/search combinations, count/page agreement, fresh deletion, explicit empty filters and incomplete analysis. Real Character/NAS I/O is excluded from these samples.
+
+Server **v0.10.1**, paired with Frontend **v0.53.1** — media consumer performance maintenance. Protocol **1.0** and all storage schema versions remain unchanged.
+
+- Asset browse now filters/counts/orders/pages in SQLite and projects metadata only for returned rows; additive timestamp/size indexes remain compatible with prior readers.
+- Consumer group browse uses fresh Asset IDs; single-Asset detail reads exact metadata. All reference Providers are still analyzed freshly.
+- No browse cache authorizes writes or deletion. CAS, user isolation, incomplete-reference protection, media ownership and Original health checks remain unchanged.
+- Complete Candidate CI, privacy and release checks are required. Local abstract Unix socket restrictions affect eight policy tests; production locks and full remote gates are not weakened.
+- Synthetic 5,000-Asset traversal reduces metadata projections from 525,000 to 5,000. Provider enumeration, dynamic counts and deep OFFSET still grow with data size. Actual NAS latency and long-session browser frames/heap remain unquantified.
+
+Single-image Governance detail reads only the requested Asset metadata; references and health remain fresh. User authorized release on 2026-10-25. Full remote CI and release checks remain the publication gates.
+
 | Area | Current behavior | Next-change constraint |
 | --- | --- | --- |
 | Audio Library paging | Negotiated browse captures validated metadata under the Audio coordinator, scans matching files outside it, then validates again; continuation checks only its page | 60-second bounded presentation snapshots, explicit conflict/refresh. Legacy list remains fresh full-scan compatible. Metadata validation is still O(N); no claim of indexed paging |
 | Audio Asset management | Negotiated browse calculates health/reference summary once per scan and rechecks page health; legacy list avoids its former duplicate page health checks | Summary describes scan time. Bindings/deletion never trust it; reference capture still validates the Source registry on each request |
 | Lock duration | Browse/playbackPool file checks run outside the per-user write coordinator; capture/final validation remain inside | 4 file checks/read; 1 read/user and 4 globally. Writes can finish during enumeration; stale reads fail. Explicit full integrity checks and legacy list still hold their original locks; measure before redesigning those contracts |
-| Synchronous work | SQLite calls, JSON validation/serialization, metadata scans and sorting execute in the ST process; image Governance also scans full catalogs/providers before paging | Measure event-loop delay and rows/files touched with realistic data. Async filesystem APIs alone do not make the whole path cheap. Adopt SQL indexes/queries or bounded snapshot reuse only with evidence and compatible contracts |
+| Synchronous work | SQLite calls, JSON validation/serialization, metadata scans and sorting execute in the ST process; image Governance still enumerates reference Providers before SQL paging | Measure event-loop delay and rows/files touched with realistic data. Async filesystem APIs alone do not make the whole path cheap. Adopt SQL indexes/queries or bounded snapshot reuse only with evidence and compatible contracts |
 | Resource lifetime | User stores initialize lazily and Maps retain them until shutdown; jobs/streams have explicit cleanup | Suitable for current small-user deployment; many-user growth needs open-DB/file-descriptor and memory measurements. If adding idle eviction, protect in-flight operations and persist durable state first |
 | Composition | `src/core.js` composes modules but still contains substantial Image/Business/Localization/Governance routing; Audio routes are already extracted | New business routes belong to domain route modules, sharing authentication/protocol/error helpers. Do not add another independent security gate or a generic arbitrary-KV endpoint |
 

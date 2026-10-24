@@ -82,6 +82,10 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
         });
         return { items, refs, byAsset, ids, broken, storage };
     }
+    async function groupInventory(context) {
+        const [ids, refs] = await Promise.all([media.catalogIds(context), analysis(context)]);
+        return { ids: new Set(ids), refs };
+    }
     const api = {
         register, analysis,
         requiresContext: providerId => providers.get(providerId)?.contextBound === true,
@@ -100,20 +104,33 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
                 unreferencedBytes: free.reduce((sum, item) => sum + item.originalBytes + item.derivedBytes, 0), brokenCount: broken.length };
         },
         async assets(context, query = {}) {
-            const bounds = page(query), { items, refs, byAsset } = await catalog(context);
-            const selected = items.filter(item => (!query.state || query.state === item.referenceState)
-                && (!query.consumer || item.consumers.includes(query.consumer)) && (!query.kind || query.kind === item.kind)
-                && (!bounds.search || [item.mediaRef.assetId, ...(byAsset.get(item.mediaRef.assetId) || [])
-                    .flatMap(ref => [ref.groupLabel, ref.consumerLabel])].some(value => value.toLocaleLowerCase().includes(bounds.search))));
-            const order = query.sort || 'newest';
-            selected.sort((a, b) => (order === 'largest' ? b.originalBytes - a.originalBytes
-                : order === 'smallest' ? a.originalBytes - b.originalBytes
-                    : order === 'oldest' ? a.createdAt.localeCompare(b.createdAt) : b.createdAt.localeCompare(a.createdAt))
-                || a.mediaRef.assetId.localeCompare(b.mediaRef.assetId));
-            return { ...slice(selected, bounds), complete: refs.complete, providers: refs.providers };
+            const bounds = page(query), refs = await analysis(context), byAsset = new Map();
+            for (const ref of refs.references) {
+                if (!byAsset.has(ref.mediaRef.assetId)) byAsset.set(ref.mediaRef.assetId, []);
+                byAsset.get(ref.mediaRef.assetId).push(ref);
+            }
+            let includeIds = null, excludeIds = [];
+            if (query.state) {
+                if (['unreferenced', 'unknown'].includes(query.state)) {
+                    if (query.state === (refs.complete ? 'unreferenced' : 'unknown')) excludeIds = [...byAsset.keys()];
+                    else includeIds = [];
+                } else includeIds = [...byAsset].filter(([, rows]) => stateOf(rows, refs.complete) === query.state).map(([id]) => id);
+            }
+            if (query.consumer) {
+                const matching = new Set([...byAsset].filter(([, rows]) => rows.some(ref => ref.consumer === query.consumer)).map(([id]) => id));
+                includeIds = includeIds === null ? [...matching] : includeIds.filter(id => matching.has(id));
+            }
+            const searchIds = bounds.search ? [...byAsset].filter(([, rows]) => rows.some(ref =>
+                [ref.groupLabel, ref.consumerLabel].some(value => value.toLocaleLowerCase().includes(bounds.search)))).map(([id]) => id) : [];
+            const result = await media.browse(context, { ...bounds, sort: query.sort || 'newest', includeIds, excludeIds, searchIds });
+            return { ...result, items: result.items.map(asset => {
+                const references = byAsset.get(asset.mediaRef.assetId) || [];
+                return { ...asset, referenceState: stateOf(references, refs.complete), referenceCount: references.length,
+                    consumers: [...new Set(references.map(ref => ref.consumer))] };
+            }), complete: refs.complete, providers: refs.providers };
         },
         async groups(context, query = {}) {
-            const bounds = page(query), { refs, ids } = await catalog(context);
+            const bounds = page(query), { refs, ids } = await groupInventory(context);
             const groups = refs.groups.filter(browsableGroup).map(({ references, ...group }) => ({ ...group,
                 brokenCount: references.filter(ref => !ids.has(ref.mediaRef.assetId)).length }));
             return { ...slice(groups.filter(group => (!query.provider || group.providerId === query.provider) && (!query.consumer || group.consumer === query.consumer)
@@ -125,7 +142,7 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
         async groupOverview(context, query = {}) {
             const bounds = page(query), previewLimit = Number(query.previewLimit ?? 6);
             if (!Number.isSafeInteger(previewLimit) || previewLimit < 1 || previewLimit > 6 || bounds.offset) fail('INVALID_REQUEST');
-            const { refs, ids } = await catalog(context);
+            const { refs, ids } = await groupInventory(context);
             const matches = refs.groups.filter(group => browsableGroup(group) && (!query.consumer || group.consumer === query.consumer)
                 && (!query.state || group.lifecycle === query.state)
                 && (query.broken !== 'true' || group.references.some(ref => !ids.has(ref.mediaRef.assetId)))
@@ -138,10 +155,15 @@ export function createGovernance(media, coordinate, { mutations = true } = {}) {
             }) };
         },
         async detail(context, id, query = {}) {
-            const bounds = page(query), { items, refs, byAsset } = await catalog(context);
-            const asset = items.find(item => item.mediaRef.assetId === id);
-            if (!asset) fail('MEDIA_NOT_FOUND');
-            return { asset, health: await media.health(context, id), references: slice(byAsset.get(id) || [], bounds), complete: refs.complete };
+            const bounds = page(query);
+            // Detail needs one Asset's metadata. Reference truth is still freshly
+            // enumerated across every provider; no browse cache authorizes writes.
+            const metadata = await media.metadata(context, id);
+            const refs = await analysis(context);
+            const references = refs.references.filter(ref => ref.mediaRef.assetId === id);
+            const asset = { ...metadata, referenceState: stateOf(references, refs.complete),
+                referenceCount: references.length, consumers: [...new Set(references.map(ref => ref.consumer))] };
+            return { asset, health: await media.health(context, id), references: slice(references, bounds), complete: refs.complete };
         },
         async group(context, providerId, groupId, query = {}) {
             return coordinate(context, async () => {

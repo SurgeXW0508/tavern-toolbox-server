@@ -329,7 +329,7 @@ test('Group-owned host maintenance retains Server checks against another existin
 
 test('Consumer overview analyzes inventory once, bounds previews and preserves empty/unavailable identities', async () => {
     let catalogs = 0, storage = 0; const reads = new Map();
-    const governance = createGovernance({ async catalog() { catalogs++; return []; }, async storage() { storage++; throw Error('unexpected storage'); } }, (_context, work) => work());
+    const governance = createGovernance({ async catalogIds() { catalogs++; return []; }, async storage() { storage++; throw Error('unexpected storage'); } }, (_context, work) => work());
     for (const [consumer, count] of [['character', 100], ['outfit', 4], ['worldbook', 26], ['empty', 0], ['offline', null]]) governance.register({ id: consumer, consumer, label: consumer, async enumerate() {
         reads.set(consumer, (reads.get(consumer) || 0) + 1); if (count === null) throw Error('private');
         return Array.from({ length: count }, (_, n) => ({ id: `${consumer}-${n}`, label: `Group ${n}`, lifecycle: n % 2 ? 'detached' : 'active', revision: 1, references: [{ id: 'ref', mediaRef: { provider: 'server', assetId: '12345678-1234-4123-8123-123456789012' } }] }));
@@ -353,7 +353,7 @@ test('browse totals exclude Active empty scopes before pagination without changi
         { id: `empty-${n}`, label: `Empty ${n}`, lifecycle: 'active', revision: 1, references: [] },
         { id: `used-${n}`, label: `Used ${n}`, lifecycle: 'active', revision: 1, references: [{ id: 'image', mediaRef }] }
     ]).flat();
-    const governance = createGovernance({ catalog: async () => [{ mediaRef }] }, (_context, work) => work());
+    const governance = createGovernance({ catalog: async () => [{ mediaRef }], catalogIds: async () => [mediaRef.assetId] }, (_context, work) => work());
     governance.register({ id: 'characters', consumer: 'character', label: '角色本地化', enumerate: async () => records });
     governance.register({ id: 'offline', consumer: 'worldbook', label: '世界书', enumerate: async () => { throw Error('unavailable'); } });
     const overview = await governance.groupOverview({});
@@ -399,4 +399,60 @@ test('real empty Character records are hidden only while Active and remain eligi
     assert.equal(removed.unlinkedCount, 0); assert.equal(removed.deletedCount, 0);
     assert.equal((await f.governance.analysis(f.context)).groups.length, 0);
     assert.equal((await f.media.metadata(f.context, asset.mediaRef.assetId)).mediaRef.assetId, asset.mediaRef.assetId);
+});
+
+
+test('single image detail does not enumerate the Asset catalog and still rechecks providers', async t => {
+    const f = await fixture(t), asset = await f.image(), id = asset.mediaRef.assetId;
+    t.mock.method(f.media, 'catalog', () => { throw Error('detail must not scan every Asset'); });
+    let failProvider = false, calls = 0;
+    f.governance.register({ id: 'cost-check', consumer: 'worldbook', label: 'Worldbook', enumerate: async () => {
+        calls++; if (failProvider) throw Error('offline'); return [];
+    } });
+    const first = await f.governance.detail(f.context, id);
+    assert.equal(first.asset.referenceState, 'unreferenced'); assert.equal(calls, 1);
+    failProvider = true;
+    const second = await f.governance.detail(f.context, id);
+    assert.equal(second.asset.referenceState, 'unknown'); assert.equal(second.complete, false); assert.equal(calls, 2);
+    await assert.rejects(f.governance.delete(f.context, id), { code: 'REFERENCE_ANALYSIS_INCOMPLETE' });
+});
+
+test('Consumer browse reads only fresh asset identities and preserves missing-reference and deletion protection', async t => {
+    const f = await fixture(t), asset = await f.image(), id = asset.mediaRef.assetId;
+    await f.business.commit(f.context, 'outfit', 1, 0, outfit(asset.mediaRef));
+    t.mock.method(f.media, 'catalog', () => { throw Error('Consumer browse must not project full asset metadata'); });
+    const groups = await f.governance.groups(f.context);
+    assert.equal(groups.items[0].brokenCount, 0);
+    assert.equal((await f.governance.groupOverview(f.context)).sections.find(row => row.id === 'outfit').items[0].brokenCount, 0);
+    await assert.rejects(f.governance.delete(f.context, id), { code: 'MEDIA_REFERENCED' });
+    await f.media.delete(f.context, id); // Restore damage: the next browse must see missing identity immediately.
+    assert.equal((await f.governance.groups(f.context, { broken: 'true' })).items[0].brokenCount, 1);
+    assert.equal((await f.governance.groupOverview(f.context)).sections.find(row => row.id === 'outfit').items[0].brokenCount, 1);
+});
+
+test('SQL Asset pages preserve reference filters, Unicode search and incomplete-provider protection', async t => {
+    const f=await fixture(t), assets=[];
+    for(const color of ['red','blue','green','white'])assets.push(await f.image(color));
+    let offline=false;
+    f.governance.register({id:'query-test',consumer:'worldbook',label:'世界书',enumerate:async()=> {
+        if(offline)throw Error('offline');
+        return assets.slice(0,3).map((asset,n)=>({id:'query-'+n,label:n===1?'中文标签':'test',lifecycle:n===0?'active':'detached',revision:1,references:[{id:'cover',mediaRef:asset.mediaRef}]}));
+    }});
+    const all=await f.media.catalog(f.context);
+    t.mock.method(f.media,'catalog',()=>{throw Error('Asset paging must not load the full metadata catalog');});
+    const refs=await f.governance.analysis(f.context);
+    for(const state of ['', 'active','detached','unknown','unreferenced'])for(const consumer of ['', 'worldbook','absent'])for(const search of ['', '中文','世界书',assets[3].mediaRef.assetId]) {
+        const expected=all.filter(asset=>{
+            const rows=refs.references.filter(ref=>ref.mediaRef.assetId===asset.mediaRef.assetId);
+            const value=rows.some(ref=>ref.lifecycle==='active')?'active':rows.some(ref=>ref.lifecycle==='detached')?'detached':'unreferenced';
+            return (!state||state===value)&&(!consumer||rows.some(ref=>ref.consumer===consumer))&&(!search||[asset.mediaRef.assetId,...rows.flatMap(ref=>[ref.groupLabel,ref.consumerLabel])].some(text=>text.toLocaleLowerCase().includes(search.toLocaleLowerCase())));
+        });
+        const result=await f.governance.assets(f.context,{state,consumer,search,limit:2});
+        assert.equal(result.total,expected.length,JSON.stringify({state,consumer,search}));
+        assert.equal(result.items.length,Math.min(2,expected.length));
+    }
+    offline=true;
+    assert.equal((await f.governance.assets(f.context,{state:'unknown'})).total,4);
+    assert.equal((await f.governance.assets(f.context,{state:'unreferenced'})).total,0);
+    await assert.rejects(f.governance.delete(f.context,assets[3].mediaRef.assetId),{code:'REFERENCE_ANALYSIS_INCOMPLETE'});
 });

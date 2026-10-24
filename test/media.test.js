@@ -248,3 +248,41 @@ test('a valid Image larger than 16 MiB passes actual Network and Media import wi
     await assert.rejects(validateImage(bytes, 'image/png', { ...policy, maxPixels: 100 }, sharp), { code: 'MEDIA_COMPLEXITY_EXCEEDED' });
     network.shutdown();
 });
+
+test('asset identity projection is user scoped, fresh and avoids full metadata and Original reads', async t => {
+    const store = new MediaStore(await temp(t), policy, DatabaseSync);
+    const other = new MediaStore(await temp(t), policy, DatabaseSync);
+    await store.initialize(); await other.initialize();
+    t.after(() => { store.close(); other.close(); });
+    const bytes = await fixture('png', 'blue');
+    const asset = await store.import(bytes, await validateImage(bytes, 'image/png', policy, sharp));
+    t.mock.method(store, 'info', () => { throw Error('must not project full metadata'); });
+    t.mock.method(store, 'readOriginal', () => { throw Error('must not read Original'); });
+    assert.deepEqual(await store.catalogIds(), [asset.mediaRef.assetId]);
+    assert.deepEqual(await other.catalogIds(), []);
+    await store.delete(asset.mediaRef.assetId);
+    assert.deepEqual(await store.catalogIds(), []);
+});
+
+test('SQL browse projects only returned metadata and preserves complete counts, order, filters and fresh deletion', async t => {
+    const store = new MediaStore(await temp(t), policy, DatabaseSync); await store.initialize(); t.after(() => store.close());
+    const ids = Array.from({ length: 1000 }, (_, n) => `12345678-1234-4123-8123-${String(n).padStart(12,'0')}`);
+    const insert = store.db.prepare('INSERT INTO assets VALUES(?,?,?,?,?,?,?,?,?,?)');
+    store.db.exec('BEGIN');
+    for (let n=0;n<ids.length;n++) insert.run(ids[n], String(n), 'image/png', n%7+1, 1, 1, 1, `2026-10-${String(n%9+1).padStart(2,'0')}T00:00:00.000Z`, 0, 'pending');
+    store.db.exec('COMMIT');
+    const all = await store.catalog(), info = store.info.bind(store); let projections = 0;
+    store.info = row => { projections++; return info(row); };
+    const result = await store.browse({ offset: 0, limit: 24 });
+    assert.equal(result.total, 1000); assert.equal(projections, 24);
+    for (const sort of ['newest','oldest','largest','smallest']) {
+        const expected = [...all].sort((a,b) => (sort==='largest'?b.originalBytes-a.originalBytes:sort==='smallest'?a.originalBytes-b.originalBytes:sort==='oldest'?a.createdAt.localeCompare(b.createdAt):b.createdAt.localeCompare(a.createdAt)) || a.mediaRef.assetId.localeCompare(b.mediaRef.assetId));
+        assert.deepEqual((await store.browse({offset:48,limit:48,sort})).items, expected.slice(48,96));
+    }
+    const filtered=await store.browse({offset:0,limit:24,includeIds:ids.slice(0,10),excludeIds:[ids[1]],search:'00000000000',searchIds:[]});
+    assert.equal(filtered.total,9);
+    assert.equal((await store.browse({offset:0,limit:24,search:'中文标签',searchIds:[ids[1]]})).items[0].mediaRef.assetId,ids[1]);
+    assert.equal((await store.browse({offset:0,limit:24,includeIds:[]})).total,0);
+    await store.delete(ids[1]); assert.equal((await store.browse({offset:0,limit:24})).total,999);
+    assert.equal((await store.browse({offset:2000,limit:24})).items.length,0);
+});
