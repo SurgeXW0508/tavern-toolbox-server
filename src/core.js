@@ -82,7 +82,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(audioLibrary.definition);
     const media = createMedia(config, network);
     const coordinate = createReferenceCoordinator();
-    const worldbook = createWorldbook(config, { now, media, coordinate });
+    const video = createVideo(config, { now, media, coordinate });
+    const worldbook = createWorldbook(config, { now, media, video, coordinate });
     registry.register(worldbook.definition);
     registry.register(media.definition);
     registry.register(worldbook.mediaDefinition);
@@ -95,8 +96,9 @@ export async function createCore({ policyOptions, registerModules, networkOption
     governance.register(business.referenceProvider);
     governance.register(worldbook.referenceProvider);
     registry.register(governance.definition);
-    const video = createVideo(config, { now, media, coordinate });
     registry.register(video.definition);
+    registry.register(worldbook.videoDefinition);
+    video.registerReferenceProvider(worldbook.videoReferenceProvider);
     governance.register(video.posterReferenceProvider);
     registerModules?.(registry); // Test fixture or a future trusted composition root; not callable over HTTP.
     await registry.initialize();

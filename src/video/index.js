@@ -70,6 +70,9 @@ export function createVideo(config, { now = Date.now, media, coordinate = create
                 finally { await file.handle.close(); }
             });
         },
+        validateReference(context, id, signal) {
+            return run(context, signal, async () => { const item = await store(context), row = item.row(id); rootFor(policy, context, row.root_key); return item.view(row); });
+        },
         list(context, input = {}, signal) {
             return run(context, signal, async signal => {
                 object(input, ['search', 'offset', 'limit']); const item = await store(context); aborted(signal);

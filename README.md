@@ -14,7 +14,7 @@ Server **v0.10.1**, paired with Frontend **v0.53.1** — media consumer performa
 
 ## Phase 10 Worldbook Server (v0.10.0, historical release)
 
-Paired with **Frontend v0.53.0 / Protocol 1.0**. Phase 10 is formally released with Worldbook Storage Schema 3, Summary wire schemaVersion 1, featureVersion 2 (global/column/filtered/folder), reconcileVersion 1 and optional worldbook.core/media 1.0. See [final acceptance](PHASE-10-ACCEPTANCE.md), [Worldbook](docs/WORLDBOOK.md) and [Protocol](protocol/README.md).
+Paired with **Frontend v0.53.1 / Protocol 1.0**. Phase 10 is formally released with Worldbook Storage Schema 3, Summary wire schemaVersion 1, featureVersion 2 (global/column/filtered/folder), reconcileVersion 1 and optional worldbook.core/media 1.0. See [final acceptance](PHASE-10-ACCEPTANCE.md), [Worldbook](docs/WORLDBOOK.md) and [Protocol](protocol/README.md).
 
 Worldbook is an independent per-ST-user business module with bounded browsing, stable Material/Source identity, Companion, Column/Global Presets, Usage/Recent/Frequent, guarded source maintenance and Import/Sync/Reconcile. Complete-scope Roll and bounded text-only Discovery support Folder Scope; ST exclusively owns Entry body and runtime. No automatic Local migration/fallback or full Catalog mirror.
 
@@ -174,4 +174,4 @@ Normal failure/cancel removes staging immediately. On each user's Audio Store in
 
 ## Active Video foundation development
 
-`stage/video-foundation` adds optional per-user local Video catalog/source/stream capabilities. P2 Media Center Video UI, manual posters, playback/progress and source maintenance are now implemented on the stage branch, pending NAS Gate A; Worldbook/Outfit Video consumers are not yet connected. See [Video ownership, policy, limits and continuation](docs/VIDEO.md) and [wire contracts](protocol/README.md). No configuration change is required for existing users: missing Video policy disables the module without scanning video directories. Use the paired P2 candidate for Gate A; installation and remaining acceptance steps are in docs/VIDEO.md.
+`stage/video-foundation` adds optional per-user local Video catalog/source/stream capabilities. P2 Media Center Video UI, manual posters, playback/progress and source maintenance are now implemented on the stage branch, Gate A has user-confirmed registration/playback/cross-device continuation. P3/P4 Worldbook Video attachments/static previews are implemented pending Gate B; Outfit remains future work. Worldbook storage upgrades 3→4, so back up consistently before updating. See [Video ownership, policy, limits and continuation](docs/VIDEO.md) and [wire contracts](protocol/README.md). No configuration change is required for existing users: missing Video policy disables the module without scanning video directories. Use the paired P3/P4 candidate for Gate B; installation and remaining acceptance steps are in docs/VIDEO.md.

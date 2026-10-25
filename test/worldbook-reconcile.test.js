@@ -29,7 +29,7 @@ test('builtin batch import 63; duplicate-safe concurrent preview, replay and add
     assert.equal(e.send('column-import', e.batch(entries(68))).added, 5);
     assert.equal(e.s.one('SELECT COUNT(*) n FROM materials').n, 68);
     assert.equal(e.s.one('SELECT COUNT(DISTINCT id) n FROM materials').n, 68);
-    assert.equal(e.s.one('PRAGMA user_version').user_version, 3);
+    assert.equal(e.s.one('PRAGMA user_version').user_version, 4);
     assert.throws(() => e.send('column-import', e.batch(entries(101))), { code: 'WORLDBOOK_VALIDATION' });
 });
 test('folder changes reject stale destinations; no partial imports or accidental reposition', async t => {

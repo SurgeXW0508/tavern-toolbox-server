@@ -13,7 +13,7 @@ export function createVideoReferences() {
             for (const provider of providers.values()) {
                 let timer;
                 try {
-                    const rows = await Promise.race([provider.enumerate(context), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), 1000); })]);
+                    const rows = await Promise.race([provider.enumerate(context, videoId), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), 1000); })]);
                     if (!Array.isArray(rows) || rows.length > 30000) throw new Error('invalid provider');
                     for (const row of rows) {
                         uuid(row.videoId);

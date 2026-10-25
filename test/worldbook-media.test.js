@@ -100,7 +100,7 @@ test('Schema 2 to 3 is atomic and preserves every 10C aggregate, failure leaves 
       id: preset.presetId,
     });
   f.store.db.exec(
-    'DROP TRIGGER wb_media_material_insert;DROP TABLE wb_media;DROP TABLE wb_media_versions;PRAGMA user_version=2;',
+    'DROP TRIGGER wb_video_material_insert;DROP TABLE wb_video_attachments;DROP TABLE wb_video_versions;DROP TRIGGER wb_media_material_insert;DROP TABLE wb_media;DROP TABLE wb_media_versions;PRAGMA user_version=2;',
   );
   f.store.close();
   class Interrupted extends DatabaseSync {
@@ -128,7 +128,7 @@ test('Schema 2 to 3 is atomic and preserves every 10C aggregate, failure leaves 
   );
   db.close();
   await f.store.initialize();
-  assert.equal(f.store.one('PRAGMA user_version').user_version, 3);
+  assert.equal(f.store.one('PRAGMA user_version').user_version, 4);
   assert.deepEqual(f.store.detail(a.id), original);
   assert.deepEqual(
     f.store.features.read({ kind: 'presets', id: preset.presetId }),

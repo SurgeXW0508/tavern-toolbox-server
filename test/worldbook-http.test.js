@@ -187,7 +187,7 @@ test('Worldbook Media HTTP is an optional context-bound capability, independent 
 
 test('Folder Candidate capability is additive over HTTP; tree changes reject replay and continuation',async t=>{
  const e=await fixture(t),cap=e.status.capabilities.find(row=>row.id==='worldbook.core');
- assert.equal(cap.constraints.storageSchemaVersion,3);assert.equal(cap.constraints.featureVersion,2);assert.ok(cap.constraints.candidateScopes.includes('folder'));
+ assert.equal(cap.constraints.storageSchemaVersion,4);assert.equal(cap.constraints.featureVersion,2);assert.ok(cap.constraints.candidateScopes.includes('folder'));
  const send=async(action,data)=>{const r=await e.request('/v1/worldbook/commands',{data:command(action,data)});assert.equal(r.status,200);return r.body.data;};
  const column=(await send('column-create',{profile:{title:'Folder HTTP',description:'',icon:{type:'builtin',value:'book'},accent:'#123456'},materials:[]})).column.id;
  const summary=async()=> (await e.request('/v1/worldbook/summary')).body.data.columns.find(row=>row.id===column);
@@ -204,4 +204,18 @@ test('Folder Candidate capability is additive over HTTP; tree changes reject rep
  for(const cursor of [0,1]){const r=await e.request('/v1/worldbook/features',{data:{kind:'roll',sessionId:candidate.body.data.sessionId,cursor,runtimeToken}});assert.equal(r.status,409);assert.equal(r.body.error.code,'WORLDBOOK_TREE_CHANGED');}
  const legacy=await e.request('/v1/worldbook/features',{data:{kind:'discovery',scope:{columnId:column},runtimeToken}});assert.equal(legacy.status,200);assert.equal(legacy.body.data.scopeTotal,1);assert.equal('folderScope'in legacy.body.data,false);
  assert.equal((await e.request('/v1/worldbook/features',{data:{kind:'session-end',sessionId:candidate.body.data.sessionId}})).status,200);
+});
+
+test('Optional Worldbook video reads/unlinks stay independent of disabled sources and enforce trusted context and CSRF',async t=>{
+ const f=await fixture(t),cap=f.status.capabilities.find(row=>row.id==='worldbook.video');assert.ok(cap);assert.equal(cap.operations.find(row=>row.id==='read').available,true);
+ await f.request('/v1/worldbook/commands',{data:command('column-create',{profile:{title:'Video',description:'',icon:{type:'builtin',value:'book'},accent:'#123456'},materials:[{name:'Item',description:'body',source:{locator:'Book',uid:1,title:'Entry'}}]})});
+ const id=(await f.request('/v1/worldbook/catalog')).body.data.items[0].id;
+ const read=()=>f.request('/v1/worldbook/video/read',{data:{materialIds:[id]}});assert.deepEqual((await read()).body.data.items,[{id,revision:1,attachments:[]}]);
+ assert.equal((await f.request('/v1/worldbook/video/read',{data:{materialIds:[id]},headers:{'X-CSRF-Token':'wrong'}})).status,403);
+ assert.equal((await f.request('/v1/worldbook/video/read',{data:{materialIds:[id]},headers:{'X-TTB-Context':'wrong'}})).status,409);
+ assert.equal((await f.request('/v1/worldbook/video/read',{data:{materialIds:Array(21).fill(id)}})).status,400);
+ assert.equal((await f.request('/v1/worldbook/video/commands',{data:command('video-add',{id,revision:1,items:[{kind:'video',mediaRef:{provider:'server',assetId:randomUUID()}}]})})).status,422);
+ const cmd=command('video-reorder',{id,revision:1,assetIds:[]});const saved=await f.request('/v1/worldbook/video/commands',{data:cmd});assert.equal(saved.status,200);
+ const receipt=await f.request('/v1/worldbook/video/operation',{data:{commandId:cmd.commandId}});assert.equal(receipt.body.data.found,true);assert.equal(receipt.body.data.result.video.revision,2);
+ const old=await fixture(t,false);assert.equal(old.status.capabilities.find(row=>row.id==='worldbook.video').operations.find(row=>row.id==='command').available,false);
 });
