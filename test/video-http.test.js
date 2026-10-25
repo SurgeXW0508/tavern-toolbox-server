@@ -43,6 +43,7 @@ test('Video HTTP works through ST subpaths with native authenticated Range/HEAD 
     assert.equal(register.status, 200); const id = (await register.json()).data.mediaRef.assetId;
     const response = await h.request(`/v1/video/items/${id}/playback`, { method: 'POST', body: {}, headers }); assert.equal(response.status, 200);
     const resolved = (await response.json()).data;
+    const detail = (await (await h.request(`/v1/video/items/${id}`, {headers})).json()).data; assert.equal(detail.rootLabel, 'Clips'); assert.equal(detail.sourceState, 'available');
     const streamPath = resolved.playbackPath.replace('/api/plugins/tavern-toolbox-server', '');
     const stream = await h.request(streamPath, { native: true, headers: { Range: 'bytes=3-12' } });
     assert.equal(stream.status, 206); assert.deepEqual(Buffer.from(await stream.arrayBuffer()), h.bytes.subarray(3, 13));

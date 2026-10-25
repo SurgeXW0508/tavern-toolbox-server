@@ -2,6 +2,7 @@ import path from 'node:path';
 export const VIDEO_LIMITS = Object.freeze({ maxBytes: 8 * 1024 ** 3, maxVideos: 5000,
     pageSize: 24, maxPageSize: 48, directoryEntries: 1000, directoryDepth: 32,
     discoveryPerUser: 2, discoveryGlobal: 8, discoveryTtlMs: 300000,
+    operationsPerUser: 8, operationsGlobal: 32, discoveryTasksPerUser: 2, discoveryTasksGlobal: 8,
     streamsPerUser: 4, streamsGlobal: 8, idleTimeoutMs: 30000 });
 export const VIDEO_DEFAULTS = Object.freeze({ roots: Object.freeze([]), maxBytes: VIDEO_LIMITS.maxBytes });
 export function validateVideo(value) {

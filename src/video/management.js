@@ -83,7 +83,7 @@ export function createVideoManagement({ store, run, policy, discovery, media, co
                     item.db.prepare('UPDATE videos SET root_key=?,locator=?,fingerprint=?,mime=?,byte_size=?,source_revision=source_revision+1 WHERE id=?')
                         .run(session.rootKey, entry.relative, file.fingerprint, file.mime, file.byteSize, id);
                     item.db.prepare('DELETE FROM progress WHERE video_id=?').run(id);
-                    return item.view(item.row(id));
+                    return { ...item.view(item.row(id)), rootLabel: rootFor(policy, context, session.rootKey).label };
                 });
                 cancelStreams(context, id); return result;
             }); } finally { await file.handle.close(); }

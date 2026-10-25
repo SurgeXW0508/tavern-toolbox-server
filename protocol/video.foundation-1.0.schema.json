@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Tavern Toolbox Video Foundation 1.0",
-  "description": "Implemented P0/P1 payload fixtures. Runtime additionally verifies auth/context, trim/control text, source fingerprints, quotas and receipts. Codec support is a device observation.",
+  "description": "Implemented P1/P2 payload fixtures. Runtime additionally verifies trusted auth/context, source fingerprints, quotas, reference completeness, CAS and command receipts. Codec support is a device observation.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,7 +14,22 @@
     "detail",
     "resolve",
     "presentationRequest",
-    "presentation"
+    "presentation",
+    "updateRequest",
+    "update",
+    "sourceRequest",
+    "source",
+    "unregisterRequest",
+    "unregister",
+    "progressAbsent",
+    "progressRequest",
+    "progress",
+    "references",
+    "operationMissing",
+    "operation",
+    "cancelRequest",
+    "cancel",
+    "errors"
   ],
   "properties": {
     "roots": {
@@ -46,6 +61,51 @@
     },
     "presentation": {
       "$ref": "#/$defs/presentation"
+    },
+    "updateRequest": {
+      "$ref": "#/$defs/updateRequest"
+    },
+    "update": {
+      "$ref": "#/$defs/update"
+    },
+    "sourceRequest": {
+      "$ref": "#/$defs/sourceRequest"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "unregisterRequest": {
+      "$ref": "#/$defs/unregisterRequest"
+    },
+    "unregister": {
+      "$ref": "#/$defs/unregister"
+    },
+    "progressAbsent": {
+      "$ref": "#/$defs/progressAbsent"
+    },
+    "progressRequest": {
+      "$ref": "#/$defs/progressRequest"
+    },
+    "progress": {
+      "$ref": "#/$defs/progress"
+    },
+    "references": {
+      "$ref": "#/$defs/references"
+    },
+    "operationMissing": {
+      "$ref": "#/$defs/operationMissing"
+    },
+    "operation": {
+      "$ref": "#/$defs/operation"
+    },
+    "cancelRequest": {
+      "$ref": "#/$defs/cancelRequest"
+    },
+    "cancel": {
+      "$ref": "#/$defs/cancel"
+    },
+    "errors": {
+      "$ref": "#/$defs/errors"
     }
   },
   "$defs": {
@@ -136,6 +196,11 @@
               }
             }
           ]
+        },
+        "rootLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
         }
       }
     },
@@ -602,6 +667,11 @@
               }
             }
           ]
+        },
+        "rootLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
         }
       }
     },
@@ -737,6 +807,641 @@
             "$ref": "#/$defs/uuid"
           }
         }
+      }
+    },
+    "updateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operationId",
+        "metadataRevision",
+        "patch"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "metadataRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "patch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "posterRef": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "provider",
+                    "assetId"
+                  ],
+                  "properties": {
+                    "provider": {
+                      "const": "server"
+                    },
+                    "assetId": {
+                      "$ref": "#/$defs/uuid"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "minProperties": 1
+        }
+      }
+    },
+    "update": {
+      "$ref": "#/$defs/video"
+    },
+    "sourceRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operationId",
+        "sourceRevision",
+        "candidateId"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "candidateId": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "source": {
+      "$ref": "#/$defs/video"
+    },
+    "unregisterRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operationId",
+        "metadataRevision",
+        "sourceRevision"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "metadataRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "unregister": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "removed"
+      ],
+      "properties": {
+        "removed": {
+          "const": true
+        }
+      }
+    },
+    "progressAbsent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRevision",
+        "revision",
+        "positionSeconds",
+        "durationHint",
+        "completed",
+        "writeId",
+        "updatedAt"
+      ],
+      "properties": {
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "positionSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "durationHint": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "writeId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        },
+        "updatedAt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          ]
+        }
+      }
+    },
+    "progressRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRevision",
+        "expectedProgressRevision",
+        "writeId",
+        "positionSeconds",
+        "durationHint",
+        "completed"
+      ],
+      "properties": {
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expectedProgressRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "writeId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "positionSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "durationHint": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "completed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRevision",
+        "revision",
+        "positionSeconds",
+        "durationHint",
+        "completed",
+        "writeId",
+        "updatedAt"
+      ],
+      "properties": {
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "positionSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "durationHint": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "writeId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        },
+        "updatedAt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          ]
+        }
+      }
+    },
+    "references": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complete",
+        "count",
+        "references"
+      ],
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "references": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "providerId",
+              "ownerId",
+              "label"
+            ],
+            "properties": {
+              "providerId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "ownerId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "label": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 512
+              }
+            }
+          }
+        }
+      }
+    },
+    "operationMissing": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "found"
+          ],
+          "properties": {
+            "found": {
+              "const": false
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "found",
+            "result"
+          ],
+          "properties": {
+            "found": {
+              "const": true
+            },
+            "result": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/video"
+                },
+                {
+                  "$ref": "#/$defs/unregister"
+                },
+                {
+                  "$ref": "#/$defs/progress"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "operation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "found"
+          ],
+          "properties": {
+            "found": {
+              "const": false
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "found",
+            "result"
+          ],
+          "properties": {
+            "found": {
+              "const": true
+            },
+            "result": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/video"
+                },
+                {
+                  "$ref": "#/$defs/unregister"
+                },
+                {
+                  "$ref": "#/$defs/progress"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "cancelRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId"
+      ],
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "cancel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cancelled"
+      ],
+      "properties": {
+        "cancelled": {
+          "const": true
+        }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_METADATA_CONFLICT"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_PROGRESS_CONFLICT"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_SOURCE_CHANGED"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "CONTEXT_CHANGED"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_OPERATION_CONFLICT"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_REFERENCED"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_REFERENCES_INCOMPLETE"
+              },
+              "status": {
+                "const": 503
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_POSTER_UNAVAILABLE"
+              },
+              "status": {
+                "const": 422
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_SOURCE_REGISTERED"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "RESOURCE_BUSY"
+              },
+              "status": {
+                "const": 429
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_SOURCE_UNAVAILABLE"
+              },
+              "status": {
+                "const": 422
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_SCHEMA_INCOMPATIBLE"
+              },
+              "status": {
+                "const": 503
+              }
+            }
+          }
+        ]
       }
     }
   }

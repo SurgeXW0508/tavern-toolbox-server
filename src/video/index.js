@@ -27,11 +27,14 @@ export function createVideo(config, { now = Date.now, media, coordinate = create
         try { return await stores.get(context.userRoot); } catch (error) { stores.delete(context.userRoot); throw error; }
     }
     // Track/drain every asynchronous operation before closing a user's DB.
-    async function run(context, signal, action, referenceAccess = false) {
+    async function run(context, signal, action, referenceAccess = false, budget = 'operations') {
         ready(context, referenceAccess); aborted(signal);
-        if (active.size >= 8 || [...active].filter(item => item.root === context.userRoot).length >= 2) fail('RESOURCE_BUSY');
+        const entries = [...active].filter(item => item.budget === budget);
+        const perUser = budget === 'discovery' ? VIDEO_LIMITS.discoveryTasksPerUser : VIDEO_LIMITS.operationsPerUser;
+        const global = budget === 'discovery' ? VIDEO_LIMITS.discoveryTasksGlobal : VIDEO_LIMITS.operationsGlobal;
+        if (entries.length >= global || entries.filter(item => item.root === context.userRoot).length >= perUser) fail('RESOURCE_BUSY');
         const controller = new AbortController(), abort = () => controller.abort(); let finish;
-        const entry = { root: context.userRoot, controller, done: new Promise(resolve => { finish = resolve; }) }; active.add(entry);
+        const entry = { root: context.userRoot, budget, controller, done: new Promise(resolve => { finish = resolve; }) }; active.add(entry);
         signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort();
         try { return await action(controller.signal); }
         finally { signal?.removeEventListener('abort', abort); active.delete(entry); finish(); }
@@ -53,7 +56,7 @@ export function createVideo(config, { now = Date.now, media, coordinate = create
             shutdown: () => service.close(),
         },
         roots(context) { ready(context); return { roots: authorized(context).map(root => ({ rootKey: root.key, label: root.label })) }; },
-        browse(context, input, signal) { return run(context, signal, signal => discovery.browse(context, input, signal)); },
+        browse(context, input, signal) { return run(context, signal, signal => discovery.browse(context, input, signal), false, 'discovery'); },
         cancel(context, id) { ready(context); return discovery.cancel(context, id); },
         register(context, input, signal) {
             return run(context, signal, async signal => {
@@ -88,7 +91,7 @@ export function createVideo(config, { now = Date.now, media, coordinate = create
                 let sourceState = 'available';
                 try { const file = await openVideo(policy, context, row.root_key, row.locator, row.fingerprint, signal); await file.handle.close(); }
                 catch (error) { if (error.code === 'CLIENT_ABORTED') throw error; sourceState = error.code === 'VIDEO_SOURCE_CHANGED' ? 'changed' : 'unavailable'; }
-                return { ...item.view(row), sourceState };
+                return { ...item.view(row), sourceState, rootLabel: rootFor(policy, context, row.root_key).label };
             });
         },
         resolve(context, id, signal) {

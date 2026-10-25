@@ -249,9 +249,9 @@ Media revision conflict returns `WORLDBOOK_MEDIA_CONFLICT` (409); invalid shape/
 
 `media.assets` exposes optional operation `presentation` and limit `maxPresentationAssets:48`. GET `/v1/media/presentation?assetIds=<JSON array>` accepts 1..48 unique canonical UUID strings, decoded query <=2000 characters, no other/duplicate query keys. Requires current ST user, X-TTB-Protocol 1.0 and X-TTB-Context; no write/Origin policy is required. Private/no-store response: `{items:[{assetId,width,height,animated}],missingAssetIds:[UUID]}`. The two arrays partition the requested set, with no duplicate identities; technical fields are bounded per-page projection, never Worldbook business data. Only a metadata SQL query occurs, no Original/health read. Validation=400, context/protocol mismatch=409, unauthenticated=403, unavailable Store=503. No schema, Protocol major or existing operation changes. Older clients ignore this operation; newer Preview code does not issue per-asset metadata fallback when it is missing.
 
-## Optional Video foundation 1.0 (P0/P1)
+## Optional Video foundation 1.0 (P1 base, P2 additions below)
 
-The active implementation is specified in [Video](../docs/VIDEO.md). Existing Protocol, image/audio/worldbook contracts remain unchanged. Capabilities: `video.catalog` (`list`, `read`, `presentation`), `video.sources` (`roots`, `browse`, `cancel`, `register`), `video.playback` (`resolve`, `stream`). Missing authorized roots disables Video; invalid Video policy only makes Video unavailable. Core status performs no Video filesystem/SQLite I/O. Operations not listed here are not implemented or advertised.
+The active implementation is specified in [Video](../docs/VIDEO.md). Existing Protocol, image/audio/worldbook contracts remain unchanged. Capabilities: `video.catalog` (`list`, `read`, `presentation`), `video.sources` (`roots`, `browse`, `cancel`, `register`), `video.playback` (`resolve`, `stream`). Missing authorized roots disables Video; invalid Video policy only makes Video unavailable. Core status performs no Video filesystem/SQLite I/O. The P2 additions below extend this base capability list; only implemented operations are advertised.
 
 All JSON calls use `X-TTB-Protocol: 1.0` and exact `X-TTB-Context`. All POSTs require configured same-origin Origin and active ST-session CSRF, `application/json`, at most 8192 bytes and strict key/type validation. JSON responses are at most 65536 bytes. Native stream uses the ST authenticated session, Origin/Sec-Fetch-Site policy and exact context/version query instead of custom headers. All replies use private headers. Errors use the existing JSON error envelope; sources/paths/context URLs are absent from logs.
 
@@ -263,7 +263,7 @@ All JSON calls use `X-TTB-Protocol: 1.0` and exact `X-TTB-Context`. All POSTs re
 | POST `/v1/video/register` | `{candidateId,operationId,title}` | Video DTO plus `reused` |
 | GET `/v1/video/items` | optional `search` (120 chars), `offset` (0..5000), `limit` (1..48, default 24) | `{items,total,offset,limit,hasMore}` |
 | POST `/v1/video/presentation` | `{assetIds:[1..48 unique UUID]}` | `{items,missingAssetIds}` no source I/O |
-| GET `/v1/video/items/:id` | no query | Video DTO plus `sourceState: available/changed/unavailable` |
+| GET `/v1/video/items/:id` | no query | Video DTO plus `sourceState: available/changed/unavailable` and optional friendly `rootLabel` |
 | POST `/v1/video/items/:id/playback` | `{}` | Video DTO plus transient `playbackPath` |
 | GET or HEAD `/v1/video/items/:id/stream?context=...&version=...` | one optional Range | native 200/206/416, correct lengths; HEAD no body |
 
@@ -273,7 +273,7 @@ Discovery entry: `{id,kind:'directory',name}` or `{id,kind:'file',name,byteSize,
 
 Errors: `INVALID_REQUEST`/`UNSUPPORTED_RANGE` 400; `CSRF_REJECTED`/`FORBIDDEN` 403; `VIDEO_NOT_FOUND` 404; `CONTEXT_CHANGED`/`VIDEO_SOURCE_CHANGED`/`VIDEO_OPERATION_CONFLICT`/`VIDEO_CANDIDATE_EXPIRED`/`VIDEO_CATALOG_FULL` 409; `VIDEO_FORMAT_UNSUPPORTED` 415; `VIDEO_SOURCE_UNAVAILABLE`/`VIDEO_DIRECTORY_LIMIT` 422; `RESOURCE_BUSY` 429; unavailable runtime/store/schema/config 503. Post-header I/O failure closes the binary response. Same-user missing and foreign identities have equivalent not-found behavior when Video is otherwise authorized.
 
-Future progress/poster/source-replacement/Consumer contracts are specified as design boundaries in docs/VIDEO.md; they are not part of the P1 operation list. Schema fixtures for this implemented profile are `video.foundation-1.0.schema.json` / `video.foundation-1.0.fixture.json`.
+P2 progress/poster/source-replacement contracts are specified below; Consumer relations remain future work. The shared machine-readable P1/P2 request/result/state/error fixtures are `video.foundation-1.0.schema.json` / `video.foundation-1.0.fixture.json`.
 
 Directory navigation returns bounded `breadcrumbs:[{id,label}]` with directory capability IDs for root and each ancestor (maximum 33). A successful `directoryId` navigation replaces its source snapshot; old file candidates/cursors then expire. A failed navigation preserves the previous snapshot. This bounds retained directory data while allowing navigation back to ancestors without client paths; two independent directory browsers still share the 2/user limit.
 
@@ -287,8 +287,10 @@ Directory navigation returns bounded `breadcrumbs:[{id,label}]` with directory c
 | GET `/operations/:operationId` | `{found:false}` or `{found:true,result}`; read-only uncertain-command recovery |
 | GET `/items/:id/references` | `{complete,count,references:[{providerId,ownerId,label}]}`, first 100 detail rows |
 | POST `/items/:id/unregister` | `{operationId,metadataRevision,sourceRevision}`; `{removed:true}`; fresh complete zero-reference analysis, retains originals |
-| POST `/items/:id/source` | `{operationId,sourceRevision,candidateId}`; Video DTO; explicit acceptance resets progress and increments source version |
+| POST `/items/:id/source` | `{operationId,sourceRevision,candidateId}`; Video DTO with optional friendly `rootLabel`; explicit acceptance resets progress and increments source version |
 | GET `/items/:id/progress` | `{sourceRevision,revision,positionSeconds,durationHint,completed,writeId,updatedAt}`; absent progress has revision 0, zero position, null writeId/updatedAt |
 | POST `/items/:id/progress` | `{sourceRevision,expectedProgressRevision,writeId,positionSeconds,durationHint,completed}`; progress DTO result |
 
 Metadata/source/unregister operations have UUID operationId; progress writeId shares the bounded command-receipt store, with action/target/request hash. Exactly identical replay returns the committed result; conflicting payload fails VIDEO_OPERATION_CONFLICT. Source-version mismatch fails VIDEO_SOURCE_CHANGED even if an old progress write was previously committed. POST position/duration must be finite, nonnegative and ≤604800 seconds; completed is boolean. CAS accepts backward seeks. It never reads full files, changes metadata revision or enumerates Consumers. A CAS conflict is VIDEO_PROGRESS_CONFLICT 409; metadata CAS conflict is VIDEO_METADATA_CONFLICT 409. VIDEO_REFERENCED 409 / VIDEO_REFERENCES_INCOMPLETE 503 retain registration; VIDEO_POSTER_UNAVAILABLE 422 rejects unusable images; VIDEO_SOURCE_REGISTERED 409 refuses assigning a file already registered as another video. Read-only operation receipt returns no paths/URL/fingerprint.
+
+Discovery task admission is 2/user, 8/global; all other non-stream Video operations have an independent 8/user, 32/global budget. Retained discovery snapshots remain separately 2/user, 8/global. Streams remain 4/user, 8/global. No request is queued or retried automatically. Frontend gives browse a 60-second deadline and retains 15 seconds for other JSON calls. Source-state observation is distinct from metadata mutation results: title/poster updates do not probe NAS or assert availability.
