@@ -21,6 +21,8 @@ import { createBusiness, BusinessFailure } from './business/index.js';
 import { MAX_BUSINESS_BYTES } from './business/store.js';
 import { createLocalization } from './localization/index.js';
 import { createReferenceCoordinator } from './governance/coordination.js';
+import { createVideo } from './video/index.js';
+import { attachVideoRoutes } from './video/routes.js';
 import { createGovernance } from './governance/index.js';
 
 export const PRODUCT = 'tavern-toolbox-server';
@@ -93,6 +95,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
     governance.register(business.referenceProvider);
     governance.register(worldbook.referenceProvider);
     registry.register(governance.definition);
+    const video = createVideo(config, { now });
+    registry.register(video.definition);
     registerModules?.(registry); // Test fixture or a future trusted composition root; not callable over HTTP.
     await registry.initialize();
     let stopped = false;
@@ -153,6 +157,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
         attachAudioRoutingPreferenceRoutes(router, { preferences, registry, config, send, failure, logger, now });
         attachAudioSourceRoutes(router, { sources: audioSources, registry, config, send, failure, networkFailureDetails, logger, now });
         attachAudioLibraryRoutes(router, { library: audioLibrary, registry, config, send, failure, logger, now });
+        attachVideoRoutes(router, { video, registry, config, send, failure, logger, now });
         attachWorldbookRoutes(router, { worldbook, registry, config, send, failure, logger, now });
         const policyRoute = operation => async (req, res) => {
             const { requestId, context, start } = res.locals.ttbRequest;

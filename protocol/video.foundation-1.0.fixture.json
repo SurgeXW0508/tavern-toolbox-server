@@ -1,0 +1,126 @@
+{
+  "roots": {
+    "roots": [
+      {
+        "rootKey": "clips",
+        "label": "Clips"
+      }
+    ]
+  },
+  "browseRequest": {
+    "rootKey": "clips"
+  },
+  "browse": {
+    "sessionId": "22222222-2222-4222-8222-222222222222",
+    "rootKey": "clips",
+    "directoryLabel": "Clips",
+    "entries": [
+      {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "kind": "file",
+        "name": "clip.mp4",
+        "byteSize": 152,
+        "mime": "video/mp4"
+      }
+    ],
+    "nextCursor": null,
+    "expiresAt": 1792886700000,
+    "breadcrumbs": [
+      {
+        "id": "33333333-3333-4333-8333-333333333333",
+        "label": "Clips"
+      }
+    ]
+  },
+  "registerRequest": {
+    "candidateId": "11111111-1111-4111-8111-111111111111",
+    "operationId": "22222222-2222-4222-8222-222222222222",
+    "title": "Clip"
+  },
+  "register": {
+    "kind": "video",
+    "mediaRef": {
+      "provider": "server",
+      "assetId": "11111111-1111-4111-8111-111111111111"
+    },
+    "title": "Clip",
+    "mime": "video/mp4",
+    "byteSize": 152,
+    "sourceRevision": 1,
+    "metadataRevision": 1,
+    "createdAt": 1792886400000,
+    "reused": false
+  },
+  "list": {
+    "items": [
+      {
+        "kind": "video",
+        "mediaRef": {
+          "provider": "server",
+          "assetId": "11111111-1111-4111-8111-111111111111"
+        },
+        "title": "Clip",
+        "mime": "video/mp4",
+        "byteSize": 152,
+        "sourceRevision": 1,
+        "metadataRevision": 1,
+        "createdAt": 1792886400000
+      }
+    ],
+    "total": 1,
+    "offset": 0,
+    "limit": 24,
+    "hasMore": false
+  },
+  "detail": {
+    "kind": "video",
+    "mediaRef": {
+      "provider": "server",
+      "assetId": "11111111-1111-4111-8111-111111111111"
+    },
+    "title": "Clip",
+    "mime": "video/mp4",
+    "byteSize": 152,
+    "sourceRevision": 1,
+    "metadataRevision": 1,
+    "createdAt": 1792886400000,
+    "sourceState": "available"
+  },
+  "resolve": {
+    "kind": "video",
+    "mediaRef": {
+      "provider": "server",
+      "assetId": "11111111-1111-4111-8111-111111111111"
+    },
+    "title": "Clip",
+    "mime": "video/mp4",
+    "byteSize": 152,
+    "sourceRevision": 1,
+    "metadataRevision": 1,
+    "createdAt": 1792886400000,
+    "playbackPath": "/api/plugins/tavern-toolbox-server/v1/video/items/11111111-1111-4111-8111-111111111111/stream?context=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&version=1"
+  },
+  "presentationRequest": {
+    "assetIds": [
+      "11111111-1111-4111-8111-111111111111"
+    ]
+  },
+  "presentation": {
+    "items": [
+      {
+        "kind": "video",
+        "mediaRef": {
+          "provider": "server",
+          "assetId": "11111111-1111-4111-8111-111111111111"
+        },
+        "title": "Clip",
+        "mime": "video/mp4",
+        "byteSize": 152,
+        "sourceRevision": 1,
+        "metadataRevision": 1,
+        "createdAt": 1792886400000
+      }
+    ],
+    "missingAssetIds": []
+  }
+}

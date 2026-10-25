@@ -1,3 +1,4 @@
+import { validateVideo, VIDEO_DEFAULTS } from './video/policy.js';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -112,7 +113,7 @@ function validateNetwork(value) {
 
 export function validatePolicy(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_CORE_CONFIG');
-    if (Object.keys(value).some(key => !['schemaVersion', 'core', 'network', 'media', 'audio', 'audioAssets'].includes(key)) || value.schemaVersion !== 1) throw new Error('INVALID_CORE_CONFIG');
+    if (Object.keys(value).some(key => !['schemaVersion', 'core', 'network', 'media', 'audio', 'audioAssets', 'video'].includes(key)) || value.schemaVersion !== 1) throw new Error('INVALID_CORE_CONFIG');
     const core = value.core ?? {};
     if (!core || typeof core !== 'object' || Array.isArray(core)
         || Object.keys(core).some(key => !['maxStatusResponseBytes', 'allowedOrigins'].includes(key))) throw new Error('INVALID_CORE_CONFIG');
@@ -137,8 +138,11 @@ export function validatePolicy(value) {
     let audioAssets, audioAssetsError = null;
     try { audioAssets = validateAudioAssets(value.audioAssets); }
     catch { audioAssets = AUDIO_ASSET_DEFAULTS; audioAssetsError = 'INVALID_AUDIO_ASSET_CONFIG'; }
+    let video, videoError = null;
+    try { video = validateVideo(value.video); }
+    catch { video = VIDEO_DEFAULTS; videoError = 'INVALID_VIDEO_CONFIG'; }
     return Object.freeze({ schemaVersion: 1, core: Object.freeze({ maxStatusResponseBytes, allowedOrigins: Object.freeze([...allowedOrigins]) }),
-        network, networkError, media, mediaError, audio, audioError, audioAssets, audioAssetsError });
+        network, networkError, media, mediaError, audio, audioError, audioAssets, audioAssetsError, video, videoError });
 }
 
 export async function loadPolicy({ dataRoot = globalThis.DATA_ROOT, configPath = process.env.TAVERN_TOOLBOX_SERVER_CONFIG, read = readFile } = {}) {
