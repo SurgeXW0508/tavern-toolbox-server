@@ -14,7 +14,7 @@ async function body(req, signal) {
     return value;
 }
 const statusFor = code => ({ INVALID_REQUEST: 400, PROTOCOL_INCOMPATIBLE: 409, CONTEXT_CHANGED: 409, CSRF_REJECTED: 403, FORBIDDEN: 403,
-    VIDEO_NOT_FOUND: 404, VIDEO_SOURCE_CHANGED: 409, VIDEO_OPERATION_CONFLICT: 409, VIDEO_CANDIDATE_EXPIRED: 409,
+    VIDEO_REFERENCED: 409, VIDEO_REFERENCES_INCOMPLETE: 503, VIDEO_METADATA_CONFLICT: 409, VIDEO_PROGRESS_CONFLICT: 409, VIDEO_POSTER_UNAVAILABLE: 422, VIDEO_SOURCE_REGISTERED: 409, VIDEO_NOT_FOUND: 404, VIDEO_SOURCE_CHANGED: 409, VIDEO_OPERATION_CONFLICT: 409, VIDEO_CANDIDATE_EXPIRED: 409,
     VIDEO_SOURCE_UNAVAILABLE: 422, VIDEO_FORMAT_UNSUPPORTED: 415, VIDEO_DIRECTORY_LIMIT: 422,
     UNSUPPORTED_RANGE: 400, VIDEO_CATALOG_FULL: 409, RESOURCE_BUSY: 429 }[code] || 503);
 
@@ -38,7 +38,7 @@ export function attachVideoRoutes(router, { video, registry, config, send, failu
                 if (post && !mutationGate(req, config.policy.core.allowedOrigins)) fail('CSRF_REJECTED');
             }
             const cap = (await registry.snapshot(context)).capabilities.find(row => row.id === capability);
-            if (cap?.moduleId !== 'video' || !cap.operations.find(row => row.id === operation)?.available) fail('VIDEO_UNAVAILABLE');
+            if (cap?.moduleId !== 'video' || !cap.operations.find(row => row.id === (operation === 'readProgress' ? 'read' : operation === 'writeProgress' ? 'write' : operation))?.available) fail('VIDEO_UNAVAILABLE');
             let result;
             if (streaming) {
                 setPrivateHeaders(res); res.setHeader('Cross-Origin-Resource-Policy', 'same-origin'); res.setHeader('Referrer-Policy', 'no-referrer');
@@ -50,6 +50,10 @@ export function attachVideoRoutes(router, { video, registry, config, send, failu
             else if (operation === 'browse') result = await video.browse(context, input, controller.signal);
             else if (operation === 'cancel') { object(input, ['sessionId'], ['sessionId']); result = video.cancel(context, input.sessionId); }
             else if (operation === 'register') result = await video.register(context, input, controller.signal);
+            else if (operation === 'operation') result = await video.operation(context, req.params.id, controller.signal);
+            else if (operation === 'references') result = await video.references(context, req.params.id, controller.signal);
+            else if (['update', 'unregister', 'source'].includes(operation)) result = await video[operation](context, req.params.id, input, controller.signal);
+            else if (operation === 'readProgress' || operation === 'writeProgress') result = await video.progress(context, req.params.id, input, controller.signal);
             else if (operation === 'read') result = await video.read(context, req.params.id, controller.signal);
             else if (operation === 'presentation') { object(input, ['assetIds'], ['assetIds']); result = await video.presentation(context, input.assetIds, controller.signal); }
             else if (operation === 'resolve') { object(input, []); result = await video.resolve(context, req.params.id, controller.signal); }
@@ -69,6 +73,11 @@ export function attachVideoRoutes(router, { video, registry, config, send, failu
                 moduleId: 'video', operation, code, durationMs: now() - start, outcome: 'notApplicable' });
         }
     };
+    router.get('/v1/video/operations/:id', route('operation', 'video.catalog'));
+    router.get('/v1/video/items/:id/references', route('references', 'video.catalog'));
+    for (const operation of ['update', 'unregister', 'source']) router.post('/v1/video/items/:id/' + operation, route(operation, operation === 'source' ? 'video.sources' : 'video.catalog', true));
+    router.get('/v1/video/items/:id/progress', route('readProgress', 'video.progress'));
+    router.post('/v1/video/items/:id/progress', route('writeProgress', 'video.progress', true));
     router.get('/v1/video/roots', route('roots', 'video.sources'));
     router.post('/v1/video/source-browse', route('browse', 'video.sources', true));
     router.post('/v1/video/source-browse/cancel', route('cancel', 'video.sources', true));

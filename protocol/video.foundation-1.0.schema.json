@@ -113,6 +113,29 @@
         "createdAt": {
           "type": "integer",
           "minimum": 1
+        },
+        "posterRef": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "assetId"
+              ],
+              "properties": {
+                "provider": {
+                  "const": "server"
+                },
+                "assetId": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            }
+          ]
         }
       }
     },
@@ -424,6 +447,29 @@
         },
         "reused": {
           "type": "boolean"
+        },
+        "posterRef": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "assetId"
+              ],
+              "properties": {
+                "provider": {
+                  "const": "server"
+                },
+                "assetId": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            }
+          ]
         }
       }
     },
@@ -533,6 +579,29 @@
             "changed",
             "unavailable"
           ]
+        },
+        "posterRef": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "assetId"
+              ],
+              "properties": {
+                "provider": {
+                  "const": "server"
+                },
+                "assetId": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            }
+          ]
         }
       }
     },
@@ -601,6 +670,29 @@
         "playbackPath": {
           "type": "string",
           "pattern": "^/api/plugins/tavern-toolbox-server/v1/video/items/[0-9a-f-]{36}/stream\\?context=[0-9a-f]{32}&version=[1-9][0-9]*$"
+        },
+        "posterRef": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "assetId"
+              ],
+              "properties": {
+                "provider": {
+                  "const": "server"
+                },
+                "assetId": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            }
+          ]
         }
       }
     },

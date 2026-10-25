@@ -276,3 +276,19 @@ Errors: `INVALID_REQUEST`/`UNSUPPORTED_RANGE` 400; `CSRF_REJECTED`/`FORBIDDEN` 4
 Future progress/poster/source-replacement/Consumer contracts are specified as design boundaries in docs/VIDEO.md; they are not part of the P1 operation list. Schema fixtures for this implemented profile are `video.foundation-1.0.schema.json` / `video.foundation-1.0.fixture.json`.
 
 Directory navigation returns bounded `breadcrumbs:[{id,label}]` with directory capability IDs for root and each ancestor (maximum 33). A successful `directoryId` navigation replaces its source snapshot; old file candidates/cursors then expire. A failed navigation preserves the previous snapshot. This bounds retained directory data while allowing navigation back to ancestors without client paths; two independent directory browsers still share the 2/user limit.
+
+### Video P2 additive operations / schema 2
+
+`video.catalog` adds update, unregister, operation and references; `video.sources` adds source; optional `video.progress` adds read/write. New Video DTOs include nullable `posterRef` (image MediaRef); old clients may ignore it. JSON POST security, user isolation and private binary headers remain identical to P1. The following routes are relative to `/v1/video`:
+
+| Route | Request / result |
+| --- | --- |
+| POST `/items/:id/update` | `{operationId,metadataRevision,patch:{title?,posterRef?}}`, nonempty patch; Video DTO result |
+| GET `/operations/:operationId` | `{found:false}` or `{found:true,result}`; read-only uncertain-command recovery |
+| GET `/items/:id/references` | `{complete,count,references:[{providerId,ownerId,label}]}`, first 100 detail rows |
+| POST `/items/:id/unregister` | `{operationId,metadataRevision,sourceRevision}`; `{removed:true}`; fresh complete zero-reference analysis, retains originals |
+| POST `/items/:id/source` | `{operationId,sourceRevision,candidateId}`; Video DTO; explicit acceptance resets progress and increments source version |
+| GET `/items/:id/progress` | `{sourceRevision,revision,positionSeconds,durationHint,completed,writeId,updatedAt}`; absent progress has revision 0, zero position, null writeId/updatedAt |
+| POST `/items/:id/progress` | `{sourceRevision,expectedProgressRevision,writeId,positionSeconds,durationHint,completed}`; progress DTO result |
+
+Metadata/source/unregister operations have UUID operationId; progress writeId shares the bounded command-receipt store, with action/target/request hash. Exactly identical replay returns the committed result; conflicting payload fails VIDEO_OPERATION_CONFLICT. Source-version mismatch fails VIDEO_SOURCE_CHANGED even if an old progress write was previously committed. POST position/duration must be finite, nonnegative and ≤604800 seconds; completed is boolean. CAS accepts backward seeks. It never reads full files, changes metadata revision or enumerates Consumers. A CAS conflict is VIDEO_PROGRESS_CONFLICT 409; metadata CAS conflict is VIDEO_METADATA_CONFLICT 409. VIDEO_REFERENCED 409 / VIDEO_REFERENCES_INCOMPLETE 503 retain registration; VIDEO_POSTER_UNAVAILABLE 422 rejects unusable images; VIDEO_SOURCE_REGISTERED 409 refuses assigning a file already registered as another video. Read-only operation receipt returns no paths/URL/fingerprint.

@@ -18,7 +18,7 @@ export class VideoStore {
         try {
             await chmod(file, 0o600); db.exec('PRAGMA busy_timeout=1000; PRAGMA synchronous=FULL;');
             const version = db.prepare('PRAGMA user_version').get().user_version;
-            if (version > 1) fail('VIDEO_SCHEMA_INCOMPATIBLE');
+            if (version > 2) fail('VIDEO_SCHEMA_INCOMPATIBLE');
             if (version === 0) {
                 if (db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get().n) fail('VIDEO_STORE_UNAVAILABLE');
                 db.exec(`BEGIN IMMEDIATE;
@@ -30,6 +30,19 @@ export class VideoStore {
                     CREATE TABLE receipts(operation_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, video_id TEXT NOT NULL, created_at INTEGER NOT NULL);
                     PRAGMA user_version=1; COMMIT;`);
             }
+            if (db.prepare('PRAGMA user_version').get().user_version === 1) {
+                db.exec(`BEGIN IMMEDIATE;
+                    ALTER TABLE videos ADD COLUMN poster_asset_id TEXT;
+                    CREATE TABLE progress(video_id TEXT PRIMARY KEY, source_revision INTEGER NOT NULL,
+                        position REAL NOT NULL, duration REAL NOT NULL, completed INTEGER NOT NULL,
+                        revision INTEGER NOT NULL, write_id TEXT NOT NULL, updated_at INTEGER NOT NULL);
+                    CREATE TABLE commands(operation_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL,
+                        result_json TEXT NOT NULL, created_at INTEGER NOT NULL);
+                    PRAGMA user_version=2; COMMIT;`);
+            }
+            db.prepare('SELECT video_id,source_revision,position,duration,completed,revision,write_id,updated_at FROM progress LIMIT 0').all();
+            db.prepare('SELECT operation_id,request_hash,result_json,created_at FROM commands LIMIT 0').all();
+            db.prepare('SELECT poster_asset_id FROM videos LIMIT 0').all();
             db.prepare('SELECT id,title,root_key,locator,fingerprint,mime,byte_size,source_revision,metadata_revision,created_at FROM videos LIMIT 0').all();
             db.prepare('SELECT operation_id,request_hash,video_id,created_at FROM receipts LIMIT 0').all();
             this.db = db;
@@ -40,7 +53,7 @@ export class VideoStore {
         if (!['video/mp4', 'video/webm'].includes(row.mime) || !Number.isSafeInteger(row.byte_size) || row.byte_size < 1
             || !Number.isSafeInteger(row.source_revision) || row.source_revision < 1 || !Number.isSafeInteger(row.metadata_revision) || row.metadata_revision < 1) fail('VIDEO_STORE_UNAVAILABLE');
         return { kind: 'video', mediaRef: { provider: 'server', assetId: row.id }, title: row.title, mime: row.mime,
-            byteSize: row.byte_size, sourceRevision: row.source_revision, metadataRevision: row.metadata_revision, createdAt: row.created_at };
+            byteSize: row.byte_size, sourceRevision: row.source_revision, metadataRevision: row.metadata_revision, createdAt: row.created_at, posterRef: row.poster_asset_id ? { provider: 'server', assetId: row.poster_asset_id } : null };
     }
     list({ search = '', offset = 0, limit = 24 } = {}, rootKeys) {
         if (typeof search !== 'string' || search.length > 120) fail('INVALID_REQUEST');
@@ -70,11 +83,30 @@ export class VideoStore {
             if (!row) {
                 if (this.db.prepare('SELECT COUNT(*) AS n FROM videos').get().n >= VIDEO_LIMITS.maxVideos) fail('VIDEO_CATALOG_FULL');
                 const id = randomUUID();
-                this.db.prepare('INSERT INTO videos VALUES(?,?,?,?,?,?,?,1,1,?)').run(id, text(title), rootKey, relative, file.fingerprint, file.mime, file.byteSize, now);
+                this.db.prepare('INSERT INTO videos(id,title,root_key,locator,fingerprint,mime,byte_size,source_revision,metadata_revision,created_at) VALUES(?,?,?,?,?,?,?,1,1,?)').run(id, text(title), rootKey, relative, file.fingerprint, file.mime, file.byteSize, now);
                 row = this.row(id);
             }
             this.db.prepare('INSERT INTO receipts VALUES(?,?,?,?)').run(operationId, requestHash, row.id, now);
             this.db.exec('COMMIT'); return { ...this.view(row), reused };
+        } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    }
+    operation(operationId, now = Date.now()) {
+        const row = this.db.prepare('SELECT * FROM commands WHERE operation_id=?').get(uuid(operationId));
+        return row && row.created_at > now - 86400000 ? row : null;
+    }
+    command(operationId, requestHash, now, action) {
+        const replay = this.operation(operationId, now);
+        if (replay) {
+            if (replay.request_hash !== requestHash) fail('VIDEO_OPERATION_CONFLICT');
+            return JSON.parse(replay.result_json);
+        }
+        this.db.exec('BEGIN IMMEDIATE');
+        try {
+            this.db.prepare('DELETE FROM commands WHERE created_at<=?').run(now - 86400000);
+            if (this.db.prepare('SELECT COUNT(*) AS n FROM commands').get().n >= 10000) fail('RESOURCE_BUSY');
+            const result = action();
+            this.db.prepare('INSERT INTO commands VALUES(?,?,?,?)').run(operationId, requestHash, JSON.stringify(result), now);
+            this.db.exec('COMMIT'); return result;
         } catch (error) { this.db.exec('ROLLBACK'); throw error; }
     }
     close() { this.db.close(); }

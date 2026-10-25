@@ -1,3 +1,8 @@
+import { lstat } from 'node:fs/promises';
+import path from 'node:path';
+import { createVideoManagement } from './management.js';
+import { createVideoReferences } from './references.js';
+import { createReferenceCoordinator } from '../governance/coordination.js';
 import { VideoStore } from './store.js';
 import { VideoDiscovery } from './discovery.js';
 import { VIDEO_DEFAULTS, VIDEO_LIMITS } from './policy.js';
@@ -5,24 +10,25 @@ import { rootFor, openVideo } from './roots.js';
 import { fail, object, uuid, text, integer, aborted } from './validation.js';
 import { streamLocalFile } from '../transport/local-file-stream.js';
 
-export function createVideo(config, { now = Date.now } = {}) {
+export function createVideo(config, { now = Date.now, media, coordinate = createReferenceCoordinator() } = {}) {
     const policy = config.policy.video || VIDEO_DEFAULTS, discovery = new VideoDiscovery(policy, now);
     const stores = new Map(), active = new Set(), streams = new Set();
+    const references = createVideoReferences();
     let DatabaseSync, stopped = false;
     const authorized = context => policy.roots.filter(root => root.users.includes(context.userHandle));
-    function ready(context) {
-        if (stopped || !DatabaseSync || config.policy.videoError || !context?.userRoot || !authorized(context).length) fail('VIDEO_UNAVAILABLE');
+    function ready(context, referenceAccess = false) {
+        if (stopped || !DatabaseSync || !context?.userRoot || !referenceAccess && (config.policy.videoError || !authorized(context).length)) fail('VIDEO_UNAVAILABLE');
     }
-    async function store(context) {
-        ready(context);
+    async function store(context, referenceAccess = false) {
+        ready(context, referenceAccess);
         if (!stores.has(context.userRoot)) stores.set(context.userRoot, (async () => {
             const item = new VideoStore(context.userRoot, DatabaseSync); await item.initialize(); return item;
         })());
         try { return await stores.get(context.userRoot); } catch (error) { stores.delete(context.userRoot); throw error; }
     }
     // Track/drain every asynchronous operation before closing a user's DB.
-    async function run(context, signal, action) {
-        ready(context); aborted(signal);
+    async function run(context, signal, action, referenceAccess = false) {
+        ready(context, referenceAccess); aborted(signal);
         if (active.size >= 8 || [...active].filter(item => item.root === context.userRoot).length >= 2) fail('RESOURCE_BUSY');
         const controller = new AbortController(), abort = () => controller.abort(); let finish;
         const entry = { root: context.userRoot, controller, done: new Promise(resolve => { finish = resolve; }) }; active.add(entry);
@@ -36,11 +42,12 @@ export function createVideo(config, { now = Date.now } = {}) {
             health: context => ({ state: stopped ? 'unavailable' : config.policy.videoError ? 'unavailable' : authorized(context).length ? 'ready' : 'disabled',
                 reasonCode: stopped ? 'VIDEO_UNAVAILABLE' : config.policy.videoError || (authorized(context).length ? null : 'VIDEO_NOT_CONFIGURED') }),
             capabilities: [
-                ['video.catalog', ['list', 'read', 'presentation']],
-                ['video.sources', ['roots', 'browse', 'cancel', 'register']],
+                ['video.catalog', ['list', 'read', 'presentation', 'update', 'unregister', 'operation', 'references']],
+                ['video.sources', ['roots', 'browse', 'cancel', 'register', 'source']],
                 ['video.playback', ['resolve', 'stream']],
+                ['video.progress', ['read', 'write']],
             ].map(([id, operations]) => ({ id, contract: { major: 1, minMinor: 0, maxMinor: 0 }, operations: operations.map(id => ({ id, available: true })),
-                operationAvailability: () => Object.fromEntries((id === 'video.sources' ? ['browse', 'cancel', 'register'] : id === 'video.playback' ? ['resolve'] : ['presentation']).map(id =>
+                operationAvailability: () => Object.fromEntries((id === 'video.sources' ? ['browse', 'cancel', 'register', 'source'] : id === 'video.playback' ? ['resolve'] : id === 'video.progress' ? ['write'] : ['presentation', 'update', 'unregister']).map(id =>
                     [id, { available: config.policy.core.allowedOrigins.length > 0, reasonCode: 'ORIGIN_POLICY_MISSING' }])),
                 limits: { ...VIDEO_LIMITS, maxBytes: policy.maxBytes }, constraints: { scope: 'st-user', localOnly: true, automaticGc: false } })),
             shutdown: () => service.close(),
@@ -96,7 +103,7 @@ export function createVideo(config, { now = Date.now } = {}) {
             ready(context); integer(version); aborted(signal);
             if (streams.size >= VIDEO_LIMITS.streamsGlobal || [...streams].filter(item => item.root === context.userRoot).length >= VIDEO_LIMITS.streamsPerUser) fail('RESOURCE_BUSY');
             const controller = new AbortController(), abort = () => controller.abort(); let finish;
-            const entry = { root: context.userRoot, controller, done: new Promise(resolve => { finish = resolve; }) }; streams.add(entry);
+            const entry = { root: context.userRoot, videoId: id, controller, done: new Promise(resolve => { finish = resolve; }) }; streams.add(entry);
             signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort();
             let file;
             try {
@@ -114,5 +121,20 @@ export function createVideo(config, { now = Date.now } = {}) {
             await Promise.all([...stores.values()].map(async pending => { try { (await pending).close(); } catch {} })); stores.clear();
         },
     };
+    const cancelStreams = (context, id) => { for (const entry of streams) if (entry.root === context.userRoot && entry.videoId === id) entry.controller.abort(); };
+    Object.assign(service, createVideoManagement({ store, run, policy, discovery, media, coordinate, references, now, cancelStreams }));
+    service.registerReferenceProvider = provider => references.register(provider);
+    service.posterReferenceProvider = { id: 'video-posters', consumer: 'video', label: '视频封面',
+        enumerate: async context => {
+            try { await lstat(path.join(context.userRoot, 'tavern-toolbox-server/video-v1/metadata.sqlite')); }
+            catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+            return run(context, null, async () => {
+                const item = await store(context, true);
+                const rows = item.db.prepare('SELECT * FROM videos WHERE poster_asset_id IS NOT NULL LIMIT 5001').all();
+                if (rows.length > 5000) fail('VIDEO_STORE_UNAVAILABLE');
+                return rows.map(row => ({ id: row.id, label: row.title, lifecycle: 'active', revision: row.metadata_revision,
+                    actions: [], references: [{ id: 'poster', label: '视频封面', mediaRef: { provider: 'server', assetId: row.poster_asset_id }, actions: [] }] }));
+            }, true);
+        } };
     return service;
 }

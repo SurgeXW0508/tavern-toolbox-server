@@ -188,7 +188,7 @@ test('Directory discovery rejects overflow, reports unsupported neighbours and d
 
 test('5000-row SQL catalog projects only the requested page, stable order and rejects another registration at capacity', async t => {
     const h = await fixture(t), store = new VideoStore(h.alice.userRoot, DatabaseSync); await store.initialize(); t.after(() => store.close());
-    const statement = store.db.prepare('INSERT INTO videos VALUES(?,?,?,?,?,?,?,1,1,?)');
+    const statement = store.db.prepare('INSERT INTO videos(id,title,root_key,locator,fingerprint,mime,byte_size,source_revision,metadata_revision,created_at) VALUES(?,?,?,?,?,?,?,1,1,?)');
     store.db.exec('BEGIN');
     for (let i = 0; i < 5000; i++) statement.run(randomUUID(), `Clip ${i}`, 'clips', `clip-${i}.mp4`, 'synthetic', 'video/mp4', 128, 1000 + i);
     store.db.exec('COMMIT');

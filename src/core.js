@@ -95,8 +95,9 @@ export async function createCore({ policyOptions, registerModules, networkOption
     governance.register(business.referenceProvider);
     governance.register(worldbook.referenceProvider);
     registry.register(governance.definition);
-    const video = createVideo(config, { now });
+    const video = createVideo(config, { now, media, coordinate });
     registry.register(video.definition);
+    governance.register(video.posterReferenceProvider);
     registerModules?.(registry); // Test fixture or a future trusted composition root; not callable over HTTP.
     await registry.initialize();
     let stopped = false;

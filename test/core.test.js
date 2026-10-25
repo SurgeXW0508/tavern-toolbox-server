@@ -196,7 +196,7 @@ test('real HTTP discovery: exact product, read-only routes, version contract and
     assert.equal(status.body.data.serverVersion, releaseVersion);
     assert.equal(status.body.data.core.version, releaseVersion);
     assert.deepEqual(status.body.meta.protocol, { major: 1, minor: 0 });
-    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'network.policy', 'network.remoteAudio', 'preferences.audioRouting', 'audio.sources', 'audio.assets', 'audio.library', 'worldbook.core', 'media.assets', 'worldbook.media', 'business.collections', 'localization.characters', 'media.governance', 'video.catalog', 'video.sources', 'video.playback']);
+    assert.deepEqual(status.body.data.capabilities.map(item => item.id), ['core.status', 'network.remoteFetch', 'network.policy', 'network.remoteAudio', 'preferences.audioRouting', 'audio.sources', 'audio.assets', 'audio.library', 'worldbook.core', 'media.assets', 'worldbook.media', 'business.collections', 'localization.characters', 'media.governance', 'video.catalog', 'video.sources', 'video.playback', 'video.progress']);
     assert.deepEqual(status.body.data.capabilities[0], fixture.status.data.capabilities[0]);
     const worldbook = status.body.data.capabilities.find(item => item.id === 'worldbook.core');
     assert.equal(worldbook.contract.major, 1);
