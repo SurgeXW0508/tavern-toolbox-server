@@ -309,3 +309,15 @@ Discovery task admission is 2/user, 8/global; all other non-stream Video operati
 Actions: `video-add {id,revision,items:[{kind:'video',mediaRef}]}`, `video-remove {id,revision,assetId}`, `video-replace {id,revision,assetId,mediaRef}`, `video-reorder {id,revision,assetIds}`. At most six unique references, contiguous zero-based positions and exact-set reorder; CAS is independent of image/metadata/Binding/progress revisions. Commands retain the existing bounded timestamp-UUID command TTL/digest receipt contract. Exact replay preserves the result; same command ID with altered payload rejects. Ordinary failures never cause an automatic resubmit. `WORLDBOOK_VIDEO_CONFLICT`=409, `WORLDBOOK_VIDEO_UNAVAILABLE`=422; existing validation/not-found/duplicate/capacity/clock/expiry errors apply. No paths, bytes, durations, progress or poster metadata enter relation DTOs.
 
 Image/metadata commands do not alter Video attachments; copy begins media-free, delete uses FK cascade but retains Video registrations/files. Exact reference enumeration has a 30000-row per-target bound, with overflow/unavailable analysis treated as incomplete. Machine-readable request/result/receipt fixtures: `worldbook.video-1.0.schema.json` / `worldbook.video-1.0.fixture.json`. Runtime additionally validates ownership, CAS, contiguous order and command TTL.
+
+## Optional Outfit Video 1.0 / independent relation schema 1
+
+Machine-readable contract and examples: `outfit.video-1.0.schema.json` / `outfit.video-1.0.fixture.json`. Capability `outfit.video` (`outfit-video`) is additive to Protocol 1.0; Business schema 1 / Frontend Outfit schema 7 / Worldbook schema 4 / Video schema 2 do not change.
+
+| Route | Payload → result |
+| --- | --- |
+| POST `/v1/outfit/video/read` | `{assetId}` → `{assetId,revision,attachments:[{id,kind:'video',position,mediaRef}]}` |
+| POST `/v1/outfit/video/commands` | `{commandId,action,data}` → `{relation,replayed}` |
+| POST `/v1/outfit/video/operation` | `{commandId}` → `{found:false}` or `{found:true,result}` |
+
+`data` always carries `{assetId,revision}` plus: add `items:[MediaRef]`; replace `attachmentId,mediaRef`; reorder `attachmentIds`; unlink `attachmentId`. Attachment IDs and Video IDs are lowercase UUID v4. Replace retains attachment identity/order; exact-set reorder, unique Video IDs, real Server Asset ownership, command TTL/skew and request hashing are additional runtime checks. Read/receipt/mutation require current context + Origin/CSRF, JSON ≤8 KiB and no query. Max six attachments; initial relation revision 0; 7-day/10,000 command receipts. Conflict/duplicate/replay mismatch/expiry are 409, malformed DTO 400, missing owner/attachment 404, unavailable Video target 422, unavailable/incompatible store 503. Error/response bodies contain no filesystem source, playback or AI fields. Independent relation mutation never increments Business collection revision.

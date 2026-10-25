@@ -1,3 +1,5 @@
+import { createOutfitVideo } from './outfit-video/index.js';
+import { attachOutfitVideoRoutes } from './outfit-video/routes.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { loadPolicy, policyRevision } from './config.js';
@@ -89,6 +91,10 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(worldbook.mediaDefinition);
     const business = createBusiness(config, media, coordinate);
     registry.register(business.definition);
+    const outfitVideo = createOutfitVideo(config, { business, video, coordinate, now });
+    business.outfitAssetLifecycle = outfitVideo.assetLifecycle;
+    registry.register(outfitVideo.definition);
+    video.registerReferenceProvider(outfitVideo.referenceProvider);
     const localization = createLocalization(media, coordinate);
     registry.register(localization.definition);
     const governance = createGovernance(media, coordinate, { mutations: config.policy.core.allowedOrigins.length > 0 });
@@ -160,6 +166,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
         attachAudioRoutingPreferenceRoutes(router, { preferences, registry, config, send, failure, logger, now });
         attachAudioSourceRoutes(router, { sources: audioSources, registry, config, send, failure, networkFailureDetails, logger, now });
         attachAudioLibraryRoutes(router, { library: audioLibrary, registry, config, send, failure, logger, now });
+        attachOutfitVideoRoutes(router, { outfitVideo, registry, config, send, failure, logger, now });
         attachVideoRoutes(router, { video, registry, config, send, failure, logger, now });
         attachWorldbookRoutes(router, { worldbook, registry, config, send, failure, logger, now });
         const policyRoute = operation => async (req, res) => {

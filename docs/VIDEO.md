@@ -1,8 +1,8 @@
 # Local video foundation
 
-## Current scope: P3/P4 Worldbook candidate
+## Current scope: P0–P5 candidate
 
-Active paired branch: `stage/video-foundation`, based on Server main v0.10.1 and Frontend main v0.53.1. Optional local registration/streaming, Media Center library/manage/picker/detail/viewer, manual Image posters, independent progress CAS and guarded source maintenance are implemented. User Gate A confirmed on 2026-10-25: registration, playback and cross-device continuation work on the installed setup. P3/P4 Worldbook Video relations/preview are now implemented, pending Gate B. Optional P5 Outfit and P6/Gate C remain later work. Core Protocol stays 1.0, Video SQLite is schema 2; Worldbook migrates schema 3 to 4 for independent Video relations; image/audio storage does not change. No version bump or Release is implied.
+Active paired branch: `stage/video-foundation`, based on Server main v0.10.1 and Frontend main v0.53.1. Optional local registration/streaming, Media Center library/manage/picker/detail/viewer, manual Image posters, independent progress CAS and guarded source maintenance are implemented. User Gate A confirmed on 2026-10-25: registration, playback and cross-device continuation work on the installed setup. P3/P4 Worldbook Video relations/preview and P5 Server Outfit Video are implemented. User-supplied 2026-10-26 continuation confirms Gate A/Gate B core acceptance; UI Polish smoke, P5 minimum installed test and P6/Gate C remain release gates. Core Protocol stays 1.0, Video SQLite is schema 2; Worldbook migrates schema 3 to 4 for independent Video relations; image/audio storage does not change. No version bump or Release is implied.
 
 ## Deployment policy
 
@@ -123,3 +123,23 @@ Frontend Detail contributes an independent Video section using existing Media Ce
 3. Schema 3→4 is transactional and additive, but older Server code rejects schema 4. Code checkout alone is not a data rollback: stop writes and restore the consistent pre-upgrade snapshot if rollback is required.
 
 Gate B (5–10 minutes) uses two test materials: link one Video to both with an existing Image in one; play/close from Detail preserving scroll/body/enabled state; see a static Video preview in Roll/Discovery and open exactly that item; unlink one relation and verify the other works, then verify unregister remains blocked by that reference. User Gate A does not substitute for this Worldbook-specific check. Optional Outfit P5 and P6 extreme-source/concurrency/performance Gate C remain unimplemented/unaccepted.
+
+## P5 Server Outfit Video
+
+Optional `outfit.video` 1.0 owns read/command/operation at `/v1/outfit/video/{read,commands,operation}`. All are context-bound POST + Origin/CSRF/JSON (8 KiB max), no query parameters, authenticated private envelopes. Capability survives disabled Video roots so existing relations can be read, ordered and unlinked. Add/Replace invoke the existing current-user Video registration validator; missing targets fail 422 and malformed UUID v4 fails 400. Only actual Server assets in the current validated Outfit collection qualify (wardrobe/outfit/kit/item). Person/wear/chat state are not owners.
+
+Storage is independent `outfit-video-v1/relations.sqlite`, schema 1; Business SQLite/schema 1 and frontend Outfit schema 7 are untouched. Owners have independent relation revisions (initial 0); attachments have stable lowercase v4 IDs, order and server Video MediaRefs. Replace keeps attachment ID/position. Maximum six unique videos per owner. Timestamp-UUID command IDs have seven-day validity, five-minute future skew allowance and a 10,000-receipt capacity; altered-payload replay is rejected. No retrying mutations, last-write-wins, paths, source fingerprints, playback URL, duration/progress, title/poster metadata or AI text is stored here.
+
+`OutfitVideoView` only mounts in existing Server Asset editors, after the image area (or at the start of Kit organization fields). New unsaved assets, Local, old Server and Catalog/Current views have no relation UI/I/O. Public Picker/Previews/Viewer/Detail are reused. Images remain primary; Catalog, Local packages and Context Compiler never consume video attachments. Ordinary Business name/image/member edits preserve relation revisions and older frontend whole-document commits retain videos.
+
+### Deletion and failure recovery
+
+Business Asset-set changes, relation mutations and Video unregister share the per-user coordinator (one active ST process per data volume). Composition calls Outfit-specific lifecycle hooks; Generic BusinessStore schema/transaction is unchanged. Pre-commit reconciliation only removes owners absent from the previous validated collection, so a failed Business CAS cannot destroy live relations. Business commit happens first; post-commit orphan cleanup is best effort. Fresh-owner filtering in the read-only Video Reference Provider excludes missing assets even if physical cleanup fails. A coordinated relation read or next Asset-set change retries cleanup. Recreating an old ID first reconciles the previous snapshot and fails closed if that cleanup is unavailable. Ordinary metadata/image/wear writes do not invoke these hooks. No cross-database atomicity is claimed.
+
+The Outfit Video Provider is separate from Image Governance and aggregates with Worldbook. Labels use `穿搭 · 名称（场景组/穿搭组合/具体搭配/单品）`. A failed/unreadable/malformed Provider is incomplete and prevents unregister. The exact Video index is queried, then checked against the current Business document; that validation remains bounded whole-document work (2 MiB/5,000 assets). Enumeration performs no physical cleanup outside coordination.
+
+### P5 operator backup / rollback / acceptance
+
+Stop ST/writes and consistently back up each user's whole `business-v1`, `outfit-video-v1`, `video-v1`, `media-v1` and shared Worldbook reference state (including SQLite companion files as applicable). NAS video bytes have a separate backup. Install Server branch then overwrite the frontend candidate; no new runtime dependency or Business schema migration. Older frontends remain safe with the new Server; older Servers can read Business schema 1 but **do not know Outfit Video references**. A Server-only code rollback can bypass their protection: restore a consistent pre-P5 snapshot when reverting Server, or keep the new Server and revert only frontend. Never interpret schema readability as governance compatibility.
+
+P5 minimum installed test may join Gate C: existing Server Asset with its original image → Add Video → reload → Watch → Replace/Reorder → Unlink → registration retained; Worldbook+Outfit sharing must still protect the remaining reference. Do not repeat complete Gate A/B for P5. P6/Final Closure, source recovery/conflict, 20 Viewer cycles/resource checks, latest UI smoke, backup/rollback review and release consistency remain pending. No main merge, tag or Release before those gates.

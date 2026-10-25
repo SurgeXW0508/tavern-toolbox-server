@@ -1,0 +1,382 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Optional Outfit Video relations 1.0",
+  "description": "Independent outfit-video-v1 SQLite schema 1; Business schema 1, frontend Outfit schema 7 unchanged. Runtime additionally enforces real Server Asset existence, current user, independent CAS, stable attachment IDs, exact order, unique Video IDs and seven-day bounded command receipts. No paths, source fingerprints, playback URLs, progress or context text.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "readRequest": {
+      "$ref": "#/$defs/readRequest"
+    },
+    "read": {
+      "$ref": "#/$defs/relation"
+    },
+    "add": {
+      "$ref": "#/$defs/command"
+    },
+    "replace": {
+      "$ref": "#/$defs/command"
+    },
+    "reorder": {
+      "$ref": "#/$defs/command"
+    },
+    "unlink": {
+      "$ref": "#/$defs/command"
+    },
+    "result": {
+      "$ref": "#/$defs/result"
+    },
+    "operationRequest": {
+      "$ref": "#/$defs/operationRequest"
+    },
+    "operationFound": {
+      "$ref": "#/$defs/operation"
+    },
+    "operationMissing": {
+      "$ref": "#/$defs/operation"
+    }
+  },
+  "required": [
+    "readRequest",
+    "read",
+    "add",
+    "replace",
+    "reorder",
+    "unlink",
+    "result",
+    "operationRequest",
+    "operationFound",
+    "operationMissing"
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "assetId": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "mediaRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "const": "server"
+        },
+        "assetId": {
+          "$ref": "#/$defs/uuid"
+        }
+      },
+      "required": [
+        "provider",
+        "assetId"
+      ]
+    },
+    "commandId": {
+      "type": "string",
+      "pattern": "^[0-9]{13}-[0-9a-f-]{36}$"
+    },
+    "attachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "kind": {
+          "const": "video"
+        },
+        "position": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "mediaRef": {
+          "$ref": "#/$defs/mediaRef"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "position",
+        "mediaRef"
+      ]
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "assetId": {
+          "$ref": "#/$defs/assetId"
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "$ref": "#/$defs/attachment"
+          }
+        }
+      },
+      "required": [
+        "assetId",
+        "revision",
+        "attachments"
+      ]
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "relation": {
+          "$ref": "#/$defs/relation"
+        },
+        "replayed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "relation",
+        "replayed"
+      ]
+    },
+    "readRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "assetId": {
+          "$ref": "#/$defs/assetId"
+        }
+      },
+      "required": [
+        "assetId"
+      ]
+    },
+    "operationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "commandId": {
+          "$ref": "#/$defs/commandId"
+        }
+      },
+      "required": [
+        "commandId"
+      ]
+    },
+    "operation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "found": {
+              "const": false
+            }
+          },
+          "required": [
+            "found"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "found": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/result"
+            }
+          },
+          "required": [
+            "found",
+            "result"
+          ]
+        }
+      ]
+    },
+    "command": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "$ref": "#/$defs/commandId"
+            },
+            "action": {
+              "const": "add"
+            },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "assetId": {
+                  "$ref": "#/$defs/assetId"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740990
+                },
+                "items": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 6,
+                  "items": {
+                    "$ref": "#/$defs/mediaRef"
+                  }
+                }
+              },
+              "required": [
+                "assetId",
+                "revision",
+                "items"
+              ]
+            }
+          },
+          "required": [
+            "commandId",
+            "action",
+            "data"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "$ref": "#/$defs/commandId"
+            },
+            "action": {
+              "const": "replace"
+            },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "assetId": {
+                  "$ref": "#/$defs/assetId"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740990
+                },
+                "attachmentId": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "mediaRef": {
+                  "$ref": "#/$defs/mediaRef"
+                }
+              },
+              "required": [
+                "assetId",
+                "revision",
+                "attachmentId",
+                "mediaRef"
+              ]
+            }
+          },
+          "required": [
+            "commandId",
+            "action",
+            "data"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "$ref": "#/$defs/commandId"
+            },
+            "action": {
+              "const": "reorder"
+            },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "assetId": {
+                  "$ref": "#/$defs/assetId"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740990
+                },
+                "attachmentIds": {
+                  "type": "array",
+                  "maxItems": 6,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/$defs/uuid"
+                  }
+                }
+              },
+              "required": [
+                "assetId",
+                "revision",
+                "attachmentIds"
+              ]
+            }
+          },
+          "required": [
+            "commandId",
+            "action",
+            "data"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "$ref": "#/$defs/commandId"
+            },
+            "action": {
+              "const": "unlink"
+            },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "assetId": {
+                  "$ref": "#/$defs/assetId"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740990
+                },
+                "attachmentId": {
+                  "$ref": "#/$defs/uuid"
+                }
+              },
+              "required": [
+                "assetId",
+                "revision",
+                "attachmentId"
+              ]
+            }
+          },
+          "required": [
+            "commandId",
+            "action",
+            "data"
+          ]
+        }
+      ]
+    }
+  }
+}
