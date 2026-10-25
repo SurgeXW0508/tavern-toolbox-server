@@ -1,5 +1,11 @@
 import { fail, id, integer, object } from "./validation.js";
-import { mediaRef } from "./media.js";
+const VIDEO_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+function videoRef(value) {
+    object(value, ["provider", "assetId"], ["provider", "assetId"]);
+    if (value.provider !== "server" || typeof value.assetId !== "string" || !VIDEO_ID.test(value.assetId))
+        fail("WORLDBOOK_VALIDATION");
+    return { provider: "server", assetId: value.assetId };
+}
 export const VIDEO_COMMANDS = new Set([
     "video-add",
     "video-remove",
@@ -64,7 +70,7 @@ export class WorldbookVideo {
         id(data.id);
         integer(data.revision, 1);
         const check = (value) =>
-            mediaRef({ provider: "server", assetId: value }).assetId;
+            videoRef({ provider: "server", assetId: value }).assetId;
         if ("assetId" in data) check(data.assetId);
         if (
             action === "video-reorder" &&
@@ -74,7 +80,7 @@ export class WorldbookVideo {
         )
             fail("WORLDBOOK_VALIDATION");
         if (action === "video-reorder") data.assetIds.forEach(check);
-        if (action === "video-replace") return [mediaRef(data.mediaRef)];
+        if (action === "video-replace") return [videoRef(data.mediaRef)];
         if (action !== "video-add") return [];
         if (
             !Array.isArray(data.items) ||
@@ -85,7 +91,7 @@ export class WorldbookVideo {
         return data.items.map((row) => {
             object(row, ["kind", "mediaRef"], ["kind", "mediaRef"]);
             if (row.kind !== "video") fail("WORLDBOOK_VALIDATION");
-            return mediaRef(row.mediaRef);
+            return videoRef(row.mediaRef);
         });
     }
     mutate(action, data, { videoValidated = false } = {}) {

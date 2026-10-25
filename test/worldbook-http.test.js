@@ -215,6 +215,10 @@ test('Optional Worldbook video reads/unlinks stay independent of disabled source
  assert.equal((await f.request('/v1/worldbook/video/read',{data:{materialIds:[id]},headers:{'X-TTB-Context':'wrong'}})).status,409);
  assert.equal((await f.request('/v1/worldbook/video/read',{data:{materialIds:Array(21).fill(id)}})).status,400);
  assert.equal((await f.request('/v1/worldbook/video/commands',{data:command('video-add',{id,revision:1,items:[{kind:'video',mediaRef:{provider:'server',assetId:randomUUID()}}]})})).status,422);
+ const invalid='11111111-1111-1111-8111-111111111111',valid=randomUUID();
+ for(const[action,data]of [['video-add',{items:[{kind:'video',mediaRef:{provider:'server',assetId:invalid}}]}],['video-remove',{assetId:invalid}],['video-reorder',{assetIds:[invalid]}],['video-replace',{assetId:valid,mediaRef:{provider:'server',assetId:invalid}}]]){
+  const rejected=await f.request('/v1/worldbook/video/commands',{data:command(action,{id,revision:1,...data})});assert.equal(rejected.status,400);assert.equal(rejected.body.error.code,'WORLDBOOK_VALIDATION');
+ }
  const cmd=command('video-reorder',{id,revision:1,assetIds:[]});const saved=await f.request('/v1/worldbook/video/commands',{data:cmd});assert.equal(saved.status,200);
  const receipt=await f.request('/v1/worldbook/video/operation',{data:{commandId:cmd.commandId}});assert.equal(receipt.body.data.found,true);assert.equal(receipt.body.data.result.video.revision,2);
  const old=await fixture(t,false);assert.equal(old.status.capabilities.find(row=>row.id==='worldbook.video').operations.find(row=>row.id==='command').available,false);

@@ -64,3 +64,20 @@ test('Schema 3 to 4 migration failure rolls back DDL; normal upgrade retains ide
  const db=new DatabaseSync(path.join(h.root,'tavern-toolbox-server/worldbook-v1/worldbook.sqlite'));assert.equal(db.prepare('PRAGMA user_version').get().user_version,3);assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='wb_video_versions'").get(),undefined);db.close();
  await h.store.initialize();assert.deepEqual(h.store.detail(id),before);assert.deepEqual(h.store.media.read(id),media);assert.equal(h.store.video.read(id).revision,1);
 });
+
+test('Video relation IDs enforce the lowercase v4 contract before target validation or writes',async t=>{
+ const h=await fixture(t),id=h.rows[0].id,valid=h.assets[0].mediaRef;
+ let validations=0;const validate=h.video.validateReference;h.video.validateReference=(...args)=>{validations++;return validate(...args);};
+ for(const assetId of ['11111111-1111-1111-8111-111111111111','11111111-1111-5111-8111-111111111111','AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA','11111111-1111-4111-7111-111111111111']){
+  const invalid={provider:'server',assetId};
+  for(const[action,data]of [
+   ['video-add',{items:[{kind:'video',mediaRef:invalid}]}],
+   ['video-remove',{assetId}],['video-reorder',{assetIds:[assetId]}],
+   ['video-replace',{assetId:valid.assetId,mediaRef:invalid}],
+   ['video-replace',{assetId,mediaRef:valid}],
+  ])await assert.rejects(h.command(action,{id,revision:1,...data}),{code:'WORLDBOOK_VALIDATION'});
+ }
+ assert.equal(validations,0);assert.deepEqual(h.store.video.read(id),{id,revision:1,attachments:[]});
+ await assert.rejects(h.command('video-add',{id,revision:1,items:[{kind:'video',mediaRef:{provider:'server',assetId:randomUUID()}}]}),{code:'WORLDBOOK_VIDEO_UNAVAILABLE'});assert.equal(validations,1);
+ await h.command('video-add',{id,revision:1,items:[{kind:'video',mediaRef:valid}]});assert.equal(validations,2);
+});
