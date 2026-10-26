@@ -71,6 +71,7 @@ export function attachOutfitVideoRoutes(
                               ? 422
                               : [
                                       "OUTFIT_VIDEO_CONFLICT",
+                                      "OUTFIT_VIDEO_CAPACITY",
                                       "OUTFIT_VIDEO_DUPLICATE",
                                       "OUTFIT_VIDEO_COMMAND_EXPIRED",
                                       "OUTFIT_VIDEO_IDEMPOTENCY_MISMATCH",

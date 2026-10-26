@@ -149,6 +149,49 @@ async function fixture(t) {
         commit,
     };
 }
+test("Receipt capacity rejects atomically with its own code; an expired receipt frees space on a later explicit mutation", async (t) => {
+    const h = await fixture(t);
+    const saved = await h.command("reorder", {
+        revision: 0,
+        attachmentIds: [],
+    });
+    const target = await h.relations.store(h.context);
+    const original = target.db.prepare("SELECT * FROM commands LIMIT 1").get();
+    target.db.exec("BEGIN IMMEDIATE");
+    const insert = target.db.prepare("INSERT INTO commands VALUES(?,?,?,?)");
+    for (let n = 1; n < 10000; n++)
+        insert.run(token(), original.hash, original.result, Date.now());
+    target.db.exec("COMMIT");
+    const commandId = token();
+    await assert.rejects(
+        h.command("reorder", { revision: 1, attachmentIds: [] }, commandId),
+        { code: "OUTFIT_VIDEO_RECEIPTS_FULL" },
+    );
+    assert.deepEqual(
+        await h.relations.read(h.context, { assetId: "item" }),
+        saved.relation,
+    );
+    assert.equal(
+        (await h.relations.operation(h.context, { commandId })).found,
+        false,
+    );
+    assert.equal(
+        target.db.prepare("SELECT COUNT(*) n FROM commands").get().n,
+        10000,
+    );
+    target.db
+        .prepare("UPDATE commands SET created_at=0 WHERE id=?")
+        .run(original.id);
+    assert.equal(
+        (await h.command("reorder", { revision: 1, attachmentIds: [] }))
+            .relation.revision,
+        2,
+    );
+    assert.equal(
+        target.db.prepare("SELECT COUNT(*) n FROM commands").get().n,
+        10000,
+    );
+});
 test("All four Outfit kinds have independent Video CAS, stable attachments, bounded unique order and exact receipts", async (t) => {
     const h = await fixture(t);
     for (const kind of ["wardrobe", "outfit", "kit", "item"])

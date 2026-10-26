@@ -7,6 +7,79 @@ import path from "node:path";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { createCore } from "../src/core.js";
+import { attachOutfitVideoRoutes } from "../src/outfit-video/routes.js";
+import { OutfitVideoFailure } from "../src/outfit-video/store.js";
+test("Outfit HTTP distinguishes a full relation conflict from exhausted receipts or storage", async (t) => {
+    const origin = "https://example.invalid",
+        app = express(),
+        router = express.Router();
+    let code;
+    app.use(express.json());
+    app.use((req, res, next) => {
+        req.session = { csrfToken: "fixture-csrf" };
+        res.locals.ttbRequest = {
+            context: { contextId: "fixture" },
+            requestId: "request",
+            start: 0,
+        };
+        next();
+    });
+    attachOutfitVideoRoutes(router, {
+        outfitVideo: {
+            command: async () => {
+                throw new OutfitVideoFailure(code);
+            },
+        },
+        registry: {
+            snapshot: async () => ({
+                capabilities: [
+                    {
+                        id: "outfit.video",
+                        moduleId: "outfit-video",
+                        operations: [{ id: "command", available: true }],
+                    },
+                ],
+            }),
+        },
+        config: { policy: { core: { allowedOrigins: [origin] } } },
+        send: (res, status, data) => res.status(status).json(data),
+        failure: (errorCode) => ({ code: errorCode }),
+        logger: {},
+        now: Date.now,
+    });
+    app.use(router);
+    const server = app.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    t.after(async () => {
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+    });
+    for (const [errorCode, status] of [
+        ["OUTFIT_VIDEO_CAPACITY", 409],
+        ["OUTFIT_VIDEO_RECEIPTS_FULL", 503],
+        ["OUTFIT_VIDEO_STORAGE_CAPACITY", 503],
+    ]) {
+        code = errorCode;
+        const response = await fetch(
+            "http://127.0.0.1:" +
+                server.address().port +
+                "/v1/outfit/video/commands",
+            {
+                method: "POST",
+                headers: {
+                    Origin: origin,
+                    "Content-Type": "application/json",
+                    "X-CSRF-Token": "fixture-csrf",
+                    "X-TTB-Protocol": "1.0",
+                    "X-TTB-Context": "fixture",
+                },
+                body: "{}",
+            },
+        );
+        assert.equal(response.status, status);
+        assert.equal((await response.json()).code, errorCode);
+    }
+});
 test("Optional Outfit Video HTTP enforces Origin, CSRF, context, bounded DTOs and isolates Business/other users with roots disabled", async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), "outfit-video-http-")),
         logs = [],

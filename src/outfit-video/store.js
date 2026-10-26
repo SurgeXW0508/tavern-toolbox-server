@@ -186,7 +186,7 @@ export class OutfitVideoStore {
             owners = this.db
                 .prepare("SELECT asset_id FROM owners LIMIT 5001")
                 .all();
-        if (owners.length > 5000) fail("OUTFIT_VIDEO_CAPACITY");
+        if (owners.length > 5000) fail("OUTFIT_VIDEO_STORAGE_CAPACITY");
         const orphaned = owners.filter((row) => !live.has(row.asset_id));
         if (!orphaned.length) return;
         this.db.exec("BEGIN IMMEDIATE");
@@ -255,7 +255,7 @@ export class OutfitVideoStore {
                 this.db.prepare("SELECT COUNT(*) n FROM commands").get().n >=
                 MAX_RECEIPTS
             )
-                fail("OUTFIT_VIDEO_CAPACITY");
+                fail("OUTFIT_VIDEO_RECEIPTS_FULL");
             this.db
                 .prepare(
                     "INSERT INTO owners VALUES(?,?) ON CONFLICT(asset_id) DO UPDATE SET revision=excluded.revision",
@@ -292,7 +292,7 @@ export class OutfitVideoStore {
                 "SELECT asset_id,video_id FROM attachments WHERE video_id=? LIMIT 30001",
             )
             .all(videoId);
-        if (rows.length > 30000) fail("OUTFIT_VIDEO_CAPACITY");
+        if (rows.length > 30000) fail("OUTFIT_VIDEO_STORAGE_CAPACITY");
         const labels = {
             wardrobe: "场景组",
             outfit: "穿搭组合",
