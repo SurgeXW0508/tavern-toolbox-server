@@ -1,7 +1,7 @@
-# Worldbook — Core and Media 1.0
+# Worldbook — Core, Media and Video 1.0
 
 `worldbook.core` contract 1.0 is an independent business module, not an Outfit
-collection; its optional Media consumer has a separate Reference Provider. Protocol remains 1.0; formal releases are Server v0.10.0 / Frontend v0.53.0. Formal Phase 10 baseline uses Worldbook Storage Schema 3; active Video stage adds schema 4 (see below). Summary wire schemaVersion 1, featureVersion 2 (global/column/filtered/folder) and reconcileVersion 1.
+collection; its optional Media and Video consumers have separate Reference Providers. Protocol remains 1.0; the formal baseline is Server v0.11.0 / Frontend v0.54.0 with Worldbook Storage Schema 4. Summary wire schemaVersion 1, featureVersion 2 (global/column/filtered/folder) and reconcileVersion 1 remain unchanged. Historical schema steps below describe when features were introduced; they do not replace the current baseline.
 
 ## Ownership and storage
 
@@ -140,8 +140,9 @@ summaries, tag arrays or original Source names.
 
 Schema 2 adds wb_bindings, wb_usage, wb_relation_versions, wb_companions,
 wb_presets and wb_preset_members, with FK/triggers for atomic move/delete cleanup.
-The original worldbook-v1 location and Core 1.0 wire shape remain; capability
-constraints advertise storageSchemaVersion=2 and featureVersion=1. Metadata,
+The original worldbook-v1 location and Core 1.0 wire shape remain. The historical
+10C checkpoint advertised storageSchemaVersion=2 and featureVersion=1; the current
+release advertises storageSchemaVersion=4 and featureVersion=2. Metadata,
 Binding, Companion and Preset revisions are independent. Usage uses SQL increment
 and the existing durable receipt, not an absolute client-supplied count.
 
@@ -191,9 +192,9 @@ cloud tests.
 
 ## Upgrade, rollback and evidence
 
-Install formal Server v0.10.0 with Frontend v0.53.0; no stage checkout is required. Stop ST/container writes before the first upgrade of earlier Phase 10 Candidate data, and consistently back up each user's complete **worldbook-v1 and media-v1** directories, including applicable SQLite companion files. A live SQLite main-file copy alone is not a consistent backup. Preserve the ST data volume and install dependencies for the deployed Node runtime (Node 24 is the verified CI baseline).
+Install formal Server v0.11.0 with Frontend v0.54.0; no stage checkout is required. Stop ST/container writes before upgrading, and consistently back up each user's complete plugin data directory, including **worldbook-v1, media-v1, video-v1, outfit-video-v1 and business-v1**, related localization/audio stores and applicable SQLite companion files. Back up external NAS video files separately. A live SQLite main-file copy alone is not a consistent backup. Preserve the ST data volume and install dependencies for the deployed Node runtime (Node 24 is the verified CI baseline).
 
-Recognized older schema 1/2/3 databases advance through transactional additive steps to current Schema 4, preserving identities and data; new stores reach Schema 4. An interrupted later step retains completed earlier steps and never resets the DB. Unknown future/corrupt schema fails closed, with no reset. A code Tag rollback does not revert data: returning to old 10C/10B requires the corresponding pre-upgrade paired backup. Import Frontend v0.53.0 with unchanged Script ID using overwrite. Operator-level consistent backup remains required; no Worldbook Backup UI exists.
+Recognized older schema 1/2/3 databases advance through transactional additive steps to current Schema 4, preserving identities and data; new stores reach Schema 4. An interrupted later step retains completed earlier steps and never resets the DB. Unknown future/corrupt schema fails closed, with no reset. A code Tag rollback does not revert data: older Servers may reject Schema 4 or lack Outfit Video reference protection, so restoring the corresponding consistent pre-upgrade snapshot is required when reverting Server. Keeping the new Server while reverting only the frontend preserves reference protection. Import Frontend v0.54.0 with unchanged Script ID using overwrite. Operator-level consistent backup remains required; no Worldbook Backup UI exists.
 
 User-confirmed SillyTavern 1.19.0 Docker/NAS core and UI feedback, automated Store/HTTP/SQLite tests and synthetic Chromium responsive evidence are distinct. See PHASE-10-ACCEPTANCE.md and paired Frontend TESTING.md. Whole-book native reads and scope-growing substring/facet/seeded SQL costs remain; complete physical phone/WebKit/keyboard, large real-NAS, long-session heap and extreme concurrency coverage is not claimed.
 
@@ -205,11 +206,13 @@ New references require same-user existing image metadata and a healthy Original;
 
 Core Catalog/Roll business DTOs do not carry Gallery as ordinary business payload. Separately, Preview Foundation reads formal Cover + Gallery relations for the current bounded Material IDs (at most 20 per request); Browser/Roll/accepted Discovery Results can derive Event-stable Dynamic Preview from these references. Business DTO, media relation read and presentation hydration are separate boundaries. AI Discovery Candidate metadata has no Media; only accepted/displayed results perform post-AI media hydration. Selected Thumbnail remains lazy/bounded; Original is an explicit Viewer read. Bytes, dimensions, animation and health stay in Media Domain. The frontend uses public MediaAccess and does not persist a selected Preview or change canonical Cover/Gallery.
 
-### Upgrade and rollback
+### Historical 10D schema 2→3 migration
 
-With writes stopped, take one consistent backup of complete **worldbook-v1 and media-v1** before the first real upgrade (include SQLite companion files as applicable; do not copy a live main database alone). Schema 2→3 adds only Media tables/trigger in an atomic transaction, preserving all 10C identities and aggregates. Migration failure retains schema 2. Schema 3 cannot be opened by 10C: restoring the pre-upgrade paired backup is required for rollback; reverting plugin code alone is insufficient. Protocol remains 1.0. Formal releases are Server v0.10.0 / Frontend v0.53.0; device/performance evidence and limits are recorded in PHASE-10-ACCEPTANCE.md.
+The 10D upgrade required a consistent **worldbook-v1 and media-v1** backup with writes stopped, including applicable SQLite companion files. Schema 2→3 added only Media tables/trigger in an atomic transaction, preserving all 10C identities and aggregates. Migration failure retained schema 2. Schema 3 could not be opened by 10C, so rollback required the pre-upgrade paired backup rather than a code-only revert. The formal Phase 10 baseline was Server v0.10.0 / Frontend v0.53.0; its device/performance evidence remains in PHASE-10-ACCEPTANCE.md. The current release uses Schema 4; follow the complete-store backup and rollback guidance above for current upgrades.
 
-## Review B maintenance (Schema 3 unchanged)
+## Review B maintenance (historical Schema 3 checkpoint)
+
+These features were introduced without changing the then-current Schema 3; the current release uses Schema 4.
 
 Optional `worldbook.core.constraints.reconcileVersion=1` adds feature reads:
 `column-sources {columnId,after?}` (50 actually referenced Sources/page),
@@ -225,7 +228,7 @@ The frontend shows seven reconcile decisions, never automatically deletes Materi
 
 ## Folder Candidate scope (featureVersion 2)
 
-Protocol 1.0 and storageSchemaVersion 3 remain unchanged. Core constraints now declare featureVersion 2 and candidateScopes global/column/filtered/folder. Only Roll/Discovery accept exact {columnId,folderId}, rejecting mixed filters; other feature/public Catalog scope parsers reject folderId. A recursive placement query uses persisted folders/materials, not a frontend tree or a stored ID pool. Existing grouping, disabled Runtime eligibility, seed/keyset cursor, per-response bounds, Usage and unscoped Companion expansion remain intact.
+Folder Candidate support introduces no storage migration. Protocol 1.0 and the current storageSchemaVersion 4 remain unchanged; Core constraints declare featureVersion 2 and candidateScopes global/column/filtered/folder. Only Roll/Discovery accept exact {columnId,folderId}, rejecting mixed filters; other feature/public Catalog scope parsers reject folderId. A recursive placement query uses persisted folders/materials, not a frontend tree or a stored ID pool. Existing grouping, disabled Runtime eligibility, seed/keyset cursor, per-response bounds, Usage and unscoped Companion expansion remain intact.
 
 A Folder session captures its Column treeRevision and real ancestor-name path. Continuations and last-cursor replay validate the same revision and folder ownership before returning any cached response. Tree changes reject WORLDBOOK_TREE_CHANGED; missing/cross-column scopes fail closed. Session lifetime/quotas/end are unchanged, and old Global/Column/Filtered requests need no new fields. Clients gate Folder icons on both version and candidateScopes, validate cached Discovery and paid-result execution through replay, and require an explicit fresh session after tree change/expiry. No new table/cache, migration, Native API, cross-provider execution or rollback requirement is introduced. Restart the plugin host after updating code.
 
@@ -236,4 +239,4 @@ Regression coverage includes 537 descendants, 16 levels, same-name paths, comple
 
 The additive 3→4 migration introduces independent `wb_video_versions` / `wb_video_attachments` and leaves the image-only `wb_media` schema/commands unchanged. Six ordered Video references per Material use their own revision and `worldbook.video` capability; relation DTOs contain only kind/position/MediaRef. Metadata/Binding/enable/AI paths do not receive videos or technical playback data. Older image/metadata clients cannot clear video relations. Material deletion cascades relations; copy starts without image/video media. Video registration/NAS originals remain Video-owned.
 
-Link validation and unregister share the user coordinator; the trusted Worldbook adapter enumerates current references by indexed video ID and fails incomplete if Worldbook is unavailable. Missing/offline sources remain unlinkable. Uncertain relation commands have read-only receipt recovery and no automatic resubmit. Installation, backup/rollback and pending Gate B are in [Video](VIDEO.md); wire/schema fixtures are in protocol/worldbook.video-1.0.*.
+Link validation and unregister share the user coordinator; the trusted Worldbook adapter enumerates current references by indexed video ID and fails incomplete if Worldbook is unavailable. Missing/offline sources remain unlinkable. Uncertain relation commands have read-only receipt recovery and no automatic resubmit. Installation, backup/rollback and the accepted Gate B/final installed scope are in [Video](VIDEO.md); wire/schema fixtures are in protocol/worldbook.video-1.0.*.
