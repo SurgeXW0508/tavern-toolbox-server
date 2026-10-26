@@ -2,9 +2,9 @@
 
 Current architecture, scalability findings, lifecycle and future development rules: [Engineering](docs/ENGINEERING.md). Public contracts: [Protocol](protocol/README.md). Phase acceptance files are historical evidence; their old branch instructions and temporary non-goals do not override the current baseline.
 
-Stage is preparing **Server v0.11.0 / Frontend v0.54.0** for final human review; it is not merged or released. Video schema 2, Worldbook storage schema 4 and independent Outfit Video schema 1 are implemented. Gate C installed-host evidence remains separate.
+Current formal baseline is **Server v0.11.0 / Frontend v0.54.0 / Protocol 1.0**. Video schema 2, Worldbook storage schema 4 and independent Outfit Video schema 1 are implemented. Final SillyTavern 1.19.0 / Docker / NAS smoke confirms the shared Video path and real source-loss → relocation recovery; detailed evidence and limits are in [Video](docs/VIDEO.md) and [Engineering](docs/ENGINEERING.md).
 
-## Published main baseline v0.10.1 — Media consumer performance
+## Previous release v0.10.1 — Media consumer performance
 
 Server **v0.10.1**, paired with Frontend **v0.53.1** — media consumer performance maintenance. Protocol **1.0** and all storage schema versions remain unchanged.
 
@@ -80,14 +80,14 @@ The completed installed-host acceptance and automated evidence boundaries are in
 
 ## Release notes
 
-Server **v0.11.0**, paired with Frontend **v0.54.0** — Video Foundation candidate, awaiting final review; not released from this Stage.
+Server **v0.11.0**, paired with Frontend **v0.54.0** — Video Foundation.
 
 - Optional user-scoped NAS read-only Video registration, bounded directory discovery, authenticated same-origin Range streaming, metadata/manual posters, independent progress CAS/receipts, and explicit source relocation.
 - Independent Worldbook and Server Outfit Video relations with per-owner CAS, command readback, fresh shared-reference protection and offline unlink. Asset removal never deletes NAS files or Video registrations.
 - Additive Video schema 2 and Outfit Video schema 1; atomic Worldbook storage 3→4. Business schema 1 and image/audio ownership remain unchanged; no new runtime dependency.
 - Stop writes and consistently back up the whole related per-user plugin data (including business-v1, outfit-video-v1, video-v1, media-v1, worldbook-v1 and referenced localization/audio state). NAS bytes require a separate backup. Upgrade Server first, frontend second.
 - Frontend rollback may retain this Server. Reverting Server requires a compatible consistent snapshot: older Servers cannot read Worldbook schema 4 or enforce Outfit Video references, even though Business schema 1 is readable.
-- Missing Video policy leaves optional Video disabled without scanning directories. No Video upload, transcode, automatic thumbnails/posters, duration scan or background cleanup. Browser codec compatibility and final installed NAS Gate C remain explicit limits.
+- Missing Video policy leaves optional Video disabled without scanning directories. No Video upload, transcode, automatic thumbnails/posters, duration scan or background cleanup. Final NAS smoke verified Video Library/Directory/Detail, Worldbook playback, Image/Audio entry points, restart persistence and real source-loss → formal relocation recovery; browser codec/device coverage and hour-scale playback remain explicit limits.
 
 
 ## Phase 4 Business Provider and Outfit

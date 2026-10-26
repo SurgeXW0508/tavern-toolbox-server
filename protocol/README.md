@@ -324,4 +324,4 @@ Machine-readable contract and examples: `outfit.video-1.0.schema.json` / `outfit
 
 Outfit Video capacity errors are distinct: OUTFIT_VIDEO_CAPACITY (409) means more than six attachments; OUTFIT_VIDEO_RECEIPTS_FULL (503) means the seven-day, 10,000-receipt budget is full; OUTFIT_VIDEO_STORAGE_CAPACITY (503) means a bounded storage/index read exceeded its integrity limit. All are definite rejections, not authorization to resubmit or overwrite. A failed command commits neither a new relation revision nor receipt. DTOs, capability version and independent storage schema remain unchanged.
 
-P6 candidate versions (Server 0.11.0 / Frontend 0.54.0) do not change Protocol 1.0 or these capability contracts. Video store 2 / Worldbook storage 4 / Outfit Video 1 / Business 1 remain the Stage data versions; optional-capability examples are illustrative, not an exhaustive module inventory.
+Server 0.11.0 / Frontend 0.54.0 do not change Protocol 1.0 or these capability contracts. Video store 2 / Worldbook storage 4 / Outfit Video 1 / Business 1 are the released data versions; optional-capability examples are illustrative, not an exhaustive module inventory.
