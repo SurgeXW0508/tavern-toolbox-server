@@ -84,12 +84,9 @@ Progress saves coalesce every 15 seconds of playback plus pause/seek/end/normal 
 
 Local code evidence: targeted Video/session/UI, real SQLite/HTTP and existing suites; Chromium 153 through a local ST-like Express/session/CSRF host at 1280×800, 760×900 and 390×844. A generated 5-second H.264 MP4 decoded, sought to 2 seconds, closed with no Video DOM, and a second page resumed that position. Real PNG upload/poster persistence, title save and directory navigation were exercised. No video stream request occurred while browsing. This is synthetic-host Chromium evidence, not installed SillyTavern/NAS, physical mobile/WebKit, large-file throughput or long-session heap evidence.
 
-### Historical first Gate A preparation (already accepted)
+### Historical first Gate A preparation (accepted)
 
-1. In the existing Server plugin checkout, inspect `git status` and preserve any local changes. Fetch origin and switch to `stage/video-foundation` (create tracking branch from `origin/stage/video-foundation` if absent), then update with fast-forward only. Run the existing `npm ci --omit=dev --ignore-scripts` installation procedure. Do not overwrite the plugin with an individual JS file. Restart ST after the mount/policy edit below.
-2. Add a read-only bind mount to the ST container for a chosen NAS video directory. Example container-side destination `/media/video-clips`; the NAS source is chosen by the operator, never guessed. Keep the existing ST data/plugin mounts. Add the `video` block above to the existing administrator policy file outside plugin code; `path` is that container-side destination and `users` contains the exact ST profile handle. Keep all existing policy fields/allowedOrigins. With no roots configured the Video tab is unavailable by design.
-3. If an earlier P1 Video DB exists, stop writes and consistently back up the whole user's `video-v1` directory before upgrade. External videos have their own backup. New installs create schema 2 on first Video operation; this does not migrate existing Worldbook data.
-4. Import the paired frontend candidate JSON with the existing stable script ID, choosing overwrite. Source package version remains the formal baseline until release; the candidate name/hash identifies the actual code. Do not use main's older frontend installer for P2 acceptance.
+The original Gate A used the development branch and paired candidate installer. Those branch-specific installation steps are intentionally retired; current installation and upgrade instructions are in the repository README and release notes. The durable Gate A environment requirements remain the same: an operator-selected read-only NAS bind mount, an authorized `video` policy root, consistent Server-data backup before storage upgrades, and overwrite of the existing stable frontend script ID rather than parallel installation.
 
 ### Historical Gate A (accepted core scope)
 
@@ -97,7 +94,7 @@ Local code evidence: targeted Video/session/UI, real SQLite/HTTP and existing su
 - Watch, seek, fullscreen and close. Confirm silence after closing and ordinary chat remains usable. A codec-incompatible sample should show a clear failure and permit normal return; it does not trigger a transcoding requirement.
 - Reopen the same user/video on phone or tablet and verify continuation; watch further and confirm desktop sees the newer position. A stale device conflict should offer explicit takeover, not overwrite silently.
 
-Gate A has user-confirmed registration/playback/cross-device continuation. Source-offline recovery/dual-device extreme races remain Gate C; current Worldbook-specific acceptance is Gate B below. No release or merge approval is implied.
+Gate A has user-confirmed registration/playback/cross-device continuation. The later final acceptance also covers real NAS source-unavailable → formal Relocate recovery. Dual-client Progress Conflict / Take Over is covered by two-browser CAS evidence; Gate B below records the Worldbook-specific installed scope.
 
 ### Review Fix boundaries
 
@@ -118,13 +115,11 @@ Frontend Detail contributes an independent Video section using existing Media Ce
 
 ### Historical Gate B preparation (accepted core scope)
 
-1. Stop ST writes and consistently back up each user's complete `tavern-toolbox-server/worldbook-v1` directory before updating Server. Include `video-v1` and `media-v1` in the paired snapshot; NAS videos remain separately backed up. No credentials or personal paths belong in repository docs/logs.
-2. Update Server on `stage/video-foundation`, preserve local policy/mounts, restart ST, then import the paired P3/P4 candidate with overwrite. Existing authorized Video roots need no configuration change. No new runtime dependency is required.
-3. Schema 3→4 is transactional and additive, but older Server code rejects schema 4. Code checkout alone is not a data rollback: stop writes and restore the consistent pre-upgrade snapshot if rollback is required.
+The original Gate B required a consistent `worldbook-v1` + `video-v1` + `media-v1` snapshot before the schema 3→4 upgrade, Server-first deployment, and frontend overwrite using the stable script ID. Older Server code rejects Worldbook schema 4, so code checkout alone was never a valid data rollback; this remains a current rollback rule.
 
-Gate B (5–10 minutes) uses two test materials: link one Video to both with an existing Image in one; play/close from Detail preserving scroll/body/enabled state; see a static Video preview in Roll/Discovery and open exactly that item; unlink one relation and verify the other works, then verify unregister remains blocked by that reference. User Gate A does not substitute for this Worldbook-specific check. Optional Outfit P5 and P6 extreme-source/concurrency/performance Gate C remain unimplemented/unaccepted.
+Gate B used two materials sharing one Video, preserved an existing Image relation, exercised Viewer return plus Roll/Discovery static dispatch, and verified that unlinking one consumer did not bypass the remaining reference protection. That installed core scope is accepted; later Outfit and final source/lifecycle evidence are recorded below.
 
-## P5 Server Outfit Video
+## Server Outfit Video
 
 Optional `outfit.video` 1.0 owns read/command/operation at `/v1/outfit/video/{read,commands,operation}`. All are context-bound POST + Origin/CSRF/JSON (8 KiB max), no query parameters, authenticated private envelopes. Capability survives disabled Video roots so existing relations can be read, ordered and unlinked. Add/Replace invoke the existing current-user Video registration validator; missing targets fail 422 and malformed UUID v4 fails 400. Only actual Server assets in the current validated Outfit collection qualify (wardrobe/outfit/kit/item). Person/wear/chat state are not owners.
 
