@@ -1,0 +1,112 @@
+{
+  "readRequest": {
+    "assetId": "item-one"
+  },
+  "read": {
+    "assetId": "item-one",
+    "revision": 1,
+    "attachments": [
+      {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "kind": "video",
+        "position": 0,
+        "mediaRef": {
+          "provider": "server",
+          "assetId": "11111111-1111-4111-8111-111111111111"
+        }
+      }
+    ]
+  },
+  "add": {
+    "commandId": "1792944000000-33333333-3333-4333-8333-333333333333",
+    "action": "add",
+    "data": {
+      "assetId": "item-one",
+      "revision": 0,
+      "items": [
+        {
+          "provider": "server",
+          "assetId": "11111111-1111-4111-8111-111111111111"
+        }
+      ]
+    }
+  },
+  "replace": {
+    "commandId": "1792944000000-33333333-3333-4333-8333-333333333333",
+    "action": "replace",
+    "data": {
+      "assetId": "item-one",
+      "revision": 1,
+      "attachmentId": "22222222-2222-4222-8222-222222222222",
+      "mediaRef": {
+        "provider": "server",
+        "assetId": "11111111-1111-4111-8111-111111111111"
+      }
+    }
+  },
+  "reorder": {
+    "commandId": "1792944000000-33333333-3333-4333-8333-333333333333",
+    "action": "reorder",
+    "data": {
+      "assetId": "item-one",
+      "revision": 1,
+      "attachmentIds": [
+        "22222222-2222-4222-8222-222222222222"
+      ]
+    }
+  },
+  "unlink": {
+    "commandId": "1792944000000-33333333-3333-4333-8333-333333333333",
+    "action": "unlink",
+    "data": {
+      "assetId": "item-one",
+      "revision": 1,
+      "attachmentId": "22222222-2222-4222-8222-222222222222"
+    }
+  },
+  "result": {
+    "relation": {
+      "assetId": "item-one",
+      "revision": 1,
+      "attachments": [
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "kind": "video",
+          "position": 0,
+          "mediaRef": {
+            "provider": "server",
+            "assetId": "11111111-1111-4111-8111-111111111111"
+          }
+        }
+      ]
+    },
+    "replayed": false
+  },
+  "operationRequest": {
+    "commandId": "1792944000000-33333333-3333-4333-8333-333333333333"
+  },
+  "operationFound": {
+    "found": true,
+    "result": {
+      "relation": {
+        "assetId": "item-one",
+        "revision": 1,
+        "attachments": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "kind": "video",
+            "position": 0,
+            "mediaRef": {
+              "provider": "server",
+              "assetId": "11111111-1111-4111-8111-111111111111"
+            }
+          }
+        ]
+      },
+      "replayed": false
+    }
+  },
+  "operationMissing": {
+    "found": false
+  }
+}

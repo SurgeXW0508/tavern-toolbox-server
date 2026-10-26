@@ -1,3 +1,4 @@
+import { migrateWorldbookVideo, WorldbookVideo, VIDEO_COMMANDS } from './video.js';
 import { migrateWorldbookMedia, WorldbookMedia, MEDIA_COMMANDS } from './media.js';
 import { migrateWorldbookFeatures } from './features-schema.js';
 import { WorldbookFeatures, FEATURE_COMMANDS } from './features.js';
@@ -53,7 +54,7 @@ export class WorldbookStore {
             await chmod(file, 0o600);
             db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=1000; PRAGMA synchronous=FULL;');
             const version = db.prepare('PRAGMA user_version').get().user_version;
-            if (version !== 0 && version !== 1 && version !== 2 && version !== 3) fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
+            if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4) fail('WORLDBOOK_SCHEMA_INCOMPATIBLE');
             if (version === 0) {
                 if (
                     db
@@ -131,9 +132,11 @@ export class WorldbookStore {
                 fail('WORLDBOOK_DATA_INVALID');
             migrateWorldbookFeatures(db);
             migrateWorldbookMedia(db);
+            migrateWorldbookVideo(db);
             this.db = db;
             this.features = new WorldbookFeatures(this);
             this.media = new WorldbookMedia(this);
+            this.video = new WorldbookVideo(this);
         } catch (error) {
             try {
                 db.exec('ROLLBACK');
@@ -565,6 +568,7 @@ export class WorldbookStore {
     }
     mutate(action, data, options = {}) {
         if (RECONCILE_COMMANDS.has(action)) return mutateReconcile(this, action, data);
+        if (VIDEO_COMMANDS.has(action)) return this.video.mutate(action, data, options);
         if (MEDIA_COMMANDS.has(action)) return this.media.mutate(action, data, options);
         if (FEATURE_COMMANDS.has(action)) return this.features.mutate(action, data, options);
         if (action === 'column-reorder') {

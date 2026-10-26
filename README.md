@@ -2,7 +2,9 @@
 
 Current architecture, scalability findings, lifecycle and future development rules: [Engineering](docs/ENGINEERING.md). Public contracts: [Protocol](protocol/README.md). Phase acceptance files are historical evidence; their old branch instructions and temporary non-goals do not override the current baseline.
 
-## Current release v0.10.1 — Media consumer performance
+Current formal baseline is **Server v0.11.0 / Frontend v0.54.0 / Protocol 1.0**. Video schema 2, Worldbook storage schema 4 and independent Outfit Video schema 1 are implemented. Final SillyTavern 1.19.0 / Docker / NAS smoke confirms the shared Video path and real source-loss → relocation recovery; detailed evidence and limits are in [Video](docs/VIDEO.md) and [Engineering](docs/ENGINEERING.md).
+
+## Previous release v0.10.1 — Media consumer performance
 
 Server **v0.10.1**, paired with Frontend **v0.53.1** — media consumer performance maintenance. Protocol **1.0** and all storage schema versions remain unchanged.
 
@@ -14,7 +16,7 @@ Server **v0.10.1**, paired with Frontend **v0.53.1** — media consumer performa
 
 ## Phase 10 Worldbook Server (v0.10.0, historical release)
 
-Paired with **Frontend v0.53.0 / Protocol 1.0**. Phase 10 is formally released with Worldbook Storage Schema 3, Summary wire schemaVersion 1, featureVersion 2 (global/column/filtered/folder), reconcileVersion 1 and optional worldbook.core/media 1.0. See [final acceptance](PHASE-10-ACCEPTANCE.md), [Worldbook](docs/WORLDBOOK.md) and [Protocol](protocol/README.md).
+Paired with **Frontend v0.53.1 / Protocol 1.0**. Phase 10 is formally released with Worldbook Storage Schema 3, Summary wire schemaVersion 1, featureVersion 2 (global/column/filtered/folder), reconcileVersion 1 and optional worldbook.core/media 1.0. See [final acceptance](PHASE-10-ACCEPTANCE.md), [Worldbook](docs/WORLDBOOK.md) and [Protocol](protocol/README.md).
 
 Worldbook is an independent per-ST-user business module with bounded browsing, stable Material/Source identity, Companion, Column/Global Presets, Usage/Recent/Frequent, guarded source maintenance and Import/Sync/Reconcile. Complete-scope Roll and bounded text-only Discovery support Folder Scope; ST exclusively owns Entry body and runtime. No automatic Local migration/fallback or full Catalog mirror.
 
@@ -78,13 +80,14 @@ The completed installed-host acceptance and automated evidence boundaries are in
 
 ## Release notes
 
-Server **v0.10.1**, paired with Frontend **v0.53.1** — media consumer performance maintenance. Protocol **1.0** and all storage schema versions remain unchanged.
+Server **v0.11.0**, paired with Frontend **v0.54.0** — Video Foundation.
 
-- Asset browse now filters/counts/orders/pages in SQLite and projects metadata only for returned rows; additive timestamp/size indexes remain compatible with prior readers.
-- Consumer group browse uses fresh Asset IDs; single-Asset detail reads exact metadata. All reference Providers are still analyzed freshly.
-- No browse cache authorizes writes or deletion. CAS, user isolation, incomplete-reference protection, media ownership and Original health checks remain unchanged.
-- Complete Candidate CI, privacy and release checks are required. Local abstract Unix socket restrictions affect eight policy tests; production locks and full remote gates are not weakened.
-- Synthetic 5,000-Asset traversal reduces metadata projections from 525,000 to 5,000. Provider enumeration, dynamic counts and deep OFFSET still grow with data size. Actual NAS latency and long-session browser frames/heap remain unquantified.
+- Optional user-scoped NAS read-only Video registration, bounded directory discovery, authenticated same-origin Range streaming, metadata/manual posters, independent progress CAS/receipts, and explicit source relocation.
+- Independent Worldbook and Server Outfit Video relations with per-owner CAS, command readback, fresh shared-reference protection and offline unlink. Asset removal never deletes NAS files or Video registrations.
+- Additive Video schema 2 and Outfit Video schema 1; atomic Worldbook storage 3→4. Business schema 1 and image/audio ownership remain unchanged; no new runtime dependency.
+- Stop writes and consistently back up the whole related per-user plugin data (including business-v1, outfit-video-v1, video-v1, media-v1, worldbook-v1 and referenced localization/audio state). NAS bytes require a separate backup. Upgrade Server first, frontend second.
+- Frontend rollback may retain this Server. Reverting Server requires a compatible consistent snapshot: older Servers cannot read Worldbook schema 4 or enforce Outfit Video references, even though Business schema 1 is readable.
+- Missing Video policy leaves optional Video disabled without scanning directories. No Video upload, transcode, automatic thumbnails/posters, duration scan or background cleanup. Final NAS smoke verified Video Library/Directory/Detail, Worldbook playback, Image/Audio entry points, restart persistence and real source-loss → formal relocation recovery; browser codec/device coverage and hour-scale playback remain explicit limits.
 
 
 ## Phase 4 Business Provider and Outfit
@@ -117,7 +120,7 @@ For development, run `npm ci --ignore-scripts` then `npm run check` for unit and
 
 ## Operator and review notes
 
-1. Pin `v0.10.1` or an exact reviewed commit before installing in `plugins/tavern-toolbox-server/`. Use the paired frontend `v0.53.1` for Worldbook, Media Center, Server Outfit and Character Localization. Confirm the installed SillyTavern loader supports `init(router)` and exit hooks, `req.user.profile.handle` and `req.user.directories.root` in your real version. No separate administrator Web UI exists.
+1. For this Stage candidate, pin its exact reviewed commit and pair Frontend v0.54.0; v0.11.0 is not a published tag yet. Published main remains v0.10.1 / Frontend v0.53.1. Install in `plugins/tavern-toolbox-server/`. Confirm the installed SillyTavern loader supports `init(router)` and exit hooks, `req.user.profile.handle` and `req.user.directories.root` in your real version. No separate administrator Web UI exists.
 2. Confirm `enableServerPlugins: true`, restart one active SillyTavern instance, sign in to the official Web client, open any module homepage in Toolbox, select **服务器与扩展能力**, and inspect `core.status` plus `network.remoteFetch` (disabled until the administrator enables it). Refresh once and preview diagnostics before copying; verify no personal path/cookie. Try the other ST account, if configured, to verify separate context IDs.
 3. Temporarily disable/remove this plugin, restart, and check that old outfit images, Genesis images, and lorebook editing still use their previous Local paths. Repeat in the actual TT client; TT never connects to this Server directly. Re-enable the plugin and check Docker container restart rotates boot/context IDs without modifying existing data.
 4. Check coexistence with installed 柏宝库 on the real NAS. The plugin ID, route and config filename are dedicated. Keep the actual ST dataRoot and plugin code volume mounted as intended and check UID/GID; config persistence requires the dataRoot volume. The plugin never writes into its own code folder.
@@ -171,3 +174,7 @@ Audio data lives under each trusted ST user root: `tavern-toolbox-server/audio-s
 Optional top-level deployment policy `audioAssets`: `quotaBytes` defaults 4 GiB (ceiling 1 TiB), `maxBytes` defaults 256 MiB (ceiling 1 GiB), `perUserConcurrency` defaults/ceiling 2 and `globalConcurrency` 4. Actual download size is the lesser of Audio `maxResourceBytes` and Audio Asset `maxBytes`; quotas never bypass Network safety. Existing Local files keep their metadata size limits, and play with Network disabled. At most 4096 Audio Assets per user, 512 Sources; limits fail explicitly. Local file streaming has a separate 4/user, 16/global budget. UI bulk downloads sequentially; already completed Local items survive cancellation.
 
 Normal failure/cancel removes staging immediately. On each user's Audio Store initialization after restart, recognized pending/deleting operations recover and safely-named, regular, inactive staging older than 24 hours is removed. No global data-directory scan, symlink following, automatic orphan deletion or guessed external character references. One ST process owns a data volume. Audio jobs have a 45-second polling lease, 2-hour operation maximum and bounded terminal history; client loss cancels abandoned staging. Explicit healthy Local reuse does not download. See [Phase 7 final acceptance](PHASE-7-ACCEPTANCE.md) and [contracts](protocol/README.md).
+
+## Video Foundation candidate
+
+Server v0.11.0 / Frontend v0.54.0 complete the Video Foundation. User Gate A/B core registration/playback/Worldbook flows and the final installed shared-path/NAS relocation smoke passed; dedicated Outfit installed-host validation is waived in favor of SQLite/HTTP/Chromium evidence. Resource, scale, recovery, compatibility and final build evidence is maintained in [Video](docs/VIDEO.md) and [Engineering](docs/ENGINEERING.md). Future work starts from the released main baseline rather than the retired development branch.

@@ -5,7 +5,7 @@ import { mkdir, chmod, lstat, open, rename, unlink, readdir } from 'node:fs/prom
 import { createHash, randomBytes } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { finished } from 'node:stream/promises';
-import { once } from 'node:events';
+import { streamLocalFile, FileTransferFailure } from '../transport/local-file-stream.js';
 import { scanAudioRows } from './scan.js';
 import { AUDIO_MIME, singleRange } from '../network/audio-profile.js';
 import { audioSignature, canonicalAudioMime } from './validation.js';
@@ -267,35 +267,12 @@ export class AudioAssetStore {
         // Open file is pinned before releasing the reference lock. Subsequent
         // delete/repair cannot redirect this request to Network or a new file.
         return async () => {
-            const abort = () => output.destroy?.(); signal.addEventListener('abort', abort, { once: true });
-            if (signal.aborted) abort();
             try {
-                if (signal.aborted) fail('CLIENT_ABORTED');
-                let start = 0, end = row.byte_size - 1;
-                if (range) {
-                    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-                    start = match[1] ? Number(match[1]) : Math.max(0, row.byte_size - Number(match[2]));
-                    end = match[1] && match[2] ? Math.min(end, Number(match[2])) : end;
-                }
-                output.setHeader('Accept-Ranges', 'bytes');
-                if (start >= row.byte_size) {
-                    output.statusCode = 416; output.setHeader('Content-Range', `bytes */${row.byte_size}`); output.setHeader('Content-Length', '0'); output.end(); return;
-                }
-                output.statusCode = range ? 206 : 200; output.setHeader('Content-Type', row.mime);
-                output.setHeader('Content-Length', String(end - start + 1));
-                if (range) output.setHeader('Content-Range', `bytes ${start}-${end}/${row.byte_size}`);
-                const chunk = Buffer.alloc(64 * 1024); let position = start;
-                while (position <= end) {
-                    if (signal.aborted) fail('CLIENT_ABORTED');
-                    const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.length, end - position + 1), position);
-                    if (!bytesRead) fail('AUDIO_ASSET_UNHEALTHY');
-                    // A response retains this buffer until drain; always pause
-                    // here so reusing the buffer cannot mutate queued bytes.
-                    if (!output.write(Buffer.from(chunk.subarray(0, bytesRead)))) await once(output, 'drain', { signal });
-                    position += bytesRead;
-                }
-                output.end();
-            } finally { signal.removeEventListener('abort', abort); await handle.close(); }
+                await streamLocalFile({ handle, size: row.byte_size, mime: row.mime, range, output, signal, idleTimeoutMs: 0 });
+            } catch (error) {
+                if (error instanceof FileTransferFailure) fail(error.code === 'FILE_CHANGED' ? 'AUDIO_ASSET_UNHEALTHY' : error.code);
+                throw error;
+            }
         };
     }
     close() { this.db.close(); }

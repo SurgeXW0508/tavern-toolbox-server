@@ -83,7 +83,12 @@ export function createBusiness(config, media, coordinate = async (_context, work
                 try { await media.metadata(context, id); }
                 catch { throw new BusinessFailure('BUSINESS_MEDIA_UNAVAILABLE'); }
             }
-            return target.commit(namespace, schemaVersion, revision, document, contract.validate);
+            const previousIds = new Set(previous.assets.map(asset => asset.id));
+            const changedAssets = previousIds.size !== document.assets.length || document.assets.some(asset => !previousIds.has(asset.id));
+            if (changedAssets) await api.outfitAssetLifecycle?.before(context, current);
+            const result = target.commit(namespace, schemaVersion, revision, document, contract.validate);
+            if (changedAssets) await api.outfitAssetLifecycle?.after(context, result);
+            return result;
             });
         },
     };

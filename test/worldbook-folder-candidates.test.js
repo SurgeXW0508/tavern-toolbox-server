@@ -63,7 +63,7 @@ test('Large 537-descendant Folder at depth 16 keeps complete Candidate continuat
  do{last=e.sessions.read(e.context,e.store,input,e.runtime());assert.equal(last.scopeTotal,537);assert.ok(last.items.length<=20);assert.ok(Buffer.byteLength(JSON.stringify(last))<131072);for(const row of last.items){assert.ok(!seen.has(row.source.uid));seen.add(row.source.uid);assert.ok(all.has(row.id)||row.source.uid===1);assert.notEqual(row.id,e.outside);assert.equal('description' in row,false);}input={...input,sessionId:last.sessionId,cursor:last.nextCursor};}while(last.nextCursor!==null);
  assert.equal(seen.size,537);assert.ok(seen.has(632));
  assert.equal(e.store.features.read({kind:'companions',subjectId:e.ids[0]}).items[0].id,e.outside);
- assert.equal(e.store.one('PRAGMA user_version').user_version,3);
+ assert.equal(e.store.one('PRAGMA user_version').user_version,4);
 });
 test('Empty/disabled candidate semantics and session end retain existing behavior under Folder scope',async t=>{
  const e=await fixture(t),empty=e.folder('空分组');assert.equal(e.read('roll',{columnId:e.column,folderId:empty}).items.length,0);

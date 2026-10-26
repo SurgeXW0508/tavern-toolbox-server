@@ -248,3 +248,80 @@ Media revision conflict returns `WORLDBOOK_MEDIA_CONFLICT` (409); invalid shape/
 ### Media presentation (optional additive read)
 
 `media.assets` exposes optional operation `presentation` and limit `maxPresentationAssets:48`. GET `/v1/media/presentation?assetIds=<JSON array>` accepts 1..48 unique canonical UUID strings, decoded query <=2000 characters, no other/duplicate query keys. Requires current ST user, X-TTB-Protocol 1.0 and X-TTB-Context; no write/Origin policy is required. Private/no-store response: `{items:[{assetId,width,height,animated}],missingAssetIds:[UUID]}`. The two arrays partition the requested set, with no duplicate identities; technical fields are bounded per-page projection, never Worldbook business data. Only a metadata SQL query occurs, no Original/health read. Validation=400, context/protocol mismatch=409, unauthenticated=403, unavailable Store=503. No schema, Protocol major or existing operation changes. Older clients ignore this operation; newer Preview code does not issue per-asset metadata fallback when it is missing.
+
+## Optional Video foundation 1.0 (P1 base, P2 additions below)
+
+The active implementation is specified in [Video](../docs/VIDEO.md). Existing Protocol, image/audio/worldbook contracts remain unchanged. Capabilities: `video.catalog` (`list`, `read`, `presentation`), `video.sources` (`roots`, `browse`, `cancel`, `register`), `video.playback` (`resolve`, `stream`). Missing authorized roots disables Video; invalid Video policy only makes Video unavailable. Core status performs no Video filesystem/SQLite I/O. The P2 additions below extend this base capability list; only implemented operations are advertised.
+
+All JSON calls use `X-TTB-Protocol: 1.0` and exact `X-TTB-Context`. All POSTs require configured same-origin Origin and active ST-session CSRF, `application/json`, at most 8192 bytes and strict key/type validation. JSON responses are at most 65536 bytes. Native stream uses the ST authenticated session, Origin/Sec-Fetch-Site policy and exact context/version query instead of custom headers. All replies use private headers. Errors use the existing JSON error envelope; sources/paths/context URLs are absent from logs.
+
+| Method / path relative to plugin | Request | Response |
+| --- | --- | --- |
+| GET `/v1/video/roots` | no query | `{roots:[{rootKey,label}]}` authorized roots only |
+| POST `/v1/video/source-browse` | exactly one of `{rootKey}`, `{directoryId}`, `{cursor}` | `{sessionId,breadcrumbs,rootKey,directoryLabel,entries,nextCursor,expiresAt}` |
+| POST `/v1/video/source-browse/cancel` | `{sessionId}` | `{cancelled:true}`; does not reveal other-user ownership |
+| POST `/v1/video/register` | `{candidateId,operationId,title}` | Video DTO plus `reused` |
+| GET `/v1/video/items` | optional `search` (120 chars), `offset` (0..5000), `limit` (1..48, default 24) | `{items,total,offset,limit,hasMore}` |
+| POST `/v1/video/presentation` | `{assetIds:[1..48 unique UUID]}` | `{items,missingAssetIds}` no source I/O |
+| GET `/v1/video/items/:id` | no query | Video DTO plus `sourceState: available/changed/unavailable` and optional friendly `rootLabel` |
+| POST `/v1/video/items/:id/playback` | `{}` | Video DTO plus transient `playbackPath` |
+| GET or HEAD `/v1/video/items/:id/stream?context=...&version=...` | one optional Range | native 200/206/416, correct lengths; HEAD no body |
+
+Video DTO: `{kind:'video',mediaRef:{provider:'server',assetId:UUID},title,mime,byteSize,sourceRevision,metadataRevision,createdAt}`. UUIDs are canonical lowercase v4; title is trimmed 1..120 characters without control characters. JSON Source/Asset identity never includes a path. Playback path is canonical plugin-relative, prefixed on the client for an ST subpath; context and source version are required query keys with no extras/duplicates.
+
+Discovery entry: `{id,kind:'directory',name}` or `{id,kind:'file',name,byteSize,mime}`; invalid/unsupported profile appears `{id,kind:'unavailable',name,reasonCode}` and is not an authorized candidate. No path parameters exist. A snapshot contains at most 1000 inspected entries, 50/page, 2/user and 8/global, 5-minute TTL. No recursive scan, timer, automatic registration or removal. `cancel` frees the snapshot. A root outage/over-limit/cancel fails with no partial success; registered metadata is retained. Register revalidates fingerprint before commit and preserves same-root/locator identity; changed bytes require a later explicit source operation. Receipt is committed atomically with registration, bound to operationId and request payload, one-day TTL and 10000/user bound. Exact replay can recover a committed result even if the candidate has since expired; a different payload using that operationId fails.
+
+Errors: `INVALID_REQUEST`/`UNSUPPORTED_RANGE` 400; `CSRF_REJECTED`/`FORBIDDEN` 403; `VIDEO_NOT_FOUND` 404; `CONTEXT_CHANGED`/`VIDEO_SOURCE_CHANGED`/`VIDEO_OPERATION_CONFLICT`/`VIDEO_CANDIDATE_EXPIRED`/`VIDEO_CATALOG_FULL` 409; `VIDEO_FORMAT_UNSUPPORTED` 415; `VIDEO_SOURCE_UNAVAILABLE`/`VIDEO_DIRECTORY_LIMIT` 422; `RESOURCE_BUSY` 429; unavailable runtime/store/schema/config 503. Post-header I/O failure closes the binary response. Same-user missing and foreign identities have equivalent not-found behavior when Video is otherwise authorized.
+
+P2 progress/poster/source-replacement contracts are specified below; Consumer relations remain future work. The shared machine-readable P1/P2 request/result/state/error fixtures are `video.foundation-1.0.schema.json` / `video.foundation-1.0.fixture.json`.
+
+Directory navigation returns bounded `breadcrumbs:[{id,label}]` with directory capability IDs for root and each ancestor (maximum 33). A successful `directoryId` navigation replaces its source snapshot; old file candidates/cursors then expire. A failed navigation preserves the previous snapshot. This bounds retained directory data while allowing navigation back to ancestors without client paths; two independent directory browsers still share the 2/user limit.
+
+### Video P2 additive operations / schema 2
+
+`video.catalog` adds update, unregister, operation and references; `video.sources` adds source; optional `video.progress` adds read/write. New Video DTOs include nullable `posterRef` (image MediaRef); old clients may ignore it. JSON POST security, user isolation and private binary headers remain identical to P1. The following routes are relative to `/v1/video`:
+
+| Route | Request / result |
+| --- | --- |
+| POST `/items/:id/update` | `{operationId,metadataRevision,patch:{title?,posterRef?}}`, nonempty patch; Video DTO result |
+| GET `/operations/:operationId` | `{found:false}` or `{found:true,result}`; read-only uncertain-command recovery |
+| GET `/items/:id/references` | `{complete,count,references:[{providerId,ownerId,label}]}`, first 100 detail rows |
+| POST `/items/:id/unregister` | `{operationId,metadataRevision,sourceRevision}`; `{removed:true}`; fresh complete zero-reference analysis, retains originals |
+| POST `/items/:id/source` | `{operationId,sourceRevision,candidateId}`; Video DTO with optional friendly `rootLabel`; explicit acceptance resets progress and increments source version |
+| GET `/items/:id/progress` | `{sourceRevision,revision,positionSeconds,durationHint,completed,writeId,updatedAt}`; absent progress has revision 0, zero position, null writeId/updatedAt |
+| POST `/items/:id/progress` | `{sourceRevision,expectedProgressRevision,writeId,positionSeconds,durationHint,completed}`; progress DTO result |
+
+Metadata/source/unregister operations have UUID operationId; progress writeId shares the bounded command-receipt store, with action/target/request hash. Exactly identical replay returns the committed result; conflicting payload fails VIDEO_OPERATION_CONFLICT. Source-version mismatch fails VIDEO_SOURCE_CHANGED even if an old progress write was previously committed. POST position/duration must be finite, nonnegative and ≤604800 seconds; completed is boolean. CAS accepts backward seeks. It never reads full files, changes metadata revision or enumerates Consumers. A CAS conflict is VIDEO_PROGRESS_CONFLICT 409; metadata CAS conflict is VIDEO_METADATA_CONFLICT 409. VIDEO_REFERENCED 409 / VIDEO_REFERENCES_INCOMPLETE 503 retain registration; VIDEO_POSTER_UNAVAILABLE 422 rejects unusable images; VIDEO_SOURCE_REGISTERED 409 refuses assigning a file already registered as another video. Read-only operation receipt returns no paths/URL/fingerprint.
+
+Discovery task admission is 2/user, 8/global; all other non-stream Video operations have an independent 8/user, 32/global budget. Retained discovery snapshots remain separately 2/user, 8/global. Streams remain 4/user, 8/global. No request is queued or retried automatically. Frontend gives browse a 60-second deadline and retains 15 seconds for other JSON calls. Source-state observation is distinct from metadata mutation results: title/poster updates do not probe NAS or assert availability.
+
+
+## Optional Worldbook Video 1.0 / storage schema 4
+
+`worldbook.video` is owned by `worldbook-video`, independent from image-only `worldbook.media`. Operations: `read`, `command`, `operation`. It remains readable/unlinkable when Video roots are disabled; linking validates current user ownership of the Video registration. All three POST routes use Protocol 1.0, current trusted context, Origin/CSRF, JSON body limits and private envelopes, with no query parameters. Core/metadata/image-only command endpoints reject Video commands rather than bypass reference validation.
+
+| Route under `/v1/worldbook/video` | Payload / result |
+| --- | --- |
+| POST `/read` | `{materialIds:[1..20 unique Material ID]}` → `{items:[{id,revision,attachments:[{kind:'video',position,mediaRef}]}]}` |
+| POST `/commands` | `{commandId,action,data}` → `{id,video:{id,revision,attachments},replayed}` |
+| POST `/operation` | `{commandId}` → `{found:false}` or `{found:true,result}`; read-only uncertainty recovery |
+
+Actions: `video-add {id,revision,items:[{kind:'video',mediaRef}]}`, `video-remove {id,revision,assetId}`, `video-replace {id,revision,assetId,mediaRef}`, `video-reorder {id,revision,assetIds}`. At most six unique references, contiguous zero-based positions and exact-set reorder; CAS is independent of image/metadata/Binding/progress revisions. Commands retain the existing bounded timestamp-UUID command TTL/digest receipt contract. Exact replay preserves the result; same command ID with altered payload rejects. Ordinary failures never cause an automatic resubmit. `WORLDBOOK_VIDEO_CONFLICT`=409, `WORLDBOOK_VIDEO_UNAVAILABLE`=422; existing validation/not-found/duplicate/capacity/clock/expiry errors apply. No paths, bytes, durations, progress or poster metadata enter relation DTOs.
+
+Image/metadata commands do not alter Video attachments; copy begins media-free, delete uses FK cascade but retains Video registrations/files. Exact reference enumeration has a 30000-row per-target bound, with overflow/unavailable analysis treated as incomplete. Machine-readable request/result/receipt fixtures: `worldbook.video-1.0.schema.json` / `worldbook.video-1.0.fixture.json`. Runtime additionally validates ownership, CAS, contiguous order and command TTL.
+
+## Optional Outfit Video 1.0 / independent relation schema 1
+
+Machine-readable contract and examples: `outfit.video-1.0.schema.json` / `outfit.video-1.0.fixture.json`. Capability `outfit.video` (`outfit-video`) is additive to Protocol 1.0; Business schema 1 / Frontend Outfit schema 7 / Worldbook schema 4 / Video schema 2 do not change.
+
+| Route | Payload → result |
+| --- | --- |
+| POST `/v1/outfit/video/read` | `{assetId}` → `{assetId,revision,attachments:[{id,kind:'video',position,mediaRef}]}` |
+| POST `/v1/outfit/video/commands` | `{commandId,action,data}` → `{relation,replayed}` |
+| POST `/v1/outfit/video/operation` | `{commandId}` → `{found:false}` or `{found:true,result}` |
+
+`data` always carries `{assetId,revision}` plus: add `items:[MediaRef]`; replace `attachmentId,mediaRef`; reorder `attachmentIds`; unlink `attachmentId`. Attachment IDs and Video IDs are lowercase UUID v4. Replace retains attachment identity/order; exact-set reorder, unique Video IDs, real Server Asset ownership, command TTL/skew and request hashing are additional runtime checks. Read/receipt/mutation require current context + Origin/CSRF, JSON ≤8 KiB and no query. Max six attachments; initial relation revision 0; 7-day/10,000 command receipts. Conflict/duplicate/replay mismatch/expiry are 409, malformed DTO 400, missing owner/attachment 404, unavailable Video target 422, unavailable/incompatible store 503. Error/response bodies contain no filesystem source, playback or AI fields. Independent relation mutation never increments Business collection revision.
+
+Outfit Video capacity errors are distinct: OUTFIT_VIDEO_CAPACITY (409) means more than six attachments; OUTFIT_VIDEO_RECEIPTS_FULL (503) means the seven-day, 10,000-receipt budget is full; OUTFIT_VIDEO_STORAGE_CAPACITY (503) means a bounded storage/index read exceeded its integrity limit. All are definite rejections, not authorization to resubmit or overwrite. A failed command commits neither a new relation revision nor receipt. DTOs, capability version and independent storage schema remain unchanged.
+
+Server 0.11.0 / Frontend 0.54.0 do not change Protocol 1.0 or these capability contracts. Video store 2 / Worldbook storage 4 / Outfit Video 1 / Business 1 are the released data versions; optional-capability examples are illustrative, not an exhaustive module inventory.

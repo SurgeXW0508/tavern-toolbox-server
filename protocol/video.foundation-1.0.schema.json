@@ -1,0 +1,1448 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tavern Toolbox Video Foundation 1.0",
+  "description": "Implemented P1/P2 payload fixtures. Runtime additionally verifies trusted auth/context, source fingerprints, quotas, reference completeness, CAS and command receipts. Codec support is a device observation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "roots",
+    "browseRequest",
+    "browse",
+    "registerRequest",
+    "register",
+    "list",
+    "detail",
+    "resolve",
+    "presentationRequest",
+    "presentation",
+    "updateRequest",
+    "update",
+    "sourceRequest",
+    "source",
+    "unregisterRequest",
+    "unregister",
+    "progressAbsent",
+    "progressRequest",
+    "progress",
+    "references",
+    "operationMissing",
+    "operation",
+    "cancelRequest",
+    "cancel",
+    "errors"
+  ],
+  "properties": {
+    "roots": {
+      "$ref": "#/$defs/roots"
+    },
+    "browseRequest": {
+      "$ref": "#/$defs/browseRequest"
+    },
+    "browse": {
+      "$ref": "#/$defs/browse"
+    },
+    "registerRequest": {
+      "$ref": "#/$defs/registerRequest"
+    },
+    "register": {
+      "$ref": "#/$defs/register"
+    },
+    "list": {
+      "$ref": "#/$defs/list"
+    },
+    "detail": {
+      "$ref": "#/$defs/detail"
+    },
+    "resolve": {
+      "$ref": "#/$defs/resolve"
+    },
+    "presentationRequest": {
+      "$ref": "#/$defs/presentationRequest"
+    },
+    "presentation": {
+      "$ref": "#/$defs/presentation"
+    },
+    "updateRequest": {
+      "$ref": "#/$defs/updateRequest"
+    },
+    "update": {
+      "$ref": "#/$defs/update"
+    },
+    "sourceRequest": {
+      "$ref": "#/$defs/sourceRequest"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "unregisterRequest": {
+      "$ref": "#/$defs/unregisterRequest"
+    },
+    "unregister": {
+      "$ref": "#/$defs/unregister"
+    },
+    "progressAbsent": {
+      "$ref": "#/$defs/progressAbsent"
+    },
+    "progressRequest": {
+      "$ref": "#/$defs/progressRequest"
+    },
+    "progress": {
+      "$ref": "#/$defs/progress"
+    },
+    "references": {
+      "$ref": "#/$defs/references"
+    },
+    "operationMissing": {
+      "$ref": "#/$defs/operationMissing"
+    },
+    "operation": {
+      "$ref": "#/$defs/operation"
+    },
+    "cancelRequest": {
+      "$ref": "#/$defs/cancelRequest"
+    },
+    "cancel": {
+      "$ref": "#/$defs/cancel"
+    },
+    "errors": {
+      "$ref": "#/$defs/errors"
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "video": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "mediaRef",
+        "title",
+        "mime",
+        "byteSize",
+        "sourceRevision",
+        "metadataRevision",
+        "createdAt"
+      ],
+      "properties": {
+        "kind": {
+          "const": "video"
+        },
+        "mediaRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "assetId"
+          ],
+          "properties": {
+            "provider": {
+              "const": "server"
+            },
+            "assetId": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "mime": {
+          "enum": [
+            "video/mp4",
+            "video/webm"
+          ]
+        },
+        "byteSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 68719476736
+        },
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "metadataRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "posterRef": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "assetId"
+              ],
+              "properties": {
+                "provider": {
+                  "const": "server"
+                },
+                "assetId": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            }
+          ]
+        },
+        "rootLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        }
+      }
+    },
+    "roots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roots"
+      ],
+      "properties": {
+        "roots": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "rootKey",
+              "label"
+            ],
+            "properties": {
+              "rootKey": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            }
+          }
+        }
+      }
+    },
+    "browseRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "rootKey"
+          ],
+          "properties": {
+            "rootKey": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "directoryId"
+          ],
+          "properties": {
+            "directoryId": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cursor"
+          ],
+          "properties": {
+            "cursor": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        }
+      ]
+    },
+    "browse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "rootKey",
+        "directoryLabel",
+        "entries",
+        "nextCursor",
+        "expiresAt",
+        "breadcrumbs"
+      ],
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "rootKey": {
+          "type": "string"
+        },
+        "directoryLabel": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "kind",
+                  "name"
+                ],
+                "properties": {
+                  "id": {
+                    "$ref": "#/$defs/uuid"
+                  },
+                  "kind": {
+                    "const": "directory"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 255
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "kind",
+                  "name",
+                  "byteSize",
+                  "mime"
+                ],
+                "properties": {
+                  "id": {
+                    "$ref": "#/$defs/uuid"
+                  },
+                  "kind": {
+                    "const": "file"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 255
+                  },
+                  "byteSize": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 68719476736
+                  },
+                  "mime": {
+                    "enum": [
+                      "video/mp4",
+                      "video/webm"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "kind",
+                  "name",
+                  "reasonCode"
+                ],
+                "properties": {
+                  "id": {
+                    "$ref": "#/$defs/uuid"
+                  },
+                  "kind": {
+                    "const": "unavailable"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 255
+                  },
+                  "reasonCode": {
+                    "enum": [
+                      "VIDEO_SOURCE_UNAVAILABLE",
+                      "VIDEO_FORMAT_UNSUPPORTED"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 64
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "breadcrumbs": {
+          "type": "array",
+          "maxItems": 33,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "label"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/uuid"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              }
+            }
+          }
+        }
+      }
+    },
+    "registerRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateId",
+        "operationId",
+        "title"
+      ],
+      "properties": {
+        "candidateId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operationId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        }
+      }
+    },
+    "register": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "mediaRef",
+        "title",
+        "mime",
+        "byteSize",
+        "sourceRevision",
+        "metadataRevision",
+        "createdAt",
+        "reused"
+      ],
+      "properties": {
+        "kind": {
+          "const": "video"
+        },
+        "mediaRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "assetId"
+          ],
+          "properties": {
+            "provider": {
+              "const": "server"
+            },
+            "assetId": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "mime": {
+          "enum": [
+            "video/mp4",
+            "video/webm"
+          ]
+        },
+        "byteSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 68719476736
+        },
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "metadataRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reused": {
+          "type": "boolean"
+        },
+        "posterRef": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "assetId"
+              ],
+              "properties": {
+                "provider": {
+                  "const": "server"
+                },
+                "assetId": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "items",
+        "total",
+        "offset",
+        "limit",
+        "hasMore"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 48,
+          "items": {
+            "$ref": "#/$defs/video"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 48
+        },
+        "hasMore": {
+          "type": "boolean"
+        }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "mediaRef",
+        "title",
+        "mime",
+        "byteSize",
+        "sourceRevision",
+        "metadataRevision",
+        "createdAt",
+        "sourceState"
+      ],
+      "properties": {
+        "kind": {
+          "const": "video"
+        },
+        "mediaRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "assetId"
+          ],
+          "properties": {
+            "provider": {
+              "const": "server"
+            },
+            "assetId": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "mime": {
+          "enum": [
+            "video/mp4",
+            "video/webm"
+          ]
+        },
+        "byteSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 68719476736
+        },
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "metadataRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sourceState": {
+          "enum": [
+            "available",
+            "changed",
+            "unavailable"
+          ]
+        },
+        "posterRef": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "assetId"
+              ],
+              "properties": {
+                "provider": {
+                  "const": "server"
+                },
+                "assetId": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            }
+          ]
+        },
+        "rootLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        }
+      }
+    },
+    "resolve": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "mediaRef",
+        "title",
+        "mime",
+        "byteSize",
+        "sourceRevision",
+        "metadataRevision",
+        "createdAt",
+        "playbackPath"
+      ],
+      "properties": {
+        "kind": {
+          "const": "video"
+        },
+        "mediaRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "assetId"
+          ],
+          "properties": {
+            "provider": {
+              "const": "server"
+            },
+            "assetId": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "mime": {
+          "enum": [
+            "video/mp4",
+            "video/webm"
+          ]
+        },
+        "byteSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 68719476736
+        },
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "metadataRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "playbackPath": {
+          "type": "string",
+          "pattern": "^/api/plugins/tavern-toolbox-server/v1/video/items/[0-9a-f-]{36}/stream\\?context=[0-9a-f]{32}&version=[1-9][0-9]*$"
+        },
+        "posterRef": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "assetId"
+              ],
+              "properties": {
+                "provider": {
+                  "const": "server"
+                },
+                "assetId": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "presentationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assetIds"
+      ],
+      "properties": {
+        "assetIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 48,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/uuid"
+          }
+        }
+      }
+    },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "items",
+        "missingAssetIds"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 48,
+          "items": {
+            "$ref": "#/$defs/video"
+          }
+        },
+        "missingAssetIds": {
+          "type": "array",
+          "maxItems": 48,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/uuid"
+          }
+        }
+      }
+    },
+    "updateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operationId",
+        "metadataRevision",
+        "patch"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "metadataRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "patch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "posterRef": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "provider",
+                    "assetId"
+                  ],
+                  "properties": {
+                    "provider": {
+                      "const": "server"
+                    },
+                    "assetId": {
+                      "$ref": "#/$defs/uuid"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "minProperties": 1
+        }
+      }
+    },
+    "update": {
+      "$ref": "#/$defs/video"
+    },
+    "sourceRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operationId",
+        "sourceRevision",
+        "candidateId"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "candidateId": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "source": {
+      "$ref": "#/$defs/video"
+    },
+    "unregisterRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operationId",
+        "metadataRevision",
+        "sourceRevision"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "metadataRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "unregister": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "removed"
+      ],
+      "properties": {
+        "removed": {
+          "const": true
+        }
+      }
+    },
+    "progressAbsent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRevision",
+        "revision",
+        "positionSeconds",
+        "durationHint",
+        "completed",
+        "writeId",
+        "updatedAt"
+      ],
+      "properties": {
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "positionSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "durationHint": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "writeId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        },
+        "updatedAt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          ]
+        }
+      }
+    },
+    "progressRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRevision",
+        "expectedProgressRevision",
+        "writeId",
+        "positionSeconds",
+        "durationHint",
+        "completed"
+      ],
+      "properties": {
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expectedProgressRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "writeId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "positionSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "durationHint": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "completed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRevision",
+        "revision",
+        "positionSeconds",
+        "durationHint",
+        "completed",
+        "writeId",
+        "updatedAt"
+      ],
+      "properties": {
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "positionSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "durationHint": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 604800
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "writeId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        },
+        "updatedAt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          ]
+        }
+      }
+    },
+    "references": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complete",
+        "count",
+        "references"
+      ],
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "references": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "providerId",
+              "ownerId",
+              "label"
+            ],
+            "properties": {
+              "providerId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "ownerId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "label": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 512
+              }
+            }
+          }
+        }
+      }
+    },
+    "operationMissing": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "found"
+          ],
+          "properties": {
+            "found": {
+              "const": false
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "found",
+            "result"
+          ],
+          "properties": {
+            "found": {
+              "const": true
+            },
+            "result": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/video"
+                },
+                {
+                  "$ref": "#/$defs/unregister"
+                },
+                {
+                  "$ref": "#/$defs/progress"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "operation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "found"
+          ],
+          "properties": {
+            "found": {
+              "const": false
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "found",
+            "result"
+          ],
+          "properties": {
+            "found": {
+              "const": true
+            },
+            "result": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/video"
+                },
+                {
+                  "$ref": "#/$defs/unregister"
+                },
+                {
+                  "$ref": "#/$defs/progress"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "cancelRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId"
+      ],
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "cancel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cancelled"
+      ],
+      "properties": {
+        "cancelled": {
+          "const": true
+        }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_METADATA_CONFLICT"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_PROGRESS_CONFLICT"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_SOURCE_CHANGED"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "CONTEXT_CHANGED"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_OPERATION_CONFLICT"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_REFERENCED"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_REFERENCES_INCOMPLETE"
+              },
+              "status": {
+                "const": 503
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_POSTER_UNAVAILABLE"
+              },
+              "status": {
+                "const": 422
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_SOURCE_REGISTERED"
+              },
+              "status": {
+                "const": 409
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "RESOURCE_BUSY"
+              },
+              "status": {
+                "const": 429
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_SOURCE_UNAVAILABLE"
+              },
+              "status": {
+                "const": 422
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "const": "VIDEO_SCHEMA_INCOMPATIBLE"
+              },
+              "status": {
+                "const": 503
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

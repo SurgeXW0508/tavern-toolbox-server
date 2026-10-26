@@ -1,6 +1,6 @@
 {
   "name": "tavern-toolbox-server",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "main": "index.js",
@@ -11,7 +11,8 @@
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "audit:privacy": "node scripts/privacy-audit.mjs",
     "check": "npm test && npm run check:syntax",
-    "check:syntax": "node scripts/check-syntax.mjs"
+    "check:syntax": "node scripts/check-syntax.mjs",
+    "benchmark:outfit-video": "node scripts/benchmark-outfit-video.mjs"
   },
   "devDependencies": {
     "agent-base": "7.1.3",

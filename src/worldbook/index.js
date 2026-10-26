@@ -1,3 +1,5 @@
+import { VIDEO_COMMANDS } from './video.js';
+import { attachWorldbookVideo } from './video-service.js';
 import { randomUUID } from 'node:crypto';
 import { MEDIA_COMMANDS } from './media.js';
 import { WorldbookCandidateSessions } from './candidate-sessions.js';
@@ -7,7 +9,7 @@ export { WorldbookFailure, LIMITS } from './validation.js';
 
 // Only Worldbook business data. ST runtime query inputs expire in memory and
 // never enter SQLite, media/governance stores or application logs.
-export function createWorldbook(config, { now = () => Date.now(), media, coordinate = async (_context, action) => action() } = {}) {
+export function createWorldbook(config, { now = () => Date.now(), media, video, coordinate = async (_context, action) => action() } = {}) {
     const stores = new Map(),
         failures = new Map(),
         runtime = new Map();
@@ -88,7 +90,7 @@ export function createWorldbook(config, { now = () => Date.now(), media, coordin
                     limits: LIMITS,
                     constraints: {
                         schemaVersion: 1,
-                        storageSchemaVersion: 3,
+                        storageSchemaVersion: 4,
                         featureVersion: 2,
                         candidateScopes: ['global', 'column', 'filtered', 'folder'],
                         reconcileVersion: 1,
@@ -98,6 +100,7 @@ export function createWorldbook(config, { now = () => Date.now(), media, coordin
                         revision: 'entity-and-column-structure',
                         runtime: 'frontend-owned',
                         optionalMediaCapability: 'worldbook.media',
+                        optionalVideoCapability: 'worldbook.video',
                     },
                 },
             ],
@@ -148,7 +151,7 @@ export function createWorldbook(config, { now = () => Date.now(), media, coordin
             fail('WORLDBOOK_VALIDATION');
         },
         async command(context, value) {
-            if (MEDIA_COMMANDS.has(value?.action)) fail('WORLDBOOK_VALIDATION');
+            if (MEDIA_COMMANDS.has(value?.action) || VIDEO_COMMANDS.has(value?.action)) fail('WORLDBOOK_VALIDATION');
             return (await store(context)).execute(value, {
                 getRuntime: (token) => runtimeInput(context, token),
             });
@@ -297,5 +300,6 @@ export function createWorldbook(config, { now = () => Date.now(), media, coordin
                     ...(body.action==='replace'?{kind:'image',mediaRef:body.mediaRef}:{})}});
             return {revision:result.media.revision};
         }};
+    attachWorldbookVideo(api, {store,video,coordinate,config,now});
     return api;
 }

@@ -1,3 +1,5 @@
+import { createOutfitVideo } from './outfit-video/index.js';
+import { attachOutfitVideoRoutes } from './outfit-video/routes.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { loadPolicy, policyRevision } from './config.js';
@@ -21,6 +23,8 @@ import { createBusiness, BusinessFailure } from './business/index.js';
 import { MAX_BUSINESS_BYTES } from './business/store.js';
 import { createLocalization } from './localization/index.js';
 import { createReferenceCoordinator } from './governance/coordination.js';
+import { createVideo } from './video/index.js';
+import { attachVideoRoutes } from './video/routes.js';
 import { createGovernance } from './governance/index.js';
 
 export const PRODUCT = 'tavern-toolbox-server';
@@ -80,12 +84,17 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(audioLibrary.definition);
     const media = createMedia(config, network);
     const coordinate = createReferenceCoordinator();
-    const worldbook = createWorldbook(config, { now, media, coordinate });
+    const video = createVideo(config, { now, media, coordinate });
+    const worldbook = createWorldbook(config, { now, media, video, coordinate });
     registry.register(worldbook.definition);
     registry.register(media.definition);
     registry.register(worldbook.mediaDefinition);
     const business = createBusiness(config, media, coordinate);
     registry.register(business.definition);
+    const outfitVideo = createOutfitVideo(config, { business, video, coordinate, now });
+    business.outfitAssetLifecycle = outfitVideo.assetLifecycle;
+    registry.register(outfitVideo.definition);
+    video.registerReferenceProvider(outfitVideo.referenceProvider);
     const localization = createLocalization(media, coordinate);
     registry.register(localization.definition);
     const governance = createGovernance(media, coordinate, { mutations: config.policy.core.allowedOrigins.length > 0 });
@@ -93,6 +102,10 @@ export async function createCore({ policyOptions, registerModules, networkOption
     governance.register(business.referenceProvider);
     governance.register(worldbook.referenceProvider);
     registry.register(governance.definition);
+    registry.register(video.definition);
+    registry.register(worldbook.videoDefinition);
+    video.registerReferenceProvider(worldbook.videoReferenceProvider);
+    governance.register(video.posterReferenceProvider);
     registerModules?.(registry); // Test fixture or a future trusted composition root; not callable over HTTP.
     await registry.initialize();
     let stopped = false;
@@ -153,6 +166,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
         attachAudioRoutingPreferenceRoutes(router, { preferences, registry, config, send, failure, logger, now });
         attachAudioSourceRoutes(router, { sources: audioSources, registry, config, send, failure, networkFailureDetails, logger, now });
         attachAudioLibraryRoutes(router, { library: audioLibrary, registry, config, send, failure, logger, now });
+        attachOutfitVideoRoutes(router, { outfitVideo, registry, config, send, failure, logger, now });
+        attachVideoRoutes(router, { video, registry, config, send, failure, logger, now });
         attachWorldbookRoutes(router, { worldbook, registry, config, send, failure, logger, now });
         const policyRoute = operation => async (req, res) => {
             const { requestId, context, start } = res.locals.ttbRequest;
