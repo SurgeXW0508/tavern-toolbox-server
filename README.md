@@ -178,3 +178,12 @@ Normal failure/cancel removes staging immediately. On each user's Audio Store in
 ## Video Foundation candidate
 
 Server v0.11.0 / Frontend v0.54.0 complete the Video Foundation. User Gate A/B core registration/playback/Worldbook flows and the final installed shared-path/NAS relocation smoke passed; dedicated Outfit installed-host validation is waived in favor of SQLite/HTTP/Chromium evidence. Resource, scale, recovery, compatibility and final build evidence is maintained in [Video](docs/VIDEO.md) and [Engineering](docs/ENGINEERING.md). Future work starts from the released main baseline rather than the retired development branch.
+
+
+## AI account connections (stage candidate)
+
+Optional capability `ai.connections` 1.0 stores independent AI connection metadata and credentials under the authenticated ST user's `tavern-toolbox-server/ai-connections-v1/connections.sqlite`. The paired frontend explicitly uploads a saved local connection; other devices logged into the same ST account can select it or its shared default. Local configurations are not uploaded or removed automatically. This stage must be installed with the paired AI frontend candidate and ST restarted; no formal release is implied. Node with `node:sqlite` support is required, as for other SQLite modules.
+
+The normal list contains `hasKey`, never the key. Credentials use an explicit protected POST bound to profile revision, protocol, current user/boot context, trusted Origin and session CSRF. Whole-account revision CAS rejects stale writes without retry. The module stores configuration only: model calls still use Tavern Helper and ST's own backend forwarding. Existing Network allowlists do not authorize arbitrary model forwarding through this module.
+
+At most 64 profiles, 256 model names per profile, 32 KiB metadata per profile, 240 KiB total list, and 8192 characters per key. URLs must be HTTP(S) without embedded user/password or fragment. Model names can be typed manually and an empty model can be saved before fetching a list; generation still requires a model. Blank key edits retain the saved key; explicit empty `key` clears it. Changing URL/source/proxy preset requires explicit credentials. Ordinary frontend backups exclude account profiles/keys: privately back up the ST user data directory while stopped or with a consistent snapshot. Directory 0700/DB0600 are access controls, not encryption; trusted browser scripts and NAS administrators remain inside the trust boundary.

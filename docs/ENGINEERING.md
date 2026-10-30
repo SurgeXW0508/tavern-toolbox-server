@@ -194,3 +194,10 @@ Dedicated Outfit installed validation is waived and automated evidence accepted.
 ## Non-blocking CI timing follow-up
 
 The slow-module health regression in `test/core.test.js` combines functional timeout/error checks with an end-to-end HTTP wall-clock assertion of less than 2,000 ms. One shared-runner PR attempt took about 2,547 ms; the same HEAD passed push CI and an unchanged rerun. If this recurs, separate functional timeout semantics from runner scheduling tolerance in the test. Production deadlines and the test remain unchanged in this documentation cleanup.
+
+
+## AI account connection stage
+
+The additive `ai-connections` module registers `ai.connections` 1.0. GET `/v1/ai/connections` returns schemaVersion, account revision, defaultProfileId and bounded metadata rows with row revision/hasKey. POST `/v1/ai/connections/commands` takes `operation` save/delete/default and `expectedRevision`; save takes whitelisted profile metadata and optional key (omitted retains, empty clears). Target changes require explicit key. POST `/v1/ai/connections/credential` takes exact id/revision and returns key plus the bound metadata. All routes require the current authenticated context/protocol; both POST routes additionally use the existing Origin/CSRF gate. The store opens/closes a private user SQLite connection per operation, keeps the transaction synchronous and atomic, has no resident timer or unbounded collection, rejects unknown schema and performs no model/network forwarding.
+
+New real SQLite/HTTP tests cover account isolation, restart persistence, CAS concurrency, target-change credential binding, secret omission, explicit clear and authorization/no-store. Discovery assertions include the new module/capability. Local full-check attempt encountered the documented abstract-socket policy-lock restriction; a diagnostic run excludes only the same eight affected cases, not production locks or CI checks. Exact stage-head CI remains the full-check gate; real NAS/two-device authenticated frontend testing is separate from synthetic HTTP/browser evidence.
