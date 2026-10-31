@@ -1,5 +1,20 @@
 # Protocol 1.0 — Core discovery
 
+## Stage additive Account Documents 1.0
+
+Phase A on `stage/account-settings-sync`, not a formal release. Optional `account.documents` capability advertises `read` / `commit` and registered `constraints.consumers[{id,schemaVersion,maxBytes,limits}]`. Client must negotiate both operations and the Consumer schema, not infer support from package versions. Public Protocol remains 1.0; Business Schema 1 and its revision are independent.
+
+| Operation | Route relative to plugin base | Input |
+| --- | --- | --- |
+| read | `GET /v1/account/documents/:id?schemaVersion=1` | Registered ID, exact schema query |
+| commit | `POST /v1/account/documents/:id/commit` | `{schemaVersion:1,expectedRevision,payload}` |
+
+Both routes require authenticated ST user, `X-TTB-Protocol: 1.0` and exact `X-TTB-Context`; POST also requires trusted same-origin JSON and session CSRF. Success data: `{documentId,schemaVersion,revision,payload,contextId}`. Empty document is revision 0/payload null. First commit expects 0; subsequent commits expect the current independent document revision and increment it once. No delete/reset or arbitrary namespace operation. New boot/context requires reread; revision may legitimately decrease after stopped restore. Responses use the existing success/error envelope and private/no-store headers.
+
+Only production Consumer `outfit-settings` is registered, schemaVersion 1. Payload keys: `settingsVersion:5`, boolean `injectionEnabled`, `injectionPosition` enum compatibility/balanced/constraint, activeNarrativePresetId, customNarrativePresets array of `{id,name,builtin:false,protocols:{fixed,scene,mixed}}`. Builtin IDs are balanced/first-reveal/subtle/state-first and cannot be custom IDs; no builtin prompt text is stored. Obsolete active IDs remain parseable so the frontend can apply its current builtin fallback. Limits: ID 100 chars, name 80, each nonblank protocol 8000 JS string code units, preset JSON 96 KiB, 128 custom presets, document JSON 1 MiB UTF-8. Unknown keys, duplicate/custom builtin IDs, invalid types or incomplete protocols reject the entire payload.
+
+Errors include DOCUMENT_NOT_REGISTERED (404), DOCUMENT_SCHEMA_INCOMPATIBLE / REVISION_CONFLICT / CONTEXT_CHANGED (409), DOCUMENT_INVALID (422), DOCUMENT_TOO_LARGE (413), INVALID_REQUEST (400), CSRF_REJECTED (403), DOCUMENT_STORE_UNAVAILABLE (503). Internal schema/corruption details remain sanitized. No partial payload is saved and conflicts are never automatically retried. Durable path and stopped-backup/rollback rules are in the operator README.
+
 Formal Server v0.11.0 / Frontend v0.54.0 retains Protocol 1.0 and includes independent Worldbook Core, Worldbook Media/Video and Server Outfit Video contracts. Worldbook storage uses schema 4, Video schema 2 and Outfit Video schema 1; wire/feature versions remain independent from storage and release versions. Phase 8 added `audio.library` (see its contract below). The existing Phase 7 public contracts remain [`network.remoteAudio`](#additive-phase-7-networkremoteaudio-contract-10), [`preferences.audioRouting`](#additive-phase-7-preferencesaudiorouting-contract-10), [`audio.sources`](#additive-phase-7-audiosources-contract-10) and [`audio.assets`](#additive-phase-7-audioassets-and-source-binding-operations-10), each with schema/fixture. Selected Source `restore` belongs to audio.sources and returns sensitive metadata only through protected explicit POST.
 
 This directory holds the fixed language-neutral Core fixture and JSON Schema for the two success envelopes. Both are public wire contracts, not internal registry objects. The frontend keeps an independent copy of the fixture in `tests/fixtures/`. On a protocol change, update both fixtures deliberately and keep an older supported version's fixture during the compatibility window.

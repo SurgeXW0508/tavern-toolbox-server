@@ -1,5 +1,11 @@
 # Privacy and secret handling
 
+## Account documents
+
+`account-documents-v1/documents.sqlite` contains private authenticated-user settings and custom prompt text, outside the code directory. Directory/database permissions are 0700/0600. User root comes only from the trusted ST session; browser document IDs select only statically registered consumers, never a user/path/key namespace. Read and commit require Protocol 1.0 and exact boot-derived context. Commit additionally requires trusted same-origin and session CSRF. Responses are private/no-store; errors omit filesystem/SQLite details and prompt payloads.
+
+Validation is independent of the frontend, with whole-document rejection, bounded JSON and atomic expectedRevision CAS. Invalid/newer schemas are preserved and fail closed; no partial writes, auto merge, reset, migration upload or retries. Backups are private user data and may include sensitive prompt content. Stop SillyTavern before restoring consistent full user-data, including account-documents-v1; live SQLite replacement is unsupported. No E2E encryption or hostile same-origin-script protection is implied. Do not publish actual prompt payloads, user paths or production DBs in test/CI artifacts.
+
 This repository is intended to be publicly readable. Treat Git history, branches, tags, commit metadata, issue and pull request discussions, Actions logs/artifacts, and release assets as public, even while the repository is private. A later deletion from the working tree does not remove earlier versions.
 
 ## Before each push and release

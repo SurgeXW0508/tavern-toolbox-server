@@ -1,4 +1,6 @@
 import { createAiConnections } from './ai-connections/store.js';
+import { createAccountDocuments } from './account-documents/store.js';
+import { attachAccountDocumentRoutes } from './account-documents/routes.js';
 import { attachAiConnectionRoutes } from './ai-connections/routes.js';
 import { createOutfitVideo } from './outfit-video/index.js';
 import { attachOutfitVideoRoutes } from './outfit-video/routes.js';
@@ -39,8 +41,9 @@ function meta(requestId, protocol = null) {
     return { requestId, serverTime: new Date().toISOString(), ...(protocol ? { protocol: PROTOCOL } : {}) };
 }
 
-function send(res, status, data, requestId, protocol, budget) {
+function send(res, status, data, requestId, protocol, budget, privateResponse = false) {
     setPrivateHeaders(res);
+    if (privateResponse) res.setHeader('Cache-Control', 'private, no-store');
     const payload = JSON.stringify({ ok: status < 400, ...(status < 400 ? { data } : { error: data }), meta: meta(requestId, protocol) });
     if (Buffer.byteLength(payload) > budget) {
         const fallback = JSON.stringify({ ok: false, error: { code: 'CAPABILITY_UNAVAILABLE', message: '状态快照超出服务器上限',
@@ -79,6 +82,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(audio.definition);
     const aiConnections = createAiConnections(config);
     registry.register(aiConnections.definition);
+    const documents = createAccountDocuments(config);
+    registry.register(documents.definition);
     const preferences = createAudioRoutingPreferences(config);
     registry.register(preferences.definition);
     const audioSources = createAudioSources(config, audio);
@@ -168,6 +173,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
         router.get('/v1/status', route(true, status));
         attachAudioRoutes(router, { audio, registry, config, send, failure, networkFailureDetails, logger, now });
         attachAiConnectionRoutes(router, { aiConnections, registry, config, send, failure });
+        attachAccountDocumentRoutes(router, { documents, registry, config, send, failure });
         attachAudioRoutingPreferenceRoutes(router, { preferences, registry, config, send, failure, logger, now });
         attachAudioSourceRoutes(router, { sources: audioSources, registry, config, send, failure, networkFailureDetails, logger, now });
         attachAudioLibraryRoutes(router, { library: audioLibrary, registry, config, send, failure, logger, now });
