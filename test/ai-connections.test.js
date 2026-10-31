@@ -59,3 +59,27 @@ test('concurrent writes accept one revision, explicit empty key clears it, and r
  const restarted=createAiConnections(config);await restarted.definition.initialize();t.after(()=>restarted.definition.shutdown());
  assert.equal((await restarted.read(c)).profiles[0].hasKey,false);assert.equal((await restarted.credential(c,{id:profile.id,revision:2})).key,'');
 });
+
+test('stopped backup restore starts a new authenticated context and rejects old writes and credentials despite repeated revisions',async t=>{
+ const {copyFile}=await import('node:fs/promises');const {default:express}=await import('express');const {once}=await import('node:events');const {createCore}=await import('../src/core.js');
+ const root=await mkdtemp(path.join(tmpdir(),'ttb-ai-restore-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const userRoot=path.join(root,'synthetic-user');const db=path.join(userRoot,'tavern-toolbox-server/ai-connections-v1/connections.sqlite'),backup=path.join(root,'backup.sqlite');
+ const options={logger:{info(){},error(){}},policyOptions:{configPath:path.join(root,'policy.json'),read:async()=>JSON.stringify({schemaVersion:1,core:{allowedOrigins:['https://example.test']}})}};
+ let core,router;const start=async()=>{core=await createCore(options);router=express.Router();core.attach(router);};await start();t.after(()=>core.shutdown());
+ const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={profile:{handle:'synthetic-user',enabled:true},directories:{root:userRoot}};req.session={csrfToken:'fixture-csrf'};next();});app.use((req,res,next)=>router(req,res,next));
+ const server=app.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(r=>server.close(r)));const base='http://127.0.0.1:'+server.address().port;
+ const identity=async()=>((await (await fetch(base+'/v1/status',{headers:{'X-TTB-Protocol':'1.0'}})).json()).data.contextId);
+ const call=async(context,route='',body)=>{const r=await fetch(base+'/v1/ai/connections'+route,{method:body?'POST':'GET',headers:{'X-TTB-Protocol':'1.0','X-TTB-Context':context,Origin:'https://example.test','X-CSRF-Token':'fixture-csrf','Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,body:await r.json()};};
+ const old=await identity();assert.equal((await call(old,'/commands',{operation:'save',expectedRevision:0,profile,key:'synthetic-old'})).status,200);
+ await core.shutdown();await copyFile(db,backup);await start();const middle=await identity();
+ await call(middle,'/commands',{operation:'save',expectedRevision:1,profile:{...profile,name:'Newer'},key:'synthetic-new'});
+ await core.shutdown();await copyFile(backup,db);await start();const current=await identity();assert.notEqual(old,current);assert.notEqual(middle,current);
+ const restored=await call(current);assert.equal(restored.body.data.revision,1);assert.equal(restored.body.data.profiles[0].name,profile.name);
+ for(const stale of [old,middle]) {
+   assert.equal((await call(stale,'/commands',{operation:'delete',expectedRevision:1,id:profile.id})).status,409);
+   assert.equal((await call(stale,'/credential',{id:profile.id,revision:1})).status,409);
+ }
+ assert.equal((await call(current,'/credential',{id:profile.id,revision:1})).body.data.key,'synthetic-old');
+ assert.equal((await call(current,'/commands',{operation:'save',expectedRevision:1,profile:{...profile,name:'Fresh'}})).status,200);
+ assert.equal((await call(current)).body.data.profiles[0].name,'Fresh');
+});
