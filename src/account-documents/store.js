@@ -20,7 +20,7 @@ export function createAccountDocuments(config, { consumers = [outfitSettingsCons
         if (Buffer.byteLength(JSON.stringify(payload) || '') > consumer.maxBytes) fail('DOCUMENT_TOO_LARGE');
         return consumer.validate(payload);
     };
-    async function use(context, work) {
+    async function use(context, work, { write = false } = {}) {
         if (stopped || !DatabaseSync || !context?.userRoot) fail('DOCUMENT_STORE_UNAVAILABLE');
         const root = path.join(context.userRoot, 'tavern-toolbox-server', 'account-documents-v1');
         await mkdir(root, { recursive: true, mode: 0o700 });
@@ -35,14 +35,21 @@ export function createAccountDocuments(config, { consumers = [outfitSettingsCons
         try {
             await chmod(file, 0o600);
             if (stopped) fail('DOCUMENT_STORE_UNAVAILABLE');
-            db.exec('PRAGMA busy_timeout=1000; PRAGMA synchronous=FULL; BEGIN IMMEDIATE');
-            const version = db.prepare('PRAGMA user_version').get().user_version;
-            if (version !== 0 && version !== 1) fail('DOCUMENT_STORE_SCHEMA_INCOMPATIBLE');
-            if (!version) {
-                if (db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get().n)
-                    fail('DOCUMENT_STORE_SCHEMA_INCOMPATIBLE');
-                db.exec('CREATE TABLE documents(id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL); PRAGMA user_version=1');
+            db.exec('PRAGMA busy_timeout=1000; PRAGMA synchronous=FULL');
+            const version = () => db.prepare('PRAGMA user_version').get().user_version;
+            if (version() === 0) {
+                // Schema creation is the sole write during a cold read. Recheck
+                // under the lock in case another connection initialized first.
+                db.exec('BEGIN IMMEDIATE');
+                if (version() === 0) {
+                    if (db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get().n)
+                        fail('DOCUMENT_STORE_SCHEMA_INCOMPATIBLE');
+                    db.exec('CREATE TABLE documents(id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL); PRAGMA user_version=1');
+                } else if (version() !== 1) fail('DOCUMENT_STORE_SCHEMA_INCOMPATIBLE');
+                db.exec('COMMIT');
             }
+            db.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
+            if (version() !== 1) fail('DOCUMENT_STORE_SCHEMA_INCOMPATIBLE');
             const result = work(db);
             db.exec('COMMIT');
             return result;
@@ -94,7 +101,7 @@ export function createAccountDocuments(config, { consumers = [outfitSettingsCons
                 db.prepare('INSERT INTO documents VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET schema_version=excluded.schema_version, revision=excluded.revision, payload=excluded.payload')
                     .run(id, consumer.schemaVersion, current.revision + 1, encoded);
                 return snapshot(db, consumer);
-            });
+            }, { write: true });
         },
     };
 }

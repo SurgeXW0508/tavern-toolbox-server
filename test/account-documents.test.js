@@ -66,6 +66,16 @@ test('foundation accepts a separately registered consumer without knowing its bu
     assert.equal((await s.read(alice, 'outfit-settings', 1)).revision, 1);
 });
 
+test('ordinary read and health coexist with a reserved writer and see only committed state', async t => {
+    const { s, alice } = await fixture(t); await commit(s, alice);
+    const file = path.join(alice.userRoot, 'tavern-toolbox-server/account-documents-v1/documents.sqlite');
+    const writer = new DatabaseSync(file);
+    t.after(() => { try { writer.exec('ROLLBACK'); } finally { writer.close(); } });
+    writer.exec('BEGIN IMMEDIATE'); writer.prepare('UPDATE documents SET revision=2 WHERE id=?').run('outfit-settings');
+    assert.equal((await s.read(alice, 'outfit-settings', 1)).revision, 1);
+    assert.equal((await s.definition.health(alice)).state, 'ready');
+});
+
 test('restart and stopped restore retain payloads; incompatible storage is preserved and fails closed', async t => {
     const { s, root, alice } = await fixture(t);
     const file = path.join(alice.userRoot, 'tavern-toolbox-server/account-documents-v1/documents.sqlite');

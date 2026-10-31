@@ -2,7 +2,7 @@
 
 ## Stage additive Account Documents 1.0
 
-Phase A on `stage/account-settings-sync`, not a formal release. Optional `account.documents` capability advertises `read` / `commit` and registered `constraints.consumers[{id,schemaVersion,maxBytes,limits}]`. Client must negotiate both operations and the Consumer schema, not infer support from package versions. Public Protocol remains 1.0; Business Schema 1 and its revision are independent.
+Phase A on `stage/account-settings-sync`, not a formal release. Optional `account.documents` capability advertises `read` / `commit` and registered `constraints.consumers[{id,schemaVersion,maxBytes,limits}]`. Clients negotiate each operation and Consumer schema independently, not by package version. Read availability does not require commit availability; a read-only deployment can serve existing settings. Public Protocol remains 1.0; Business Schema 1 and its revision are independent.
 
 | Operation | Route relative to plugin base | Input |
 | --- | --- | --- |
