@@ -20,3 +20,13 @@ Phase 7 `audio.sources` intentionally persists original remote/signed URLs and c
 ### Audio Assets and backups
 
 Audio Assets live in the same trusted user's durable `tavern-toolbox-server/audio-assets-v1` data root: private metadata.sqlite, originals and recognized staging. Source Registry (`audio-sources-v1`), Audio Asset metadata and originals (`audio-assets-v1`), and music Library metadata (`audio-library-v1`) must be backed up together under stopped ST or a consistent filesystem snapshot; Source DB alone cannot restore Local audio. Keep backups private and never publish these databases/files or live resource URLs in fixtures, logs or release artifacts. Explicit localization/repair reuses Network Allowlist/DNS/redirect/proxy/TLS/MIME/size safety; missing/corrupt Local fails without remote fallback. Source deletion does not delete shared Assets, and unknown external character references cannot authorize automatic cleanup.
+
+
+### AI account credentials
+
+`ai-connections-v1/connections.sqlite` is private authenticated-user data with 0700 parent directory and 0600 DB permissions. Metadata lists expose only presence (`hasKey`), not credentials; selected-revision credentials require protocol/context, trusted Origin and session CSRF on POST and return no-store. Commands use transactional revision CAS, including metadata and secret updates/deletes. Neither route logs submitted keys, target URLs, nor database error details. Bounds and schema rejection fail closed; no model call or retry occurs in this module.
+
+Credentials are stored in plaintext within the access-controlled SQLite file, not encrypted or end-to-end encrypted. Protect filesystem backups and snapshots as credentials; do not publish databases, actual request bodies or user metadata in logs/artifacts. Use a secure authenticated ST deployment. The frontend needs the key briefly for the existing Helper/native-ST request path, so malicious same-origin scripts, browser extensions with page access and NAS administrators are not excluded by this feature. Deleting a key cannot erase historical filesystem backups or snapshots.
+
+
+For AI connections, create a consistent backup with ST stopped (or a consistent filesystem snapshot); always stop ST before restoring private user data, then restart. Do not replace a live SQLite file. Existing authenticated context IDs change on restart; clients must synchronize and explicitly reload pre-restart drafts before writing. These IDs are transient concurrency guards, not encryption keys or durable account identities.

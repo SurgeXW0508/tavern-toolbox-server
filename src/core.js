@@ -1,3 +1,5 @@
+import { createAiConnections } from './ai-connections/store.js';
+import { attachAiConnectionRoutes } from './ai-connections/routes.js';
 import { createOutfitVideo } from './outfit-video/index.js';
 import { attachOutfitVideoRoutes } from './outfit-video/routes.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
@@ -75,6 +77,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(network.definition);
     const audio = createAudio(config, audioOptions);
     registry.register(audio.definition);
+    const aiConnections = createAiConnections(config);
+    registry.register(aiConnections.definition);
     const preferences = createAudioRoutingPreferences(config);
     registry.register(preferences.definition);
     const audioSources = createAudioSources(config, audio);
@@ -163,6 +167,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
             serverVersion: SERVER_VERSION, protocols: RANGES, coreState: config.error ? 'degraded' : 'ready' })));
         router.get('/v1/status', route(true, status));
         attachAudioRoutes(router, { audio, registry, config, send, failure, networkFailureDetails, logger, now });
+        attachAiConnectionRoutes(router, { aiConnections, registry, config, send, failure });
         attachAudioRoutingPreferenceRoutes(router, { preferences, registry, config, send, failure, logger, now });
         attachAudioSourceRoutes(router, { sources: audioSources, registry, config, send, failure, networkFailureDetails, logger, now });
         attachAudioLibraryRoutes(router, { library: audioLibrary, registry, config, send, failure, logger, now });
