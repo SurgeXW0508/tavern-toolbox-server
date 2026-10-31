@@ -2,12 +2,13 @@ import path from 'node:path';
 import { mkdir, chmod, lstat } from 'node:fs/promises';
 import { DocumentFailure } from './validation.js';
 import { outfitSettingsConsumer } from './outfit.js';
+import { discoverySettingsConsumer, discoveryPromptsConsumer } from './worldbook-discovery.js';
 
 export { DocumentFailure } from './validation.js';
 const fail = code => { throw new DocumentFailure(code); };
 
 // Trusted composition only; no client-controlled registration or storage paths.
-export function createAccountDocuments(config, { consumers = [outfitSettingsConsumer] } = {}) {
+export function createAccountDocuments(config, { consumers = [outfitSettingsConsumer, discoverySettingsConsumer, discoveryPromptsConsumer] } = {}) {
     const registered = new Map(consumers.map(consumer => [consumer.id, consumer]));
     let DatabaseSync, stopped = false;
     const consumerFor = (id, version) => {
