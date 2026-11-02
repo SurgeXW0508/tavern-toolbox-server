@@ -47,7 +47,7 @@ test('two registered Discovery documents keep independent CAS, coexist with Outf
     let store = createAccountDocuments(config); await store.definition.initialize(); t.after(() => store.definition.shutdown());
     const write = (id, payload, revision = 0) => store.commit(user, id, { schemaVersion: 1, expectedRevision: revision, payload });
     assert.equal(store.definition.capabilities[0].operationAvailability().commit.available, false);
-    assert.deepEqual([...store.consumers.keys()], ['outfit-settings', 'worldbook-discovery-settings', 'worldbook-discovery-prompts']);
+    assert.deepEqual([...store.consumers.keys()], ['outfit-settings', 'worldbook-discovery-settings', 'worldbook-discovery-prompts', 'oracle-advisor-settings', 'oracle-voice-personas']);
     await write('worldbook-discovery-prompts', { schemes: [scheme()] });
     await write('worldbook-discovery-settings', { ...settings(), promptId: 'example' });
     await write('worldbook-discovery-settings', { ...settings(), historyDepth: 20 }, 1);

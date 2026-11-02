@@ -2,6 +2,7 @@ import { createAiConnections } from './ai-connections/store.js';
 import { createAccountDocuments } from './account-documents/store.js';
 import { attachAccountDocumentRoutes } from './account-documents/routes.js';
 import { createAccountRecords } from './account-records/store.js';
+import { advisorRecordConsumers } from './account-documents/oracle-advisor.js';
 import { attachAccountRecordRoutes } from './account-records/routes.js';
 import { attachAiConnectionRoutes } from './ai-connections/routes.js';
 import { createOutfitVideo } from './outfit-video/index.js';
@@ -86,8 +87,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(aiConnections.definition);
     const documents = createAccountDocuments(config);
     registry.register(documents.definition);
-    // Trusted factory injection only. The production plugin supplies no Consumers.
-    const records = createAccountRecords(config, accountRecordsOptions);
+    // Only audited Advisor Consumers in production; tests may inject a registry.
+    const records = createAccountRecords(config, accountRecordsOptions || { consumers: advisorRecordConsumers });
     registry.register(records.definition);
     const preferences = createAudioRoutingPreferences(config);
     registry.register(preferences.definition);
