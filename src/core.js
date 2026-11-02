@@ -1,6 +1,8 @@
 import { createAiConnections } from './ai-connections/store.js';
 import { createAccountDocuments } from './account-documents/store.js';
 import { attachAccountDocumentRoutes } from './account-documents/routes.js';
+import { createAccountRecords } from './account-records/store.js';
+import { attachAccountRecordRoutes } from './account-records/routes.js';
 import { attachAiConnectionRoutes } from './ai-connections/routes.js';
 import { createOutfitVideo } from './outfit-video/index.js';
 import { attachOutfitVideoRoutes } from './outfit-video/routes.js';
@@ -64,7 +66,7 @@ function networkFailureDetails(error) {
         && /^[a-z0-9.-]+$/.test(host) ? { hostname: host } : {};
 }
 
-export async function createCore({ policyOptions, registerModules, networkOptions, audioOptions, logger = console, now = () => Date.now() } = {}) {
+export async function createCore({ policyOptions, registerModules, networkOptions, audioOptions, accountRecordsOptions, logger = console, now = () => Date.now() } = {}) {
     const config = await loadPolicy(policyOptions);
     const registry = new CapabilityRegistry();
     const bootId = randomUUID();
@@ -84,6 +86,9 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(aiConnections.definition);
     const documents = createAccountDocuments(config);
     registry.register(documents.definition);
+    // Trusted factory injection only. The production plugin supplies no Consumers.
+    const records = createAccountRecords(config, accountRecordsOptions);
+    registry.register(records.definition);
     const preferences = createAudioRoutingPreferences(config);
     registry.register(preferences.definition);
     const audioSources = createAudioSources(config, audio);
@@ -174,6 +179,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
         attachAudioRoutes(router, { audio, registry, config, send, failure, networkFailureDetails, logger, now });
         attachAiConnectionRoutes(router, { aiConnections, registry, config, send, failure });
         attachAccountDocumentRoutes(router, { documents, registry, config, send, failure });
+        attachAccountRecordRoutes(router, { records, config, send, failure });
         attachAudioRoutingPreferenceRoutes(router, { preferences, registry, config, send, failure, logger, now });
         attachAudioSourceRoutes(router, { sources: audioSources, registry, config, send, failure, networkFailureDetails, logger, now });
         attachAudioLibraryRoutes(router, { library: audioLibrary, registry, config, send, failure, logger, now });

@@ -1,5 +1,7 @@
 # Tavern Toolbox Server
 
+Phase 1 AccountCollection adds optional `account.records` with an empty production Consumer registry. Oracle and existing business data remain unchanged. Durable records belong to `<ST user root>/tavern-toolbox-server/account-records-v1/records.sqlite` (schema 1, directory 0700, database 0600), under the same persistent ST user-data volume as AccountDocument. Include the whole directory in stopped/consistent user-data backups; frontend Backup does not contain it. This repository provides operator backup instructions, **not a configured backup job**: actual NAS coverage has not been inspected and must not be assumed. No live SQLite replacement, Tombstone GC or implicit ID reuse. See [record API and Consumer contract](protocol/README.md#stage-additive-account-records-10).
+
 Current architecture, scalability findings, lifecycle and future development rules: [Engineering](docs/ENGINEERING.md). Public contracts: [Protocol](protocol/README.md). Phase acceptance files are historical evidence; their old branch instructions and temporary non-goals do not override the current baseline.
 
 Current formal baseline is **Server v0.12.0 / Frontend v0.56.0 / Protocol 1.0**. Video schema 2, Worldbook storage schema 4 and independent Outfit Video schema 1 are implemented. Final SillyTavern 1.19.0 / Docker / NAS smoke confirms the shared Video path and real source-loss → relocation recovery; detailed evidence and limits are in [Video](docs/VIDEO.md) and [Engineering](docs/ENGINEERING.md).
