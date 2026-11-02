@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat, symlink, mkdir, copyFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, symlink, mkdir, copyFile, chmod, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -18,6 +18,36 @@ async function fixture(t, consumers = [consumer(), consumer('other-records')]) {
 const body = (expectedRevision = 0, text = 'example') => ({ schemaVersion: 1, expectedRevision, payload: { text } });
 const commit = (s, u, id, revision = 0, text) => s.commit(u, 'test-records', id, body(revision, text));
 const remove = (s, u, id, revision) => s.delete(u, 'test-records', id, { schemaVersion: 1, expectedRevision: revision });
+
+test('Consumer registration rejects non-string IDs without coercion', () => {
+    for (const id of [undefined, null, 1, true, {}, ['test-records'], new String('test-records'), Symbol('test-records'),
+        { toString() { throw Error('must not coerce a Consumer ID'); } }]) {
+        assert.throws(() => createAccountRecords(config, { consumers: [{ ...consumer(), id }] }), /Invalid record consumer/);
+    }
+    for (const id of ['test-records', 'null', 'undefined'])
+        assert.equal(createAccountRecords(config, { consumers: [consumer(id)] }).consumer(id).id, id);
+});
+
+test('record operations harden their own directory and DB without changing existing shared parent or sibling permissions', async t => {
+    const { store: s, alice, file } = await fixture(t);
+    const shared = path.dirname(path.dirname(file)), sibling = path.join(shared, 'account-documents-v1');
+    await mkdir(sibling, { recursive: true }); await chmod(sibling, 0o750);
+    await writeFile(path.join(sibling, 'sentinel'), 'existing sibling data', { mode: 0o640 });
+    await chmod(shared, 0o750); await commit(s, alice, 'a');
+    assert.equal((await stat(shared)).mode & 0o777, 0o750);
+    let revision = 1;
+    for (const sharedMode of [0o750, 0o755]) {
+        await chmod(shared, sharedMode); await chmod(path.dirname(file), 0o755); await chmod(file, 0o644);
+        assert.equal((await s.read(alice, 'test-records', 'a', 1)).revision, revision);
+        await commit(s, alice, 'a', revision++);
+        assert.equal((await stat(shared)).mode & 0o777, sharedMode);
+        assert.equal((await stat(sibling)).mode & 0o777, 0o750);
+        assert.equal((await stat(path.dirname(file))).mode & 0o777, 0o700);
+        assert.equal((await stat(file)).mode & 0o777, 0o600);
+        assert.equal((await stat(path.join(sibling, 'sentinel'))).mode & 0o777, 0o640);
+        assert.equal(await readFile(path.join(sibling, 'sentinel'), 'utf8'), 'existing sibling data');
+    }
+});
 
 test('trusted registration, strict schema/identity/UTF-8 payload and isolated consumers/users', async t => {
     const { store: s, alice, bob, file } = await fixture(t);

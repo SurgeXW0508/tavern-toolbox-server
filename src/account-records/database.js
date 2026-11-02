@@ -31,7 +31,7 @@ function location(userRoot) {
         const s = lstatSync(current);
         if (!s.isDirectory() || s.isSymbolicLink()) fail('RECORD_STORE_UNAVAILABLE');
     }
-    chmodSync(path.dirname(root), 0o700); chmodSync(root, 0o700);
+    chmodSync(root, 0o700);
     const file = path.join(root, 'records.sqlite');
     for (const suffix of ['', '-journal', '-wal', '-shm']) privateFile(file + suffix);
     if (!statOrNull(file)) {

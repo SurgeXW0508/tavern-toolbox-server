@@ -12,7 +12,7 @@ export function registerConsumers(consumers) {
     if (!Array.isArray(consumers) || consumers.length > 32) throw TypeError('Invalid record consumers');
     const registered = new Map();
     for (const c of consumers) {
-        if (!c || !/^[a-z][a-z0-9-]{0,63}$/.test(c.id) || registered.has(c.id)
+        if (!c || typeof c.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(c.id) || registered.has(c.id)
             || !integer(c.schemaVersion, 1) || typeof c.validate !== 'function'
             || !integer(c.maxBytes, 1) || c.maxBytes > 2 * 1024 * 1024
             || !integer(c.maxRecords, 1) || c.maxRecords > 100000
