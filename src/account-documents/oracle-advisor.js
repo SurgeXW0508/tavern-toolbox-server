@@ -35,7 +35,9 @@ export function validateAdvisorRecipe(v, arc = false) {
 }
 function settings(v, arc) {
     keys(v, arc ? 'settingsVersion,connectionId,tokenBudget,recipe,promptProfiles' : 'settingsVersion,connectionId,recipe,promptProfiles');
-    if (v.settingsVersion !== (arc ? 3 : 4)) bad(); str(v.connectionId, 300); if (arc) int(v.tokenBudget, 0, 1000000);
+    if (v.settingsVersion !== (arc ? 3 : 4)) bad(); str(v.connectionId, 300);
+    if (v.connectionId && !/^cloud:[A-Za-z0-9_-]{1,96}$/.test(v.connectionId)) bad();
+    if (arc) int(v.tokenBudget, 0, 1000000);
     validateAdvisorRecipe(v.recipe, arc);
     keys(v.promptProfiles, 'version,activeId,items'); if (v.promptProfiles.version !== 1) bad(); str(v.promptProfiles.activeId, 128, false);
     array(v.promptProfiles.items, 100, p => { keys(p, 'id,name,payload'); str(p.id, 128, false); if (p.id === 'official') bad(); str(p.name, 80, false);

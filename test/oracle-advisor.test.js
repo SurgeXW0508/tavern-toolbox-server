@@ -14,6 +14,7 @@ const thread=(id='t')=>({identity:{...identity},thread:{id,title:'对话',autoTi
 test('Advisor documents enforce canonical settings, profile recipes and independent bounded persona library',()=>{
   validateAdvisorSettings(settings());validateOraclePersonas({personas:[]});
   for(const mutate of [p=>p.extra=1,p=>p.advisor.apiKey='secret',p=>p.guidanceDepth=-1,p=>p.advisor.settingsVersion=3,
+    p=>p.advisor.connectionId='device-local-id',p=>p.arc.connectionId='tavern-current',p=>p.advisor.connectionId='cloud:bad/path',
     p=>p.advisor.recipe.nodes[0].enabled=false,p=>p.advisor.recipe.nodes[0].source='correction',p=>p.advisor.recipe.nodes[0].options.path='/tmp/private',
     p=>p.arc.recipe.nodes.pop(),p=>p.advisor.promptProfiles.activeId='unknown',p=>p.advisor.promptProfiles.items=[{id:'p',name:'P',payload:{recipe:recipe(false),tokenBudget:4}}]]){
     const p=settings();mutate(p);assert.throws(()=>validateAdvisorSettings(p),{code:'DOCUMENT_INVALID'});

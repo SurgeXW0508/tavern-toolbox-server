@@ -29,13 +29,15 @@ All seven Consumers use **schemaVersion 1**, the existing AccountDocument/Record
 
 | Consumer | Payload | Server budgets |
 | --- | --- | --- |
-| document `oracle-advisor-settings` | `{advisor,arc,guidanceDepth}`; settingsVersion 4/3, recipe v1, promptProfiles v1, connection ID reference, Arc tokenBudget | 2 MiB UTF-8; 100 custom profiles/domain, 128 nodes/recipe, text node 60000 chars; guidance depth 0–10000 |
+| document `oracle-advisor-settings` | `{advisor,arc,guidanceDepth}`; settingsVersion 4/3, recipe v1, promptProfiles v1, empty or `cloud:<id>` shared connection reference, Arc tokenBudget | 2 MiB UTF-8; 100 custom profiles/domain, 128 nodes/recipe, text node 60000 chars; guidance depth 0–10000 |
 | document `oracle-voice-personas` | `{personas:[{id,label,description,voice,example,custom:true}]}` | 2 MiB; 50 custom personas; 60/240/8000/8000 chars, built-in IDs rejected |
 | record `oracle-advisor-thread-index` | `{identity,threads:[{id,title,autoTitle,createdAt,updatedAt,messageCount}]}` | 2 MiB/record, 4000 records, 128 MiB charged total, 50 threads/chat |
 | record `oracle-advisor-threads` | `{identity,thread:{id,title,autoTitle,createdAt,updatedAt,messages}}` | 2 MiB/record, 10000 records, 128 MiB total; messages retain content/optional prompt,failed,meta; no truncation |
 | record `oracle-advisor-workspace` | `{identity,threadId,draft,loreSelection:{selected,hybrid}}` | 2 MiB/record, 4000 records, 128 MiB total; draft ≤1000000 chars, ≤128 books / 8192 total selected numeric IDs |
 | record `oracle-advisor-story` | `{identity,guidance:{active,lastEnded},arc:{draft,compiled,lastAttempt,active,lastEnded}}` | 2 MiB/record, 4000 records, 128 MiB total; existing business model, mutually exclusive active guidance/arc |
 | record `oracle-advisor-arc-workspace` | `{identity,draft,draftDirty}` | 2 MiB/record, 4000 records, 128 MiB total; existing Arc draft model |
+
+Advisor connection references are empty or `cloud:[A-Za-z0-9_-]{1,96}`. Device Local IDs, `tavern-current`, paths and credentials reject on write. The frontend also validates an existing authenticated Cloud metadata snapshot before sharing a selection and never copies endpoint configuration or keys into this document. Local/Tavern selection stays in device/owner-scoped preferences; missing references remain explicitly unavailable, without default fallback. An old Stage non-Cloud reference is retained on read for explicit repair; new writes must meet this contract. No schema field, consumer registration or Protocol version changes.
 
 Each identity is exact `{kind:'character'|'group',owner:string,chat:string}` with nonempty owner/chat ≤512 chars. It identifies the current formal host chat within the already-authenticated account, not a filesystem route or authority to access another ST user. Frontend uses SHA-256 of `[kind,owner,chat]` for chat records and that tuple + Thread ID for independent records. Server does not mutate or inspect native ST chat files. The frontend fails closed if public host identity is unreliable; file renames are not automatically reconciled.
 
