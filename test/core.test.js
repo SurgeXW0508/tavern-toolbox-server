@@ -445,7 +445,7 @@ test('installed-host Business collection uses trusted user, explicit schema, CSR
     const app = await sillyTavernHost(core);
     t.after(async () => { await app.close(); await core.shutdown(); });
     const route = '/v1/business/collections/outfit';
-    const read = user => request(app.url, `${route}?schemaVersion=1`, { user, protocol: '1.0' });
+    const read = user => request(app.url, `${route}?schemaVersion=2`, { user, protocol: '1.0' });
     const initial = await read('alice');
     assert.equal(initial.code, 200);
     assert.equal(initial.body.data.revision, 0);
@@ -454,7 +454,7 @@ test('installed-host Business collection uses trusted user, explicit schema, CSR
         'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' };
     const commit = (user, revision, options = {}) => request(app.url, route, { user, protocol: '1.0',
         method: 'PUT', headers: { ...headers, ...options.headers }, body: JSON.stringify({
-            schemaVersion: 1, revision, document: { assets: [], persons: [], wearStates: [] },
+            schemaVersion: 2, revision, document: { assets: [], persons: [], wearStates: [] },
         }) });
     assert.equal((await commit('alice', 0, { headers: { 'X-CSRF-Token': 'wrong' } })).body.error.code, 'CSRF_REJECTED');
     assert.equal((await commit('alice', 0)).body.data.revision, 1);
@@ -463,9 +463,9 @@ test('installed-host Business collection uses trusted user, explicit schema, CSR
     assert.equal(stale.body.error.code, 'BUSINESS_CONFLICT');
     assert.equal((await read('alice')).body.data.revision, 1);
     assert.equal((await read('bob')).body.data.revision, 0);
-    assert.equal((await request(app.url, `${route}?schemaVersion=2`, { protocol: '1.0' })).body.error.code,
+    assert.equal((await request(app.url, `${route}?schemaVersion=1`, { protocol: '1.0' })).body.error.code,
         'BUSINESS_SCHEMA_INCOMPATIBLE');
-    assert.equal((await request(app.url, `${route}?schemaVersion=1`, { user: '', protocol: '1.0' })).code, 403);
+    assert.equal((await request(app.url, `${route}?schemaVersion=2`, { user: '', protocol: '1.0' })).code, 403);
 });
 
 test('installed-host Outfit record resolves Server MediaRef; business removal retains Media asset', async t => {
@@ -487,7 +487,7 @@ test('installed-host Outfit record resolves Server MediaRef; business removal re
         wearSlot: 'outer-layer', modelDescription: 'Blue coat' }], persons: [], wearStates: [] };
     const put = (user, revision, value) => fetch(`${app.url}/v1/business/collections/outfit`, { method: 'PUT',
         headers: { ...headers, 'x-test-user': user, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schemaVersion: 1, revision, document: value }) });
+        body: JSON.stringify({ schemaVersion: 2, revision, document: value }) });
     assert.equal((await put('bob', 0, document)).status, 422);
     const committed = await put('alice', 0, document);
     assert.equal(committed.status, 200);
@@ -732,7 +732,7 @@ test('every external hard delete is reference-aware; Governance is paginated, au
     const asset = { id: 'governance-item', kind: 'item', name: '治理测试', category: '', tags: [], sceneTags: [], ownerPersonId: '',
         scope: { type: 'global', id: '', label: '全局' }, mediaRef, createdAt: '2026-01-01', updatedAt: '2026-01-01', itemType: 'clothing', wearSlot: 'outer-layer', modelDescription: '' };
     const commit = (revision, document) => request(app.url, '/v1/business/collections/outfit', { user: 'alice', protocol: '1.0', method: 'PUT',
-        headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ schemaVersion: 1, revision, document }) });
+        headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ schemaVersion: 2, revision, document }) });
     assert.equal((await commit(0, { assets: [asset], persons: [], wearStates: [] })).code, 200);
     const raw = () => request(app.url, '/v1/media/assets/' + mediaRef.assetId, { user: 'alice', protocol: '1.0', method: 'DELETE', headers });
     assert.equal((await raw()).body.error.code, 'MEDIA_REFERENCED');

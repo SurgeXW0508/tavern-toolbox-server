@@ -1,5 +1,5 @@
 import { BusinessStore, BusinessFailure, MAX_BUSINESS_BYTES } from './store.js';
-import { OUTFIT_NAMESPACE, OUTFIT_BUSINESS_SCHEMA, emptyOutfit, validateOutfit, addedMediaRefs, outfitReferenceGroups } from './outfit.js';
+import { OUTFIT_NAMESPACE, OUTFIT_BUSINESS_SCHEMA, emptyOutfit, validateOutfit, outfitMigration, addedMediaRefs, outfitReferenceGroups } from './outfit.js';
 
 export { BusinessFailure } from './store.js';
 
@@ -8,7 +8,7 @@ export function createBusiness(config, media, coordinate = async (_context, work
     let DatabaseSync, initializationError = null, stopped = false;
     const failures = new Map();
     const consumers = new Map([[OUTFIT_NAMESPACE, {
-        schemaVersion: OUTFIT_BUSINESS_SCHEMA, empty: emptyOutfit, validate: validateOutfit,
+        schemaVersion: OUTFIT_BUSINESS_SCHEMA, empty: emptyOutfit, validate: validateOutfit, migration: outfitMigration,
     }]]);
 
     async function store(context) {
@@ -65,7 +65,7 @@ export function createBusiness(config, media, coordinate = async (_context, work
         },
         async read(context, namespace, schemaVersion) {
             const contract = consumer(namespace, schemaVersion);
-            const result = (await store(context)).read(namespace, contract.empty(), schemaVersion);
+            const result = (await store(context)).read(namespace, contract.empty(), schemaVersion, contract.migration);
             contract.validate(result.document);
             return result;
         },
@@ -76,7 +76,7 @@ export function createBusiness(config, media, coordinate = async (_context, work
             const target = await store(context);
             // Only newly introduced media must be present. An existing broken ref
             // after restore remains editable so the user can repair it.
-            const current = target.read(namespace, contract.empty(), schemaVersion);
+            const current = target.read(namespace, contract.empty(), schemaVersion, contract.migration);
             if (current.revision !== revision) throw new BusinessFailure('BUSINESS_CONFLICT');
             const previous = current.document;
             for (const id of addedMediaRefs(document, previous)) {

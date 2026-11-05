@@ -45,7 +45,7 @@ test('existing originals bind offline, aggregate active/detached/multiple refs, 
     const f = await fixture(t), asset = await f.image(), id = asset.mediaRef.assetId;
     const bound = await f.localization.bindExisting(f.context, { hostId: 'A.png', displayName: '角色 A', url,
         revision: 0, mediaRef: asset.mediaRef });
-    await f.business.commit(f.context, 'outfit', 1, 0, outfit(asset.mediaRef));
+    await f.business.commit(f.context, 'outfit', 2, 0, outfit(asset.mediaRef));
     const view = await f.governance.detail(f.context, id);
     assert.equal(view.asset.referenceState, 'active'); assert.equal(view.references.total, 2);
     assert.equal((await f.governance.assets(f.context, { search: '黑色礼服' })).total, 1);
@@ -55,7 +55,7 @@ test('existing originals bind offline, aggregate active/detached/multiple refs, 
     const groups = await f.governance.groups(f.context);
     assert.equal(groups.items.find(group => group.consumer === 'character').lifecycle, 'detached');
     assert.equal((await f.governance.detail(f.context, id)).asset.referenceState, 'active');
-    await f.business.commit(f.context, 'outfit', 1, 1, outfit(null));
+    await f.business.commit(f.context, 'outfit', 2, 1, outfit(null));
     assert.equal((await f.governance.detail(f.context, id)).asset.referenceState, 'detached');
     await assert.rejects(f.governance.delete(f.context, id), { code: 'MEDIA_REFERENCED' });
     const detached = (await f.governance.groups(f.context)).items[0];
@@ -87,7 +87,7 @@ test('provider failure retains known references, unknown is never eligible for d
 
 test('broken reference survives missing catalog row; corruption is separate from reference state and replace uses CAS', async t => {
     const f = await fixture(t), asset = await f.image(), replacement = await f.image('blue');
-    await f.business.commit(f.context, 'outfit', 1, 0, outfit(asset.mediaRef));
+    await f.business.commit(f.context, 'outfit', 2, 0, outfit(asset.mediaRef));
     await writeFile(path.join(f.context.userRoot, 'tavern-toolbox-server', 'media-v1', 'originals', asset.mediaRef.assetId + '.png'), 'corrupt');
     const detail = await f.governance.detail(f.context, asset.mediaRef.assetId);
     assert.equal(detail.asset.referenceState, 'active'); assert.equal(detail.health.original, 'corrupt');
@@ -111,7 +111,7 @@ test('delete rechecks raced references, serializes true overlap with Consumer wr
     const entered = new Promise(resolve => { started = resolve; });
     const barrier = new Promise(resolve => { release = resolve; });
     f.media.metadata = async (...args) => { started(); await barrier; return metadata(...args); };
-    const write = f.business.commit(f.context, 'outfit', 1, 0, outfit(used.mediaRef));
+    const write = f.business.commit(f.context, 'outfit', 2, 0, outfit(used.mediaRef));
     await entered;
     const deletion = f.governance.delete(f.context, used.mediaRef.assetId);
     release(); await write;
@@ -150,7 +150,7 @@ test('48-item batch scans each Consumer once and retains referenced/missing item
     const f = await fixture(t), assets = [];
     for (let n = 0; n < 47; n++) assets.push(await f.image({ r: n, g: 42, b: 99 }));
     const used = assets.at(-1);
-    await f.business.commit(f.context, 'outfit', 1, 0, outfit(used.mediaRef));
+    await f.business.commit(f.context, 'outfit', 2, 0, outfit(used.mediaRef));
     const scans = { localization: 0, outfit: 0 };
     for (const provider of [f.localization.referenceProvider, f.business.referenceProvider]) {
         const enumerate = provider.enumerate;
@@ -174,16 +174,16 @@ test('batch holds the coordinator across all deletions; a queued Consumer cannot
     const batch = f.governance.deleteBatch(f.context, [first.mediaRef.assetId, second.mediaRef.assetId]);
     await started;
     let settled = false;
-    const write = f.business.commit(f.context, 'outfit', 1, 0, outfit(second.mediaRef)).finally(() => { settled = true; });
+    const write = f.business.commit(f.context, 'outfit', 2, 0, outfit(second.mediaRef)).finally(() => { settled = true; });
     const rejected = assert.rejects(write, { code: 'BUSINESS_MEDIA_UNAVAILABLE' });
     try {
         await new Promise(resolve => setImmediate(resolve));
         assert.equal(settled, false);
-        assert.equal((await f.business.read(f.context, 'outfit', 1)).revision, 0);
+        assert.equal((await f.business.read(f.context, 'outfit', 2)).revision, 0);
     } finally { release(); }
     assert.equal((await batch).deletedCount, 2);
     await rejected;
-    assert.equal((await f.business.read(f.context, 'outfit', 1)).revision, 0);
+    assert.equal((await f.business.read(f.context, 'outfit', 2)).revision, 0);
 });
 
 test('incomplete batch analysis retains all existing items and scans the failed Provider once', async t => {
@@ -202,7 +202,7 @@ test('group analysis counts unique exclusive/shared/missing assets; atomic unlin
     for (const [n, mediaRef] of [first.mediaRef, first.mediaRef, shared.mediaRef].entries()) {
         revision = (await f.localization.bindExisting(f.context, { hostId: 'A.png', displayName: '角色 A', url: `https://example.com/${n}.png`, revision, mediaRef })).revision;
     }
-    await f.business.commit(f.context, 'outfit', 1, 0, outfit(shared.mediaRef));
+    await f.business.commit(f.context, 'outfit', 2, 0, outfit(shared.mediaRef));
     const group = (await f.governance.groups(f.context)).items.find(item => item.consumer === 'character');
     const plan = await f.governance.group(f.context, group.providerId, group.id);
     assert.deepEqual(plan.usage, { assetCount: 2, exclusiveCount: 1, sharedCount: 1, missingCount: 0 });
@@ -222,7 +222,7 @@ test('group cleanup preserves shared assets and handles concurrent reference int
     const mutate = f.localization.referenceProvider.mutateGroup;
     f.localization.referenceProvider.mutateGroup = async (...args) => {
         const result = await mutate(...args);
-        await f.business.commit(f.context, 'outfit', 1, 0, outfit(raced.mediaRef));
+        await f.business.commit(f.context, 'outfit', 2, 0, outfit(raced.mediaRef));
         return result;
     };
     const result = await f.governance.groupAction(f.context, { providerId: group.providerId, groupId: group.id, revision: group.revision, action: 'unlinkGroup', cleanup: true, hostId: 'A.png' });
@@ -266,7 +266,7 @@ test('group receipts count missing candidates once, separately from shared/retai
         for (const [n, mediaRef] of [missing.mediaRef, missing.mediaRef, free.mediaRef, shared.mediaRef].entries()) {
             revision = (await f.localization.bindExisting(f.context, { hostId: 'A.png', displayName: 'A', url: `https://example.com/${n}.png`, revision, mediaRef })).revision;
         }
-        await f.business.commit(f.context, 'outfit', 1, 0, outfit(shared.mediaRef));
+        await f.business.commit(f.context, 'outfit', 2, 0, outfit(shared.mediaRef));
         await f.media.delete(f.context, missing.mediaRef.assetId);
         f.governance.register({ id: 'broken-shared', consumer: 'worldbook', label: '世界书', enumerate: async () => [{ id: 'book', label: 'Book', lifecycle: 'active', revision: 0,
             references: [{ id: 'image', mediaRef: missing.mediaRef }] }] });
@@ -286,7 +286,7 @@ test('group receipts count missing candidates once, separately from shared/retai
 
 test('Group and paged inventory reads do not scan Storage; Summary still provides authoritative storage', async t => {
     const f = await fixture(t), asset = await f.image();
-    await f.business.commit(f.context, 'outfit', 1, 0, outfit(asset.mediaRef));
+    await f.business.commit(f.context, 'outfit', 2, 0, outfit(asset.mediaRef));
     let scans = 0; const storage = f.media.storage;
     f.media.storage = async (...args) => { scans++; return storage(...args); };
     assert.equal((await f.governance.group(f.context, 'outfit', 'coat')).usage.exclusiveCount, 1);
@@ -297,7 +297,7 @@ test('Group and paged inventory reads do not scan Storage; Summary still provide
 
 test('scoped Group queries reach smaller Consumers after a full Character page and always expose all Provider identities', async t => {
     const f = await fixture(t), asset = await f.image();
-    await f.business.commit(f.context, 'outfit', 1, 0, outfit(asset.mediaRef));
+    await f.business.commit(f.context, 'outfit', 2, 0, outfit(asset.mediaRef));
     const governance = createGovernance(f.media, f.coordinate);
     governance.register({ id: 'characters', consumer: 'character', label: '角色本地化', enumerate: async () => Array.from({ length: 31 }, (_, n) => ({ id: String(n), label: `角色 ${n}`, lifecycle: 'active', revision: 1, references: [{ id: 'image', mediaRef: asset.mediaRef }] })) });
     governance.register(f.business.referenceProvider);
@@ -419,7 +419,7 @@ test('single image detail does not enumerate the Asset catalog and still recheck
 
 test('Consumer browse reads only fresh asset identities and preserves missing-reference and deletion protection', async t => {
     const f = await fixture(t), asset = await f.image(), id = asset.mediaRef.assetId;
-    await f.business.commit(f.context, 'outfit', 1, 0, outfit(asset.mediaRef));
+    await f.business.commit(f.context, 'outfit', 2, 0, outfit(asset.mediaRef));
     t.mock.method(f.media, 'catalog', () => { throw Error('Consumer browse must not project full asset metadata'); });
     const groups = await f.governance.groups(f.context);
     assert.equal(groups.items[0].brokenCount, 0);

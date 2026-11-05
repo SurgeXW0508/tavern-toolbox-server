@@ -42,16 +42,59 @@ export class BusinessStore {
         } catch (error) { db.close(); throw error; }
     }
 
-    read(namespace, emptyDocument, schemaVersion) {
+    read(namespace, emptyDocument, schemaVersion, migration = null) {
         if (!NAMESPACE.test(namespace)) throw new BusinessFailure('INVALID_REQUEST');
         const row = this.db.prepare('SELECT * FROM collections WHERE namespace = ?').get(namespace);
         if (!row) return { namespace, schemaVersion, revision: 0, document: emptyDocument, updatedAt: null };
-        if (row.schema_version !== schemaVersion) throw new BusinessFailure('BUSINESS_SCHEMA_INCOMPATIBLE');
+        if (row.schema_version !== schemaVersion) {
+            if (!migration || row.schema_version !== migration.fromVersion)
+                throw new BusinessFailure('BUSINESS_SCHEMA_INCOMPATIBLE');
+            return this.migrate(namespace, emptyDocument, schemaVersion, migration);
+        }
         if (Buffer.byteLength(row.document) > MAX_BUSINESS_BYTES) throw new BusinessFailure('BUSINESS_DATA_INVALID');
         let document;
         try { document = JSON.parse(row.document); }
         catch { throw new BusinessFailure('BUSINESS_DATA_INVALID'); }
         return { namespace, schemaVersion, revision: row.revision, document, updatedAt: row.updated_at };
+    }
+
+    // Synchronous consumer conversion under the same lock as the version recheck.
+    // A competing reader sees the committed version and does not bump it again.
+    migrate(namespace, emptyDocument, schemaVersion, migration) {
+        let begun = false;
+        try {
+            this.db.exec('BEGIN IMMEDIATE'); begun = true;
+            const row = this.db.prepare('SELECT * FROM collections WHERE namespace = ?').get(namespace);
+            if (!row || row.schema_version === schemaVersion) {
+                const result = this.read(namespace, emptyDocument, schemaVersion);
+                migration.validateTarget(result.document);
+                this.db.exec('COMMIT'); begun = false;
+                return result;
+            }
+            if (row.schema_version !== migration.fromVersion || schemaVersion <= row.schema_version)
+                throw new BusinessFailure('BUSINESS_SCHEMA_INCOMPATIBLE');
+            if (Buffer.byteLength(row.document) > MAX_BUSINESS_BYTES)
+                throw new BusinessFailure('BUSINESS_DATA_INVALID');
+            let previous;
+            try { previous = JSON.parse(row.document); }
+            catch { throw new BusinessFailure('BUSINESS_DATA_INVALID'); }
+            migration.validateSource(previous);
+            const document = migration.convert(previous);
+            migration.validateTarget(document);
+            const json = JSON.stringify(document);
+            if (typeof json !== 'string' || Buffer.byteLength(json) > MAX_BUSINESS_BYTES)
+                throw new BusinessFailure('BUSINESS_TOO_LARGE');
+            const revision = row.revision + 1, updatedAt = new Date().toISOString();
+            if (!Number.isSafeInteger(row.revision) || row.revision < 0 || !Number.isSafeInteger(revision))
+                throw new BusinessFailure('BUSINESS_DATA_INVALID');
+            this.db.prepare(`UPDATE collections SET schema_version=?, revision=?, document=?, updated_at=?
+                WHERE namespace=?`).run(schemaVersion, revision, json, updatedAt, namespace);
+            this.db.exec('COMMIT'); begun = false;
+            return { namespace, schemaVersion, revision, document, updatedAt };
+        } catch (error) {
+            if (begun) this.db.exec('ROLLBACK');
+            throw error;
+        }
     }
 
     commit(namespace, schemaVersion, expectedRevision, document, validate) {

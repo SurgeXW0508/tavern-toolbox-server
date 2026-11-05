@@ -1,5 +1,13 @@
 # Server engineering and sustainable growth
 
+## Multi-Outfit Stage checkpoint
+
+Server baseline: `3ff8391dc20becb9574c182a13b606d541abaa9d`, stage/account-settings-sync, ahead main 7 / behind 0 when work began. Paired frontend baseline: `591d37dc4741ecc7f1241c94de09a24e9d836a06`, ahead 24 / behind 0. This checkpoint implements Outfit Business Schema 2 and a synchronous Consumer-owned migration hook; BUSINESS_STORAGE_VERSION remains 1 and Protocol remains 1.0. Unrelated account Consumers and settings have no schema changes. The exact paired Server commit is pinned by frontend CI; no main merge, version bump, Tag or Release is part of this work.
+
+Code evidence: 8 new real-SQLite migration cases cover two connections, once-only revision, source/conversion/target/capacity/SQL rollback, retry, corrupt/future documents and strict graph validation. The frontend `outfit-multi-http.paired.js` runs real ServerClient → HTTP → SQLite with concurrent first reads, old-client rejection, two-device Kit/CAS updates, exact original-image bytes and cold restart. Existing Business, Outfit Video, Media references, Governance and Localization regression paths remain covered. Local full-check attempts reproduce the previously documented abstract-socket policy-lock restriction; the diagnostic complete suite excluding the same eight affected cases passes 295 tests. No test or lock is weakened; exact-head remote Candidate CI and Privacy/Core checks remain mandatory. Browser and synthetic-device evidence does not establish physical ST/NAS/mobile acceptance.
+
+Deployment and rollback are specified in BUSINESS-COLLECTION.md. Independent review and actual host acceptance remain pending. Current status is implementation/code-side checkpoint, not release closeout.
+
 ## Advisor production Consumers (Phase 2A Stage)
 
 `account-documents/oracle-advisor.js` owns independent strict domain validators for two Documents and five record Consumers, registered only by trusted Core composition. No generic JSON/HTTP registration, Oracle placeholder schemas, model credentials or Runtime objects are accepted. Existing Document/Record transport, account isolation, permissions, CAS, quotas and Protocol 1.0 remain unchanged. The domain contract and exact budgets are in protocol/README.md. Guidance and Arc form one per-chat business aggregate to enforce their existing exclusive activation through one CAS; this is not a multi-record transaction or model-side-effect lock.
