@@ -4,12 +4,13 @@ import { DocumentFailure } from './validation.js';
 import { outfitSettingsConsumer } from './outfit.js';
 import { discoverySettingsConsumer, discoveryPromptsConsumer } from './worldbook-discovery.js';
 import { advisorSettingsConsumer, oraclePersonasConsumer } from './oracle-advisor.js';
+import { diagnosisSettingsConsumer } from './oracle-diagnosis.js';
 
 export { DocumentFailure } from './validation.js';
 const fail = code => { throw new DocumentFailure(code); };
 
 // Trusted composition only; no client-controlled registration or storage paths.
-export function createAccountDocuments(config, { consumers = [outfitSettingsConsumer, discoverySettingsConsumer, discoveryPromptsConsumer, advisorSettingsConsumer, oraclePersonasConsumer] } = {}) {
+export function createAccountDocuments(config, { consumers = [outfitSettingsConsumer, discoverySettingsConsumer, discoveryPromptsConsumer, advisorSettingsConsumer, oraclePersonasConsumer, diagnosisSettingsConsumer] } = {}) {
     const registered = new Map(consumers.map(consumer => [consumer.id, consumer]));
     let DatabaseSync, stopped = false;
     const consumerFor = (id, version) => {
