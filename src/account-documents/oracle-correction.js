@@ -339,11 +339,17 @@ export function transitionCorrectionApplication(prev, next) {
     if (from === 'released' && to === 'claimed') {
         return next.cycle === prev.cycle + 1 && next.operationId !== prev.operationId;
     }
+    if (from === 'released' && to === 'applied') {
+        return sameCandidate && prev.releaseReason === 'forced' && next.result !== null && next.result.verification !== 'imported';
+    }
     if (from === 'claimed' && to === 'claimed') {
         return next.cycle === prev.cycle && next.operationId !== prev.operationId;
     }
     if (from === 'claimed' && to === 'applying') {
         return sameCandidate;
+    }
+    if (from === 'claimed' && to === 'applied') {
+        return next.cycle === prev.cycle && next.operationId !== prev.operationId && next.result !== null && next.result.verification !== 'imported';
     }
     if (from === 'claimed' && to === 'released') {
         return sameOp && ['cancelled', 'lock-mismatch'].includes(next.releaseReason);
@@ -355,7 +361,7 @@ export function transitionCorrectionApplication(prev, next) {
         return sameCandidate && Boolean(next.recoveryReason);
     }
     if (from === 'applying' && to === 'released') {
-        return sameOp && ['cancelled', 'write-failed-unchanged', 'forced'].includes(next.releaseReason);
+        return sameOp && ['cancelled', 'lock-mismatch', 'write-failed-unchanged', 'forced'].includes(next.releaseReason);
     }
     if (from === 'recovery' && to === 'applied') {
         return sameCandidate && next.result !== null && next.result.verification !== 'imported';

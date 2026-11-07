@@ -302,14 +302,34 @@ test('Application state machine enforces legal transitions, operationId/cycle ru
         }),
         true,
     );
+    const forcedReleased = {
+        ...recovery,
+        state: 'released',
+        recoveryReason: null,
+        releaseReason: 'forced',
+    };
+    assert.equal(transitionCorrectionApplication(recovery, forcedReleased), true);
     assert.equal(
-        transitionCorrectionApplication(recovery, {
-            ...recovery,
-            state: 'released',
-            recoveryReason: null,
-            releaseReason: 'forced',
+        transitionCorrectionApplication(forcedReleased, {
+            ...forcedReleased,
+            state: 'applied',
+            releaseReason: null,
+            result: { sourceSwipeId: 0, appendedSwipeId: 1, appliedAt: 3100, verification: 'read-back' },
         }),
         true,
+        'late write completion from forced-released with same operationId can close claim to applied',
+    );
+    const nextClaimed = { ...forcedReleased, state: 'claimed', releaseReason: null, cycle: 3, operationId: 'op-4' };
+    assert.equal(transitionCorrectionApplication(forcedReleased, nextClaimed), true);
+    assert.equal(
+        transitionCorrectionApplication(nextClaimed, {
+            ...nextClaimed,
+            state: 'applied',
+            operationId: 'op-3',
+            result: { sourceSwipeId: 0, appendedSwipeId: 1, appliedAt: 3200, verification: 'read-back' },
+        }),
+        true,
+        'late write completion of previous operationId can preempt unapplied claimed state',
     );
     assert.equal(
         transitionCorrectionApplication(recovery, {
