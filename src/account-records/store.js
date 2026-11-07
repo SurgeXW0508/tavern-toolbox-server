@@ -8,7 +8,7 @@ const metadataColumns = 'record_id, schema_version, revision, deleted, created_a
 const metadata = r => ({ recordId: r.record_id, schemaVersion: r.schema_version, revision: r.revision,
     deleted: Boolean(r.deleted), createdAt: r.created_at, updatedAt: r.updated_at });
 
-export function createAccountRecords(config, { consumers = [] } = {}) {
+export function createAccountRecords(config, { consumers = [], now = () => Date.now() } = {}) {
     const registered = registerConsumers(consumers), cursorSecret = randomBytes(32);
     let DatabaseSync, stopped = false;
     const consumerFor = (id, version) => {
@@ -27,10 +27,13 @@ export function createAccountRecords(config, { consumers = [] } = {}) {
         try { encoded = JSON.stringify(payload); } catch { fail('RECORD_INVALID'); }
         if (typeof encoded !== 'string') fail('RECORD_INVALID');
         if (Buffer.byteLength(encoded, 'utf8') > c.maxBytes) fail('RECORD_TOO_LARGE');
-        try { const validated = c.validate(JSON.parse(encoded));
-            if (validated === false || validated?.then) fail('RECORD_INVALID'); }
-        catch { fail('RECORD_INVALID'); }
-        return encoded;
+        let parsed;
+        try {
+            parsed = JSON.parse(encoded);
+            const validated = c.validate(parsed);
+            if (validated === false || validated?.then) fail('RECORD_INVALID');
+        } catch { fail('RECORD_INVALID'); }
+        return { encoded, parsed };
     };
     const snapshot = (db, c, id) => {
         const row = db.prepare('SELECT * FROM records WHERE consumer=? AND record_id=?').get(c.id, id);
@@ -63,34 +66,75 @@ export function createAccountRecords(config, { consumers = [] } = {}) {
         if (!exact(body, deletion ? ['schemaVersion', 'expectedRevision'] : ['schemaVersion', 'expectedRevision', 'payload'])
             || !integer(body.expectedRevision)) fail('INVALID_REQUEST');
         const c = consumerFor(consumerId, body.schemaVersion), expected = body.expectedRevision;
-        const encoded = deletion ? null : encode(c, body.payload);
+        const prepared = deletion ? null : encode(c, body.payload);
         return use(context, db => {
-            const row = db.prepare('SELECT schema_version,revision,deleted,created_at,storage_bytes FROM records WHERE consumer=? AND record_id=?').get(c.id, id);
+            if (deletion && !c.deletable) fail('RECORD_DELETE_FORBIDDEN');
+            const columns = !deletion && c.transition
+                ? 'schema_version,revision,deleted,created_at,storage_bytes,payload'
+                : 'schema_version,revision,deleted,created_at,storage_bytes';
+            const row = db.prepare(`SELECT ${columns} FROM records WHERE consumer=? AND record_id=?`).get(c.id, id);
             if ((row?.revision || 0) !== expected) fail('REVISION_CONFLICT');
             if (row?.deleted) fail('RECORD_DELETED');
             if (row && row.schema_version !== c.schemaVersion) fail('RECORD_SCHEMA_INCOMPATIBLE');
             if (deletion && !row) fail('RECORD_NOT_FOUND');
             if (expected >= Number.MAX_SAFE_INTEGER) fail('RECORD_DATA_INVALID');
-            const now = Math.max(Date.now(), row?.created_at || 0);
+            if (!deletion && c.transition) {
+                let previous = null;
+                if (row) {
+                    try { previous = JSON.parse(row.payload); }
+                    catch { fail('RECORD_DATA_INVALID'); }
+                }
+                let allowed;
+                try { allowed = c.transition(previous, prepared.parsed); }
+                catch { fail('RECORD_TRANSITION_INVALID'); }
+                if (allowed === false || allowed?.then) fail('RECORD_TRANSITION_INVALID');
+            }
+            const timestamp = Math.max(now(), row?.created_at || 0);
+            const usage = db.prepare('SELECT records,tombstones,bytes FROM collections WHERE consumer=?').get(c.id)
+                || { records: 0, tombstones: 0, bytes: 0 };
             if (deletion) {
-                // Retain the charged bytes: deleting cannot free quota for churn.
-                db.prepare('UPDATE records SET deleted=1,payload=NULL,revision=revision+1,updated_at=? WHERE consumer=? AND record_id=?').run(now, c.id, id);
+                const tombstoneCharge = 256 + Buffer.byteLength(id, 'utf8');
+                const count = usage.records - 1;
+                let tombstones = usage.tombstones + 1;
+                let bytes = usage.bytes - row.storage_bytes + tombstoneCharge;
+                db.prepare('UPDATE records SET deleted=1,payload=NULL,revision=revision+1,updated_at=?,storage_bytes=? WHERE consumer=? AND record_id=?')
+                    .run(timestamp, tombstoneCharge, c.id, id);
+                if (tombstones > c.maxTombstones) {
+                    const needed = tombstones - c.maxTombstones;
+                    const cutoff = timestamp - c.tombstoneRetentionMs;
+                    const expired = db.prepare(
+                        'SELECT seq,storage_bytes FROM records WHERE consumer=? AND deleted=1 AND record_id<>? AND updated_at<=? ORDER BY updated_at ASC,seq ASC LIMIT ?'
+                    ).all(c.id, id, cutoff, needed);
+                    if (expired.length < needed) fail('RECORD_COLLECTION_FULL');
+                    const removeExpired = db.prepare('DELETE FROM records WHERE seq=?');
+                    for (const old of expired) {
+                        removeExpired.run(old.seq);
+                        tombstones -= 1;
+                        bytes -= old.storage_bytes;
+                    }
+                }
+                if (!integer(count) || !integer(tombstones) || !integer(bytes) || bytes > c.maxStorageBytes) fail('RECORD_DATA_INVALID');
+                db.prepare('INSERT INTO collections(consumer,records,tombstones,bytes) VALUES(?,?,?,?) ON CONFLICT(consumer) DO UPDATE SET records=excluded.records,tombstones=excluded.tombstones,bytes=excluded.bytes')
+                    .run(c.id, count, tombstones, bytes);
             } else {
+                const encoded = prepared.encoded;
                 const charge = 256 + Buffer.byteLength(id, 'utf8') + Buffer.byteLength(encoded, 'utf8');
-                const usage = db.prepare('SELECT records,bytes FROM collections WHERE consumer=?').get(c.id) || { records: 0, bytes: 0 };
-                const count = usage.records + (row ? 0 : 1), bytes = usage.bytes - (row?.storage_bytes || 0) + charge;
-                if (!integer(count) || !integer(bytes)) fail('RECORD_DATA_INVALID');
+                const count = usage.records + (row ? 0 : 1);
+                const tombstones = usage.tombstones;
+                const bytes = usage.bytes - (row?.storage_bytes || 0) + charge;
+                if (!integer(count) || !integer(tombstones) || !integer(bytes)) fail('RECORD_DATA_INVALID');
                 if (count > c.maxRecords || bytes > c.maxStorageBytes) fail('RECORD_COLLECTION_FULL');
                 db.prepare(`INSERT INTO records(consumer,record_id,schema_version,revision,deleted,created_at,updated_at,payload,storage_bytes)
                     VALUES(?,?,?,?,0,?,?,?,?) ON CONFLICT(consumer,record_id) DO UPDATE SET
                     revision=excluded.revision,updated_at=excluded.updated_at,payload=excluded.payload,storage_bytes=excluded.storage_bytes`)
-                    .run(c.id, id, c.schemaVersion, expected + 1, row?.created_at || now, now, encoded, charge);
-                db.prepare('INSERT INTO collections VALUES(?,?,?) ON CONFLICT(consumer) DO UPDATE SET records=excluded.records,bytes=excluded.bytes').run(c.id, count, bytes);
+                    .run(c.id, id, c.schemaVersion, expected + 1, row?.created_at || timestamp, timestamp, encoded, charge);
+                db.prepare('INSERT INTO collections(consumer,records,tombstones,bytes) VALUES(?,?,?,?) ON CONFLICT(consumer) DO UPDATE SET records=excluded.records,tombstones=excluded.tombstones,bytes=excluded.bytes')
+                    .run(c.id, count, tombstones, bytes);
             }
             return snapshot(db, c, id);
         }, true);
     }
-    const advertised = [...registered.values()].map(({ validate, ...c }) => c);
+    const advertised = [...registered.values()].map(({ validate, transition, tombstoneRetentionMs, ...c }) => c);
     return {
         consumer: id => consumerFor(id),
         definition: { id: 'account-records', version: '0.1.0', dependsOn: ['core'],

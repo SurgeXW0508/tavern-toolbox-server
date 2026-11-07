@@ -111,4 +111,4 @@ export function validateAdvisorRecord(consumer, p) {
 }
 export const advisorRecordConsumers = Object.freeze(['oracle-advisor-thread-index', 'oracle-advisor-threads', 'oracle-advisor-workspace', 'oracle-advisor-story', 'oracle-advisor-arc-workspace']
     .map(id => Object.freeze({ id, schemaVersion: 1, maxBytes: 2 * 1024 * 1024, maxRecords: id.endsWith('threads') ? 10000 : 4000,
-        maxStorageBytes: 128 * 1024 * 1024, validate: p => validateAdvisorRecord(id, p) })));
+        maxStorageBytes: 128 * 1024 * 1024, deletable: id.endsWith('threads'), validate: p => validateAdvisorRecord(id, p) })));

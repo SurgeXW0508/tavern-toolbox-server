@@ -42,7 +42,8 @@ export function attachAccountRecordRoutes(router, { records, config, send, failu
             const status = { INVALID_REQUEST: 400, RECORD_ID_INVALID: 400, RECORD_CURSOR_INVALID: 400,
                 RECORD_INVALID: 422, RECORD_TOO_LARGE: 413, RECORD_COLLECTION_FULL: 409,
                 RECORD_CONSUMER_NOT_REGISTERED: 404, RECORD_NOT_FOUND: 404,
-                REVISION_CONFLICT: 409, RECORD_DELETED: 409, RECORD_SCHEMA_INCOMPATIBLE: 409,
+                REVISION_CONFLICT: 409, RECORD_DELETED: 409, RECORD_DELETE_FORBIDDEN: 409,
+                RECORD_TRANSITION_INVALID: 409, RECORD_SCHEMA_INCOMPATIBLE: 409,
                 CONTEXT_CHANGED: 409, PROTOCOL_INCOMPATIBLE: 409, CSRF_REJECTED: 403 }[code] || 503;
             return send(res, status, failure(code, '账户记录操作未完成；请重新读取核对，未自动重试', mutation && status >= 500 ? 'unknown' : 'notApplicable'), requestId, true, 4096, true);
         }

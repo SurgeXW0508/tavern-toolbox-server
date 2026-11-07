@@ -121,6 +121,7 @@ export const diagnosisRecordConsumers = Object.freeze([
         maxBytes: 64 * 1024,
         maxRecords: 4000,
         maxStorageBytes: 32 * 1024 * 1024,
+        deletable: false,
         validate: p => validateDiagnosisRecord('oracle-diagnosis-thread-index', p),
     }),
     Object.freeze({
@@ -129,6 +130,7 @@ export const diagnosisRecordConsumers = Object.freeze([
         maxBytes: 2 * 1024 * 1024,
         maxRecords: 10000,
         maxStorageBytes: 160 * 1024 * 1024,
+        deletable: true,
         validate: p => validateDiagnosisRecord('oracle-diagnosis-threads', p),
     }),
     Object.freeze({
@@ -137,6 +139,7 @@ export const diagnosisRecordConsumers = Object.freeze([
         maxBytes: 256 * 1024,
         maxRecords: 4000,
         maxStorageBytes: 32 * 1024 * 1024,
+        deletable: false,
         validate: p => validateDiagnosisRecord('oracle-diagnosis-lore-selection', p),
     }),
 ]);
