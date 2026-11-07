@@ -4,6 +4,7 @@ import { attachAccountDocumentRoutes } from './account-documents/routes.js';
 import { createAccountRecords } from './account-records/store.js';
 import { advisorRecordConsumers } from './account-documents/oracle-advisor.js';
 import { diagnosisRecordConsumers } from './account-documents/oracle-diagnosis.js';
+import { correctionRecordConsumers } from './account-documents/oracle-correction.js';
 import { attachAccountRecordRoutes } from './account-records/routes.js';
 import { attachAiConnectionRoutes } from './ai-connections/routes.js';
 import { createOutfitVideo } from './outfit-video/index.js';
@@ -88,8 +89,8 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(aiConnections.definition);
     const documents = createAccountDocuments(config);
     registry.register(documents.definition);
-    // Only audited Advisor and Diagnosis Consumers in production; tests may inject a registry.
-    const records = createAccountRecords(config, accountRecordsOptions || { consumers: [...advisorRecordConsumers, ...diagnosisRecordConsumers] });
+    // Only audited Oracle Consumers in production; tests may inject a registry.
+    const records = createAccountRecords(config, accountRecordsOptions || { consumers: [...advisorRecordConsumers, ...diagnosisRecordConsumers, ...correctionRecordConsumers] });
     registry.register(records.definition);
     const preferences = createAudioRoutingPreferences(config);
     registry.register(preferences.definition);
