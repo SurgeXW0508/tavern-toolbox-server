@@ -269,25 +269,57 @@ test('Application state machine enforces legal transitions, operationId/cycle ru
         ...applying,
         state: 'applied',
         result: { sourceSwipeId: 0, appendedSwipeId: 1, appliedAt: 2000, verification: 'read-back' },
+        history: [{ cycle: 1, operationId: 'op-1', candidateId: 'correction-cand_1', outcome: 'takeover', at: 1500 }],
     };
     assert.equal(transitionCorrectionApplication(applying, applied), true);
     assert.equal(transitionCorrectionApplication(takeover, applied), false, 'cannot skip applying');
 
-    // Late history-only append (applied-after-takeover) preserves state.
-    const withAudit = {
+    // Late write after takeover transitions applied -> recovery (and rejects unknown operationId)
+    const takeoverConflictRecovery = {
         ...applied,
-        history: [{ cycle: 1, operationId: 'op-1', candidateId: 'correction-cand_1', outcome: 'applied-after-takeover', at: 2100 }],
+        state: 'recovery',
+        result: null,
+        recoveryReason: '检测到跨设备并发写入冲突',
+        history: [
+            ...applied.history,
+            { cycle: 1, operationId: 'op-1', candidateId: 'correction-cand_1', outcome: 'applied-after-takeover', at: 2100 },
+        ],
     };
-    assert.equal(transitionCorrectionApplication(applied, withAudit), true);
+    assert.equal(transitionCorrectionApplication(applied, takeoverConflictRecovery), true);
+    assert.equal(
+        transitionCorrectionApplication(applied, {
+            ...takeoverConflictRecovery,
+            history: [
+                ...applied.history,
+                { cycle: 1, operationId: 'op-unknown', candidateId: 'correction-cand_1', outcome: 'applied-after-takeover', at: 2100 },
+            ],
+        }),
+        false,
+        'applied -> recovery rejects operationId not present in prior history',
+    );
 
-    const reopened = { ...withAudit, state: 'released', result: null, releaseReason: 'reopened' };
-    assert.equal(transitionCorrectionApplication(withAudit, reopened), true);
-    assert.equal(transitionCorrectionApplication(withAudit, { ...reopened, releaseReason: 'forced' }), false);
+    // Recovery can reconcile to the prior operation from history (op-1)
+    const reconciledFromConflict = {
+        ...takeoverConflictRecovery,
+        state: 'applied',
+        operationId: 'op-1',
+        recoveryReason: null,
+        result: { sourceSwipeId: 0, appendedSwipeId: 1, appliedAt: 2050, verification: 'marker' },
+        history: [
+            ...takeoverConflictRecovery.history,
+            { cycle: 1, operationId: 'op-1', candidateId: 'correction-cand_1', outcome: 'recovered-marker', at: 2200 },
+        ],
+    };
+    assert.equal(transitionCorrectionApplication(takeoverConflictRecovery, reconciledFromConflict), true);
+
+    const reopened = { ...reconciledFromConflict, state: 'released', result: null, releaseReason: 'reopened' };
+    assert.equal(transitionCorrectionApplication(reconciledFromConflict, reopened), true);
+    assert.equal(transitionCorrectionApplication(reconciledFromConflict, { ...reopened, releaseReason: 'forced' }), false);
 
     const reClaimed = { ...reopened, state: 'claimed', releaseReason: null, cycle: 2, operationId: 'op-3' };
     assert.equal(transitionCorrectionApplication(reopened, reClaimed), true);
     assert.equal(transitionCorrectionApplication(reopened, { ...reClaimed, cycle: 1 }), false);
-    assert.equal(transitionCorrectionApplication(reopened, { ...reClaimed, operationId: 'op-2' }), false);
+    assert.equal(transitionCorrectionApplication(reopened, { ...reClaimed, operationId: 'op-1' }), false);
 
     // applying -> recovery -> applied or released(forced)
     const applying2 = { ...reClaimed, state: 'applying' };
@@ -307,6 +339,10 @@ test('Application state machine enforces legal transitions, operationId/cycle ru
         state: 'released',
         recoveryReason: null,
         releaseReason: 'forced',
+        history: [
+            ...recovery.history,
+            { cycle: 2, operationId: 'op-3', candidateId: 'correction-cand_1', outcome: 'forced', at: 3050 },
+        ],
     };
     assert.equal(transitionCorrectionApplication(recovery, forcedReleased), true);
     assert.equal(
@@ -315,6 +351,10 @@ test('Application state machine enforces legal transitions, operationId/cycle ru
             state: 'applied',
             releaseReason: null,
             result: { sourceSwipeId: 0, appendedSwipeId: 1, appliedAt: 3100, verification: 'read-back' },
+            history: [
+                ...forcedReleased.history,
+                { cycle: 2, operationId: 'op-3', candidateId: 'correction-cand_1', outcome: 'applied-after-release', at: 3100 },
+            ],
         }),
         true,
         'late write completion from forced-released with same operationId can close claim to applied',
@@ -327,9 +367,27 @@ test('Application state machine enforces legal transitions, operationId/cycle ru
             state: 'applied',
             operationId: 'op-3',
             result: { sourceSwipeId: 0, appendedSwipeId: 1, appliedAt: 3200, verification: 'read-back' },
+            history: [
+                ...nextClaimed.history,
+                { cycle: 3, operationId: 'op-3', candidateId: 'correction-cand_1', outcome: 'applied-preempted-claim', at: 3200 },
+            ],
         }),
         true,
-        'late write completion of previous operationId can preempt unapplied claimed state',
+        'late write completion of previous operationId in history can preempt unapplied claimed state',
+    );
+    assert.equal(
+        transitionCorrectionApplication(nextClaimed, {
+            ...nextClaimed,
+            state: 'applied',
+            operationId: 'op-never-claimed',
+            result: { sourceSwipeId: 0, appendedSwipeId: 1, appliedAt: 3200, verification: 'read-back' },
+            history: [
+                ...nextClaimed.history,
+                { cycle: 3, operationId: 'op-never-claimed', candidateId: 'correction-cand_1', outcome: 'applied-preempted-claim', at: 3200 },
+            ],
+        }),
+        false,
+        'claimed -> applied rejects operationId not present in prior history',
     );
     assert.equal(
         transitionCorrectionApplication(recovery, {

@@ -314,33 +314,46 @@ export function transitionCorrectionApplication(prev, next) {
         return false;
     }
 
-    // Late history-only audit append (e.g. applied-after-takeover) without altering current claim state.
-    if (
-        prev.state === next.state
-        && prev.cycle === next.cycle
-        && prev.operationId === next.operationId
-        && prev.candidateId === next.candidateId
-        && prev.fullTextDigest === next.fullTextDigest
-        && prev.holder === next.holder
-        && JSON.stringify(prev.result) === JSON.stringify(next.result)
-        && prev.releaseReason === next.releaseReason
-        && prev.recoveryReason === next.recoveryReason
-    ) {
-        return next.history.length >= 1 && next.history.at(-1)?.outcome === 'applied-after-takeover';
-    }
-
     const from = prev.state;
     const to = next.state;
     const sameOp = next.cycle === prev.cycle && next.operationId === prev.operationId;
     const sameCandidate = sameOp
         && next.candidateId === prev.candidateId
         && next.fullTextDigest === prev.fullTextDigest;
+    const lastHistory = next.history.at(-1);
+
+    const isTakeoverConflict = Boolean(lastHistory)
+        && lastHistory.outcome === 'applied-after-takeover'
+        && lastHistory.operationId !== prev.operationId
+        && prev.history.some(
+            h => h.operationId === lastHistory.operationId
+                && h.candidateId === lastHistory.candidateId
+                && ['takeover', 'forced'].includes(h.outcome),
+        );
+
+    const isHistoryReconcile = next.cycle === prev.cycle
+        && next.result !== null
+        && next.result.verification !== 'imported'
+        && prev.history.some(
+            h => h.operationId === next.operationId && h.candidateId === next.candidateId,
+        )
+        && Boolean(lastHistory)
+        && lastHistory.operationId === next.operationId
+        && lastHistory.candidateId === next.candidateId
+        && lastHistory.outcome.startsWith('recovered-');
 
     if (from === 'released' && to === 'claimed') {
         return next.cycle === prev.cycle + 1 && next.operationId !== prev.operationId;
     }
     if (from === 'released' && to === 'applied') {
-        return sameCandidate && prev.releaseReason === 'forced' && next.result !== null && next.result.verification !== 'imported';
+        return sameCandidate
+            && prev.releaseReason === 'forced'
+            && next.result !== null
+            && next.result.verification !== 'imported'
+            && Boolean(lastHistory)
+            && lastHistory.operationId === next.operationId
+            && lastHistory.candidateId === next.candidateId
+            && lastHistory.outcome === 'applied-after-release';
     }
     if (from === 'claimed' && to === 'claimed') {
         return next.cycle === prev.cycle && next.operationId !== prev.operationId;
@@ -349,7 +362,20 @@ export function transitionCorrectionApplication(prev, next) {
         return sameCandidate;
     }
     if (from === 'claimed' && to === 'applied') {
-        return next.cycle === prev.cycle && next.operationId !== prev.operationId && next.result !== null && next.result.verification !== 'imported';
+        const inPrevHistory = prev.history.some(
+            h => h.operationId === next.operationId
+                && h.candidateId === next.candidateId
+                && ['takeover', 'forced'].includes(h.outcome),
+        );
+        return next.cycle === prev.cycle
+            && next.operationId !== prev.operationId
+            && next.result !== null
+            && next.result.verification !== 'imported'
+            && inPrevHistory
+            && Boolean(lastHistory)
+            && lastHistory.operationId === next.operationId
+            && lastHistory.candidateId === next.candidateId
+            && lastHistory.outcome === 'applied-preempted-claim';
     }
     if (from === 'claimed' && to === 'released') {
         return sameOp && ['cancelled', 'lock-mismatch'].includes(next.releaseReason);
@@ -363,11 +389,25 @@ export function transitionCorrectionApplication(prev, next) {
     if (from === 'applying' && to === 'released') {
         return sameOp && ['cancelled', 'lock-mismatch', 'write-failed-unchanged', 'forced'].includes(next.releaseReason);
     }
+    if (from === 'recovery' && to === 'recovery') {
+        return sameCandidate && Boolean(next.recoveryReason) && isTakeoverConflict;
+    }
     if (from === 'recovery' && to === 'applied') {
-        return sameCandidate && next.result !== null && next.result.verification !== 'imported';
+        return (sameCandidate && next.result !== null && next.result.verification !== 'imported')
+            || isHistoryReconcile;
     }
     if (from === 'recovery' && to === 'released') {
         return sameOp && next.releaseReason === 'forced';
+    }
+    if (from === 'applied' && to === 'recovery') {
+        const isConflictDetected = Boolean(lastHistory)
+            && lastHistory.outcome === 'conflict-detected'
+            && lastHistory.operationId === prev.operationId
+            && lastHistory.candidateId === prev.candidateId;
+        return sameCandidate && Boolean(next.recoveryReason) && (isTakeoverConflict || isConflictDetected);
+    }
+    if (from === 'applied' && to === 'applied') {
+        return next.operationId !== prev.operationId && isHistoryReconcile;
     }
     if (from === 'applied' && to === 'released') {
         return sameOp && next.releaseReason === 'reopened';
