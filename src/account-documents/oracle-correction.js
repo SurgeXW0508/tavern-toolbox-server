@@ -247,11 +247,11 @@ function validateApplicationRecord(p) {
     one(p.state, ['claimed', 'applying', 'applied', 'recovery', 'released']);
     int(p.cycle, 1, 1000000);
     str(p.operationId, 64, false);
-    if (!/^op-[A-Za-z0-9_-]{1,60}$/.test(p.operationId)) bad();
+    if (!/^op-[A-Za-z0-9._:-]{1,60}$/.test(p.operationId)) bad();
     candidateId(p.candidateId);
     hex64(p.fullTextDigest);
     str(p.holder, 40, false);
-    if (!/^[A-Za-z0-9:_-]{1,40}$/.test(p.holder)) bad();
+    if (!/^[A-Za-z0-9._:-]{1,40}$/.test(p.holder)) bad();
     int(p.updatedAt);
 
     if (p.state === 'applied') {
@@ -286,14 +286,47 @@ function validateApplicationRecord(p) {
     }
 
     array(p.history, 8, h => {
-        keys(h, 'cycle,operationId,candidateId,outcome,at');
+        if (!obj(h)) bad();
+        const allowed = new Set(['cycle', 'operationId', 'candidateId', 'fullTextDigest', 'holder', 'outcome', 'at']);
+        const required = ['cycle', 'operationId', 'candidateId', 'outcome', 'at'];
+        const hKeys = Object.keys(h);
+        if (hKeys.some(k => !allowed.has(k)) || required.some(k => !(k in h))) bad();
         int(h.cycle, 1, 1000000);
         str(h.operationId, 64, false);
-        if (!/^op-[A-Za-z0-9_-]{1,60}$/.test(h.operationId)) bad();
+        if (!/^op-[A-Za-z0-9._:-]{1,60}$/.test(h.operationId)) bad();
         candidateId(h.candidateId);
+        if (h.fullTextDigest !== undefined) hex64(h.fullTextDigest);
+        if (h.holder !== undefined) {
+            str(h.holder, 40, false);
+            if (!/^[A-Za-z0-9._:-]{1,40}$/.test(h.holder)) bad();
+        }
         str(h.outcome, 80, false);
         int(h.at);
     });
+}
+
+export function hasUnresolvedConflict(record) {
+    const history = Array.isArray(record?.history) ? record.history : [];
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+        const outcome = String(history[i]?.outcome || '');
+        if (outcome === 'applied-after-takeover' || outcome === 'conflict-detected') {
+            return true;
+        }
+        if (outcome.startsWith('recovered-') || outcome === 'reopened' || outcome === 'forced') {
+            return false;
+        }
+    }
+    return false;
+}
+
+function hasPriorHistoryOp(prev, operationId, candidateId, fullTextDigest, allowedOutcomes = null) {
+    const history = Array.isArray(prev?.history) ? prev.history : [];
+    return history.some(
+        h => h.operationId === operationId
+            && h.candidateId === candidateId
+            && (!h.fullTextDigest || !fullTextDigest || h.fullTextDigest === fullTextDigest)
+            && (!allowedOutcomes || allowedOutcomes.includes(h.outcome)),
+    );
 }
 
 export function transitionCorrectionApplication(prev, next) {
@@ -316,6 +349,10 @@ export function transitionCorrectionApplication(prev, next) {
 
     const from = prev.state;
     const to = next.state;
+    if (to === 'applied' && hasUnresolvedConflict(next)) {
+        return false;
+    }
+
     const sameOp = next.cycle === prev.cycle && next.operationId === prev.operationId;
     const sameCandidate = sameOp
         && next.candidateId === prev.candidateId
@@ -325,34 +362,46 @@ export function transitionCorrectionApplication(prev, next) {
     const isTakeoverConflict = Boolean(lastHistory)
         && lastHistory.outcome === 'applied-after-takeover'
         && lastHistory.operationId !== prev.operationId
-        && prev.history.some(
-            h => h.operationId === lastHistory.operationId
-                && h.candidateId === lastHistory.candidateId
-                && ['takeover', 'forced'].includes(h.outcome),
+        && hasPriorHistoryOp(prev, lastHistory.operationId, lastHistory.candidateId, lastHistory.fullTextDigest, ['takeover', 'forced']);
+
+    const isSameOpTakeoverConflict = hasUnresolvedConflict(prev)
+        && Boolean(lastHistory)
+        && lastHistory.outcome === 'applied-after-takeover'
+        && lastHistory.operationId === prev.operationId
+        && lastHistory.candidateId === prev.candidateId
+        && (!lastHistory.fullTextDigest || lastHistory.fullTextDigest === prev.fullTextDigest)
+        && !prev.history.some(
+            h => h.operationId === prev.operationId && h.outcome === 'applied-after-takeover',
         );
 
-    const isHistoryReconcile = next.cycle === prev.cycle
-        && next.result !== null
-        && next.result.verification !== 'imported'
-        && prev.history.some(
-            h => h.operationId === next.operationId && h.candidateId === next.candidateId,
-        )
+    const isVerifiedRecoverResult = next.result !== null
+        && ['marker', 'marker-text-modified', 'message-moved'].includes(next.result.verification)
         && Boolean(lastHistory)
         && lastHistory.operationId === next.operationId
         && lastHistory.candidateId === next.candidateId
-        && lastHistory.outcome.startsWith('recovered-');
+        && (!lastHistory.fullTextDigest || lastHistory.fullTextDigest === next.fullTextDigest)
+        && lastHistory.outcome === `recovered-${next.result.verification}`;
+
+    const isHistoryReconcile = next.cycle === prev.cycle
+        && isVerifiedRecoverResult
+        && hasPriorHistoryOp(prev, next.operationId, next.candidateId, next.fullTextDigest);
 
     if (from === 'released' && to === 'claimed') {
         return next.cycle === prev.cycle + 1 && next.operationId !== prev.operationId;
     }
     if (from === 'released' && to === 'applied') {
-        return sameCandidate
-            && prev.releaseReason === 'forced'
+        const isSameOpForcedLate = sameCandidate && prev.releaseReason === 'forced';
+        const isPriorOpAfterAbortedClaim = next.cycle === prev.cycle
+            && next.operationId !== prev.operationId
+            && ['cancelled', 'lock-mismatch', 'write-failed-unchanged', 'forced'].includes(prev.releaseReason)
+            && hasPriorHistoryOp(prev, next.operationId, next.candidateId, next.fullTextDigest, ['takeover', 'forced']);
+        return (isSameOpForcedLate || isPriorOpAfterAbortedClaim)
             && next.result !== null
-            && next.result.verification !== 'imported'
+            && next.result.verification === 'read-back'
             && Boolean(lastHistory)
             && lastHistory.operationId === next.operationId
             && lastHistory.candidateId === next.candidateId
+            && (!lastHistory.fullTextDigest || lastHistory.fullTextDigest === next.fullTextDigest)
             && lastHistory.outcome === 'applied-after-release';
     }
     if (from === 'claimed' && to === 'claimed') {
@@ -362,37 +411,39 @@ export function transitionCorrectionApplication(prev, next) {
         return sameCandidate;
     }
     if (from === 'claimed' && to === 'applied') {
-        const inPrevHistory = prev.history.some(
-            h => h.operationId === next.operationId
-                && h.candidateId === next.candidateId
-                && ['takeover', 'forced'].includes(h.outcome),
-        );
         return next.cycle === prev.cycle
             && next.operationId !== prev.operationId
             && next.result !== null
-            && next.result.verification !== 'imported'
-            && inPrevHistory
+            && next.result.verification === 'read-back'
+            && hasPriorHistoryOp(prev, next.operationId, next.candidateId, next.fullTextDigest, ['takeover', 'forced'])
             && Boolean(lastHistory)
             && lastHistory.operationId === next.operationId
             && lastHistory.candidateId === next.candidateId
+            && (!lastHistory.fullTextDigest || lastHistory.fullTextDigest === next.fullTextDigest)
             && lastHistory.outcome === 'applied-preempted-claim';
     }
     if (from === 'claimed' && to === 'released') {
         return sameOp && ['cancelled', 'lock-mismatch'].includes(next.releaseReason);
     }
     if (from === 'applying' && to === 'applied') {
-        return sameCandidate && next.result !== null && next.result.verification !== 'imported';
+        return sameCandidate
+            && !hasUnresolvedConflict(prev)
+            && next.result !== null
+            && next.result.verification !== 'imported';
     }
     if (from === 'applying' && to === 'recovery') {
-        return sameCandidate && Boolean(next.recoveryReason);
+        return sameCandidate && Boolean(next.recoveryReason) && (!hasUnresolvedConflict(next) || isTakeoverConflict);
     }
     if (from === 'applying' && to === 'released') {
         return sameOp && ['cancelled', 'lock-mismatch', 'write-failed-unchanged', 'forced'].includes(next.releaseReason);
     }
     if (from === 'recovery' && to === 'recovery') {
-        return sameCandidate && Boolean(next.recoveryReason) && isTakeoverConflict;
+        return sameCandidate && Boolean(next.recoveryReason) && (isTakeoverConflict || isSameOpTakeoverConflict);
     }
     if (from === 'recovery' && to === 'applied') {
+        if (hasUnresolvedConflict(prev)) {
+            return (sameCandidate && isVerifiedRecoverResult) || isHistoryReconcile;
+        }
         return (sameCandidate && next.result !== null && next.result.verification !== 'imported')
             || isHistoryReconcile;
     }
