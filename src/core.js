@@ -92,6 +92,7 @@ export async function createCore({ policyOptions, registerModules, networkOption
     registry.register(documents.definition);
     // Only audited Oracle Consumers in production; tests may inject a registry.
     const records = createAccountRecords(config, accountRecordsOptions || {
+        now,
         consumers: [
             ...advisorRecordConsumers,
             ...diagnosisRecordConsumers,

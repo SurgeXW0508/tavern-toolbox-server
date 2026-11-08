@@ -1,7 +1,11 @@
 export class RecordFailure extends Error {
-    constructor(code) { super(code); this.code = code; }
+    constructor(code, details = {}) {
+        super(code);
+        this.code = code;
+        this.details = details && typeof details === 'object' ? details : {};
+    }
 }
-export const fail = code => { throw new RecordFailure(code); };
+export const fail = (code, details = {}) => { throw new RecordFailure(code, details); };
 export const recordIdValid = id => typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/.test(id);
 export const integer = (n, min = 0) => Number.isSafeInteger(n) && n >= min;
 export const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v)
@@ -19,9 +23,11 @@ export function registerConsumers(consumers) {
         const maxTombstones = c?.maxTombstones === undefined ? (deletable ? c?.maxRecords : 0) : c.maxTombstones;
         const tombstoneRetentionMs = c?.tombstoneRetentionMs === undefined ? DEFAULT_TOMBSTONE_RETENTION_MS : c.tombstoneRetentionMs;
         const transition = c?.transition === undefined ? null : c.transition;
+        const projectRead = c?.projectRead === undefined ? null : c.projectRead;
         if (!c || typeof c.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(c.id) || registered.has(c.id)
             || !integer(c.schemaVersion, 1) || typeof c.validate !== 'function'
             || (transition !== null && typeof transition !== 'function')
+            || (projectRead !== null && typeof projectRead !== 'function')
             || typeof deletable !== 'boolean'
             || !integer(c.maxBytes, 1) || c.maxBytes > 2 * 1024 * 1024
             || !integer(c.maxRecords, 1) || c.maxRecords > 100000
@@ -34,6 +40,7 @@ export function registerConsumers(consumers) {
             schemaVersion: c.schemaVersion,
             validate: c.validate,
             transition,
+            projectRead,
             maxBytes: c.maxBytes,
             maxRecords: c.maxRecords,
             maxStorageBytes: c.maxStorageBytes,

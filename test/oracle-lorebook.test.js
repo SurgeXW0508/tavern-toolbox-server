@@ -9,6 +9,8 @@ import { advisorRecordConsumers } from '../src/account-documents/oracle-advisor.
 import { diagnosisRecordConsumers } from '../src/account-documents/oracle-diagnosis.js';
 import { correctionRecordConsumers } from '../src/account-documents/oracle-correction.js';
 import {
+    LOREBOOK_LOCK_STALE_AFTER_MS,
+    LOREBOOK_LOCK_MIGRATION_RECORD_ID,
     lorebookRecordConsumers,
     validateLorebookSettings,
     validateLorebookRecord,
@@ -16,10 +18,12 @@ import {
     transitionLorebookExecution,
     transitionLorebookExecStep,
     transitionLorebookBookLock,
+    projectLorebookBookLockRead,
 } from '../src/account-documents/oracle-lorebook.js';
 
 const config = { policy: { core: { allowedOrigins: ['https://example.test'] } } };
 const identity = { kind: 'character', owner: 'Alice.png', chat: 'chat-1' };
+const bookResourceIdentity = { kind: 'character', owner: 'lorebook-resource', chat: '人物' };
 
 const protectedSources = [
     'safety-contract',
@@ -223,15 +227,24 @@ const executionRecord = (overrides = {}) => ({
 
 const bookLockRecord = (overrides = {}) => ({
     schema: 1,
-    identity: { ...identity },
+    identity: { ...bookResourceIdentity },
     book: '人物',
+    epoch: 1,
+    fence: 1,
     holder: {
         batchId: 'lorebook-review-1',
         threadId: 'thread-1',
         attemptId: 'att-1',
+        operationId: 'att-1',
+        runtimeId: 'rt-1',
+        epoch: 1,
+        fence: 1,
         deviceId: 'dev-1',
         mode: 'apply',
+        phase: 'preparing',
+        chat: 'chat-1',
         acquiredAt: 1000,
+        heartbeatAt: 1000,
     },
     ledger: [],
     history: [
@@ -239,7 +252,11 @@ const bookLockRecord = (overrides = {}) => ({
             action: 'acquire',
             batchId: 'lorebook-review-1',
             attemptId: 'att-1',
+            operationId: 'att-1',
+            runtimeId: 'rt-1',
+            epoch: 1,
             deviceId: 'dev-1',
+            phase: 'preparing',
             at: 1000,
             reason: '',
         },
@@ -297,7 +314,9 @@ test('Lorebook batch, execution, step and book-lock state machines enforce freez
     });
     assert.equal((await docs.read(user, 'oracle-lorebook-settings', 1)).revision, 1);
 
+    let fakeNow = 1000;
     const records = createAccountRecords(config, {
+        now: () => fakeNow,
         consumers: [
             ...advisorRecordConsumers,
             ...diagnosisRecordConsumers,
@@ -330,6 +349,13 @@ test('Lorebook batch, execution, step and book-lock state machines enforce freez
         attemptId: 'att-1',
         holderDeviceId: 'dev-1',
         baseline: stepBaseline(),
+        execution: {
+            state: 'preparing',
+            operationId: 'att-1',
+            runtimeId: 'rt-1',
+            deviceId: 'dev-1',
+            epoch: 1,
+        },
     });
     assert.equal(transitionLorebookExecStep(sPending, sWriting), true);
 
@@ -340,6 +366,12 @@ test('Lorebook batch, execution, step and book-lock state machines enforce freez
 
     const sUnknown = structuredClone(sWriting);
     sUnknown.state = 'unknown';
+    sUnknown.execution = {
+        ...sWriting.execution,
+        state: 'ended',
+        endedBy: 'threw',
+        endedAt: 1015,
+    };
     assert.equal(transitionLorebookExecStep(sWriting, sUnknown), true);
 
     // Unknown -> verified requires reconciliation evidence
@@ -407,49 +439,344 @@ test('Lorebook batch, execution, step and book-lock state machines enforce freez
     assert.equal(transitionLorebookExecStep(sConflict, sVerified), false);
     assert.equal(transitionLorebookExecStep(sConflict, sPruned), false);
 
+    // Resolution while execution is still in-flight is rejected (§3.3)
+    const sConflictInFlightResolved = structuredClone(sConflict);
+    sConflictInFlightResolved.execution = {
+        state: 'in-flight',
+        operationId: 'att-1',
+        runtimeId: 'rt-1',
+        deviceId: 'dev-1',
+        epoch: 1,
+    };
+    sConflictInFlightResolved.conflictResolution = {
+        resolvedByDeviceId: 'dev-2',
+        resolvedAt: 1060,
+        resolution: 'manual-fixed',
+        note: '尝试在途期间消解',
+    };
+    assert.equal(transitionLorebookExecStep(sConflict, sConflictInFlightResolved), false);
+
     const sConflictResolved = structuredClone(sConflict);
     sConflictResolved.conflictResolution = {
         resolvedByDeviceId: 'dev-2',
         resolvedAt: 1060,
         resolution: 'manual-fixed',
+        basedOnFingerprint: 'fp-book-ext',
+        operationId: 'att-1',
+        note: '已在酒馆世界书中人工核对修复',
+    };
+    sConflictResolved.resolution = {
+        state: 'resolved',
+        choice: 'manual-fixed',
+        basedOnFingerprint: 'fp-book-ext',
+        resolvedAt: 1060,
+        resolvedBy: 'dev-2',
+        operationId: 'att-1',
         note: '已在酒馆世界书中人工核对修复',
     };
     assert.equal(transitionLorebookExecStep(sConflict, sConflictResolved), true);
+
+    // Late completion reopens resolved conflict (S10) and enforces append-only lateCompletions
+    const sConflictReopened = structuredClone(sConflictResolved);
+    sConflictReopened.conflictResolution = null;
+    sConflictReopened.resolution = { state: 'none' };
+    sConflictReopened.lateCompletions = [
+        {
+            operationId: 'att-1',
+            endedBy: 'returned',
+            observedFingerprint: 'fp-book-late',
+            at: 1070,
+        },
+    ];
+    assert.equal(transitionLorebookExecStep(sConflictResolved, sConflictReopened), true);
+    // Stripping lateCompletions is rejected
+    const sConflictStripLate = structuredClone(sConflictReopened);
+    sConflictStripLate.lateCompletions = [];
+    assert.equal(transitionLorebookExecStep(sConflictReopened, sConflictStripLate), false);
+
     const sConflictPruned = structuredClone(sConflictResolved);
     sConflictPruned.state = 'pruned';
     sConflictPruned.baseline = null;
     assert.equal(transitionLorebookExecStep(sConflictResolved, sConflictPruned), true);
 
-    // 3. Book lock transitions: acquire -> takeover requires reason -> release
+    // 3. Book lock transitions (L1–L10, D2/I9, migration marker)
+    // D2/I9: Legacy chat-level lock write is rejected
+    const legacyLock = bookLockRecord({
+        identity: { ...identity },
+    });
+    assert.equal(transitionLorebookBookLock(null, legacyLock), false);
+    assert.throws(
+        () => transitionLorebookBookLock(null, legacyLock, { throwFailures: true }),
+        { code: 'LEGACY_LOCK_WRITE_FORBIDDEN' },
+    );
+    // Existing legacy lock allows ONLY holder-CAS release (holder: null)
+    const legacyReleaseOk = structuredClone(legacyLock);
+    legacyReleaseOk.holder = null;
+    legacyReleaseOk.history.push({
+        action: 'release',
+        batchId: 'lorebook-review-1',
+        attemptId: 'att-1',
+        deviceId: 'dev-1',
+        at: 1020,
+        reason: 'migrated',
+    });
+    assert.equal(transitionLorebookBookLock(legacyLock, legacyReleaseOk), true);
+    const legacyReleaseWrongAttempt = structuredClone(legacyReleaseOk);
+    legacyReleaseWrongAttempt.history.at(-1).attemptId = 'att-other';
+    assert.equal(transitionLorebookBookLock(legacyLock, legacyReleaseWrongAttempt), false);
+
+    // L1: Canonical lock requires migration marker when readRecord is present in store
     const lock1 = bookLockRecord();
     validateLorebookRecord('oracle-lorebook-book-locks', lock1);
-    const lockTakeoverBad = structuredClone(lock1);
-    lockTakeoverBad.holder.attemptId = 'att-2';
-    lockTakeoverBad.holder.deviceId = 'dev-2';
-    assert.equal(transitionLorebookBookLock(lock1, lockTakeoverBad), false);
+    await assert.rejects(
+        () => records.commit(user, 'oracle-lorebook-book-locks', 'lorebook-book-lock:0123456789abcdef01234567', {
+            schemaVersion: 1,
+            expectedRevision: 0,
+            payload: lock1,
+        }),
+        { code: 'LOREBOOK_MIGRATION_REQUIRED' },
+    );
 
-    const lockTakeoverOk = structuredClone(lockTakeoverBad);
-    lockTakeoverOk.history.push({
+    // Complete account-level migration control record
+    const migInProgress = {
+        schema: 1,
+        identity: { ...bookResourceIdentity, chat: '__migration__' },
+        book: '__migration__',
+        kind: 'migration',
+        status: 'in-progress',
+        runtimeId: 'rt-mig-1',
+        deviceId: 'dev-1',
+        epoch: 1,
+        acquiredAt: 1000,
+        heartbeatAt: 1000,
+        completedAt: null,
+        summary: {
+            scannedRecords: 0,
+            legacyLocksFound: 0,
+            booksMigrated: 0,
+            unresolvedBooks: [],
+            clearedLegacyLocks: 0,
+        },
+        updatedAt: 1000,
+    };
+    await records.commit(user, 'oracle-lorebook-book-locks', LOREBOOK_LOCK_MIGRATION_RECORD_ID, {
+        schemaVersion: 1,
+        expectedRevision: 0,
+        payload: migInProgress,
+    });
+    // Another runtime cannot steal non-stale migration mutex
+    await assert.rejects(
+        () => records.commit(user, 'oracle-lorebook-book-locks', LOREBOOK_LOCK_MIGRATION_RECORD_ID, {
+            schemaVersion: 1,
+            expectedRevision: 1,
+            payload: { ...migInProgress, runtimeId: 'rt-mig-2', epoch: 2 },
+        }),
+        { code: 'LOREBOOK_LOCK_NOT_STALE' },
+    );
+    await records.commit(user, 'oracle-lorebook-book-locks', LOREBOOK_LOCK_MIGRATION_RECORD_ID, {
+        schemaVersion: 1,
+        expectedRevision: 1,
+        payload: { ...migInProgress, status: 'completed', completedAt: 1005 },
+    });
+
+    // L9: Reject canonical lock holder missing runtimeId/operationId/epoch/phase
+    const lockMissingRuntime = bookLockRecord();
+    delete lockMissingRuntime.holder.runtimeId;
+    assert.equal(transitionLorebookBookLock(null, lockMissingRuntime), false);
+
+    // L1: Acquire preparing lock succeeds once migration is completed
+    const committedLock1 = await records.commit(user, 'oracle-lorebook-book-locks', 'lorebook-book-lock:0123456789abcdef01234567', {
+        schemaVersion: 1,
+        expectedRevision: 0,
+        payload: lock1,
+    });
+    assert.equal(committedLock1.revision, 1);
+
+    // L5: Preparing takeover without staleness or webLockReleased is rejected
+    const lockTakeoverNotStale = structuredClone(lock1);
+    lockTakeoverNotStale.epoch = 2;
+    lockTakeoverNotStale.holder = {
+        ...lock1.holder,
+        attemptId: 'att-2',
+        operationId: 'att-2',
+        runtimeId: 'rt-2',
+        epoch: 2,
+        deviceId: 'dev-2',
+        takeoverOf: { operationId: 'att-1', epoch: 1 },
+    };
+    lockTakeoverNotStale.history.push({
         action: 'takeover',
         batchId: 'lorebook-review-1',
         attemptId: 'att-2',
+        operationId: 'att-2',
+        runtimeId: 'rt-2',
+        epoch: 2,
         deviceId: 'dev-2',
         at: 1020,
-        reason: '原设备离线，接管单书执行锁',
+        takeoverOf: { operationId: 'att-1', epoch: 1 },
+        reason: '跨设备抢锁但尚未超时',
     });
-    assert.equal(transitionLorebookBookLock(lock1, lockTakeoverOk), true);
+    assert.throws(
+        () => transitionLorebookBookLock(lock1, lockTakeoverNotStale, { now: 1020, throwFailures: true }),
+        { code: 'LOREBOOK_LOCK_NOT_STALE' },
+    );
 
-    const lockReleased = structuredClone(lockTakeoverOk);
+    // L5: Preparing takeover after STALE_AFTER succeeds with epoch + 1
+    const lockTakeoverStaleOk = structuredClone(lockTakeoverNotStale);
+    assert.equal(
+        transitionLorebookBookLock(lock1, lockTakeoverStaleOk, {
+            now: 1000 + LOREBOOK_LOCK_STALE_AFTER_MS + 10,
+            throwFailures: true,
+        }),
+        true,
+    );
+
+    // L10: Same operationId with different runtimeId or epoch is rejected
+    const lockSameOpSpoofedRuntime = structuredClone(lockTakeoverStaleOk);
+    lockSameOpSpoofedRuntime.holder.runtimeId = 'rt-spoof';
+    lockSameOpSpoofedRuntime.holder.phase = 'in-flight';
+    lockSameOpSpoofedRuntime.history.push({
+        action: 'in-flight',
+        batchId: 'lorebook-review-1',
+        attemptId: 'att-2',
+        operationId: 'att-2',
+        runtimeId: 'rt-spoof',
+        epoch: 2,
+        deviceId: 'dev-2',
+        at: 32000,
+        reason: '',
+    });
+    assert.equal(transitionLorebookBookLock(lockTakeoverStaleOk, lockSameOpSpoofedRuntime), false);
+
+    // L2 -> L4 -> release
+    const lockInFlightOk = structuredClone(lockTakeoverStaleOk);
+    lockInFlightOk.holder.phase = 'in-flight';
+    lockInFlightOk.history.push({
+        action: 'in-flight',
+        batchId: 'lorebook-review-1',
+        attemptId: 'att-2',
+        operationId: 'att-2',
+        runtimeId: 'rt-2',
+        epoch: 2,
+        deviceId: 'dev-2',
+        at: 32000,
+        reason: '',
+    });
+    assert.equal(transitionLorebookBookLock(lockTakeoverStaleOk, lockInFlightOk, { now: 32000 }), true);
+
+    const projected = projectLorebookBookLockRead(lockInFlightOk, { now: 37000 });
+    assert.equal(projected.holder.remainingStaleMs, LOREBOOK_LOCK_STALE_AFTER_MS - 5000);
+
+    // L6: Cross-device in-flight takeover requires BOTH staleness and userConfirmedRisk: true
+    const lockInFlightTakeoverNoConfirm = structuredClone(lockInFlightOk);
+    lockInFlightTakeoverNoConfirm.epoch = 3;
+    lockInFlightTakeoverNoConfirm.holder = {
+        ...lockInFlightOk.holder,
+        attemptId: 'att-rec-3',
+        operationId: 'att-rec-3',
+        runtimeId: 'rt-3',
+        epoch: 3,
+        deviceId: 'dev-3',
+        mode: 'reconcile',
+        phase: 'ended',
+        takeoverOf: { operationId: 'att-2', epoch: 2 },
+    };
+    lockInFlightTakeoverNoConfirm.history.push({
+        action: 'takeover',
+        batchId: 'lorebook-review-1',
+        attemptId: 'att-rec-3',
+        operationId: 'att-rec-3',
+        runtimeId: 'rt-3',
+        epoch: 3,
+        deviceId: 'dev-3',
+        evidence: 'heartbeatStale',
+        takeoverOf: { operationId: 'att-2', epoch: 2 },
+        at: 70000,
+        reason: '跨设备超时接管',
+    });
+    assert.throws(
+        () => transitionLorebookBookLock(lockInFlightOk, lockInFlightTakeoverNoConfirm, { now: 70000, throwFailures: true }),
+        { code: 'LOREBOOK_TAKEOVER_CONFIRMATION_REQUIRED' },
+    );
+
+    const lockInFlightTakeoverConfirmed = structuredClone(lockInFlightTakeoverNoConfirm);
+    lockInFlightTakeoverConfirmed.history.at(-1).userConfirmedRisk = true;
+    assert.equal(
+        transitionLorebookBookLock(lockInFlightOk, lockInFlightTakeoverConfirmed, { now: 70000, throwFailures: true }),
+        true,
+    );
+
+    const lockReleased = structuredClone(lockInFlightTakeoverConfirmed);
     lockReleased.holder = null;
     lockReleased.history.push({
         action: 'release',
         batchId: 'lorebook-review-1',
-        attemptId: 'att-2',
-        deviceId: 'dev-2',
-        at: 1030,
+        attemptId: 'att-rec-3',
+        operationId: 'att-rec-3',
+        runtimeId: 'rt-3',
+        epoch: 3,
+        deviceId: 'dev-3',
+        at: 70010,
         reason: '',
     });
-    assert.equal(transitionLorebookBookLock(lockTakeoverOk, lockReleased), true);
+    assert.equal(transitionLorebookBookLock(lockInFlightTakeoverConfirmed, lockReleased), true);
+
+    // L8: Late completion reopens conflict on released lock with epoch + 1
+    const lockLateConflict = structuredClone(lockReleased);
+    lockLateConflict.epoch = 4;
+    lockLateConflict.holder = {
+        batchId: 'lorebook-review-1',
+        threadId: 'thread-1',
+        attemptId: 'att-2',
+        operationId: 'att-2',
+        runtimeId: 'rt-2',
+        epoch: 4,
+        deviceId: 'dev-2',
+        mode: 'apply',
+        phase: 'conflict',
+        acquiredAt: 70020,
+    };
+    lockLateConflict.history.push({
+        action: 'conflict',
+        batchId: 'lorebook-review-1',
+        attemptId: 'att-2',
+        operationId: 'att-2',
+        runtimeId: 'rt-2',
+        epoch: 4,
+        deviceId: 'dev-2',
+        at: 70020,
+        reason: '旧在途写入迟到返回，重开冲突',
+        lateCompletion: {
+            operationId: 'att-2',
+            endedBy: 'returned',
+            observedFingerprint: 'fp-book-late',
+            at: 70020,
+        },
+    });
+    assert.equal(transitionLorebookBookLock(lockReleased, lockLateConflict), true);
+
+    // L7: Conflict lock cannot be released without resolution matching operationId + basedOnFingerprint
+    const lockConflictReleaseBad = structuredClone(lockLateConflict);
+    lockConflictReleaseBad.holder = null;
+    lockConflictReleaseBad.history.push({
+        action: 'release',
+        batchId: 'lorebook-review-1',
+        attemptId: 'att-2',
+        deviceId: 'dev-3',
+        at: 70030,
+        reason: '无证据释放',
+    });
+    assert.equal(transitionLorebookBookLock(lockLateConflict, lockConflictReleaseBad), false);
+
+    const lockConflictReleaseOk = structuredClone(lockConflictReleaseBad);
+    lockConflictReleaseOk.history.at(-1).resolution = {
+        operationId: 'att-2',
+        basedOnFingerprint: 'fp-book-late',
+        choice: 'manual-fixed',
+        resolvedByDeviceId: 'dev-3',
+        resolvedAt: 70030,
+    };
+    assert.equal(transitionLorebookBookLock(lockLateConflict, lockConflictReleaseOk), true);
 
     // 4. Execution record stage transitions
     const execFrozen = executionRecord();
@@ -468,7 +795,7 @@ test('Lorebook batch, execution, step and book-lock state machines enforce freez
     });
     assert.equal(transitionLorebookExecution(execSettled, execUndoRunning), true);
 
-    // 5. In-flight step & book-lock protection
+    // 5. In-flight step protection
     const sWritingInFlight = execStepRecord({
         state: 'writing',
         dispatchPhase: 'in-flight',
@@ -476,10 +803,17 @@ test('Lorebook batch, execution, step and book-lock state machines enforce freez
         attemptId: 'att-1',
         holderDeviceId: 'dev-1',
         baseline: stepBaseline(),
+        execution: {
+            state: 'in-flight',
+            operationId: 'att-1',
+            runtimeId: 'rt-1',
+            deviceId: 'dev-1',
+            epoch: 2,
+        },
     });
     validateLorebookRecord('oracle-lorebook-exec-steps', sWritingInFlight);
 
-    // Another attempt cannot mark an in-flight writing step as notWritten or unknown
+    // Another attempt cannot mark an in-flight writing step as notWritten or unknown without abandoned takeover + observation
     const sInFlightTakeoverNotWritten = structuredClone(sWritingInFlight);
     sInFlightTakeoverNotWritten.state = 'notWritten';
     sInFlightTakeoverNotWritten.attemptId = 'att-rec-2';
@@ -490,80 +824,23 @@ test('Lorebook batch, execution, step and book-lock state machines enforce freez
     sInFlightTakeoverUnknown.attemptId = 'att-rec-2';
     assert.equal(transitionLorebookExecStep(sWritingInFlight, sInFlightTakeoverUnknown), false);
 
-    // Positive reconciliation to verified with evidence IS allowed
-    const sInFlightReconcileVerified = structuredClone(sWritingInFlight);
-    sInFlightReconcileVerified.state = 'verified';
-    sInFlightReconcileVerified.dispatchPhase = 'settled';
-    sInFlightReconcileVerified.attemptId = 'att-rec-2';
-    sInFlightReconcileVerified.verification = {
-        afterBookFingerprint: 'fp-book-2',
-        receipts: stepBaseline().pendingReceipts,
-        verifiedAt: 1025,
-        persistenceMode: 'reconciled',
+    // Abandoned takeover with matchesBefore observation CAN settle to notWritten
+    const sAbandonedMatchesBefore = structuredClone(sWritingInFlight);
+    sAbandonedMatchesBefore.state = 'notWritten';
+    sAbandonedMatchesBefore.dispatchPhase = 'settled';
+    sAbandonedMatchesBefore.attemptId = 'att-rec-2';
+    sAbandonedMatchesBefore.execution = {
+        ...sWritingInFlight.execution,
+        state: 'ended',
+        endedBy: 'abandoned',
+        endedAt: 1025,
     };
-    sInFlightReconcileVerified.reconciliation = {
-        outcome: 'verified',
-        reason: '',
-        evidenceDigest: 'ev-after',
-        reconciledAt: 1025,
-        deviceId: 'dev-2',
+    sAbandonedMatchesBefore.observation = {
+        result: 'matchesBefore',
+        fingerprint: 'fp-book-1',
+        observedAt: 1025,
+        byOperationId: 'att-rec-2',
     };
-    assert.equal(transitionLorebookExecStep(sWritingInFlight, sInFlightReconcileVerified), true);
-
-    // Book lock in-flight cannot be aborted or taken over without positive ledger/conflict evidence
-    const lockInFlight = bookLockRecord({
-        fence: 2,
-        holder: {
-            batchId: 'lorebook-review-1',
-            threadId: 'thread-1',
-            attemptId: 'att-1',
-            deviceId: 'dev-1',
-            mode: 'apply',
-            phase: 'in-flight',
-            fence: 2,
-            chat: 'chat-1',
-            acquiredAt: 1000,
-        },
-    });
-    validateLorebookRecord('oracle-lorebook-book-locks', lockInFlight);
-
-    const lockInFlightTakeoverNoEvidence = structuredClone(lockInFlight);
-    lockInFlightTakeoverNoEvidence.holder = {
-        ...lockInFlight.holder,
-        attemptId: 'att-rec-2',
-        deviceId: 'dev-2',
-        mode: 'reconcile',
-        phase: 'reconcile',
-    };
-    lockInFlightTakeoverNoEvidence.history.push({
-        action: 'takeover',
-        batchId: 'lorebook-review-1',
-        attemptId: 'att-rec-2',
-        deviceId: 'dev-2',
-        at: 1025,
-        reason: '跨设备核验',
-    });
-    assert.equal(transitionLorebookBookLock(lockInFlight, lockInFlightTakeoverNoEvidence), false);
-
-    // Unresolved unknown/conflict lock blocks other batches from taking over
-    const lockUnknown = structuredClone(lockInFlight);
-    lockUnknown.holder.phase = 'unknown';
-    const lockOtherBatch = structuredClone(lockUnknown);
-    lockOtherBatch.holder = {
-        ...lockUnknown.holder,
-        batchId: 'lorebook-review-2',
-        attemptId: 'att-other-batch',
-        deviceId: 'dev-2',
-        mode: 'apply',
-        phase: 'preparing',
-    };
-    lockOtherBatch.history.push({
-        action: 'takeover',
-        batchId: 'lorebook-review-2',
-        attemptId: 'att-other-batch',
-        deviceId: 'dev-2',
-        at: 1030,
-        reason: '跨批次抢锁',
-    });
-    assert.equal(transitionLorebookBookLock(lockUnknown, lockOtherBatch), false);
+    assert.equal(transitionLorebookExecStep(sWritingInFlight, sAbandonedMatchesBefore), true);
 });
+

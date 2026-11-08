@@ -3,8 +3,11 @@ import {
     validateCloudConnectionId, validateOracleIdentity, validateOracleRecipe,
     validatePromptProfiles, validateThreadIndexEntries,
 } from './oracle-validation.js';
+import { fail as failRecord } from '../account-records/validation.js';
 
 export const validateLorebookIdentity = validateOracleIdentity;
+export const LOREBOOK_LOCK_STALE_AFTER_MS = 30000;
+export const LOREBOOK_LOCK_MIGRATION_RECORD_ID = 'lorebook-lock-migration:v1';
 
 const LOREBOOK_SOURCES = Object.freeze([
     'safety-contract',
@@ -45,12 +48,20 @@ const STEP_DISPATCH_PHASES = [
     'in-flight',
     'settled',
 ];
-const LOCK_HOLDER_PHASES = [
+const STEP_EXECUTION_STATES = ['preparing', 'in-flight', 'ended'];
+const STEP_ENDED_BY = ['returned', 'threw', 'abandoned'];
+const STEP_OBSERVATION_RESULTS = ['matchesAfter', 'matchesBefore', 'diverged', 'unreadable'];
+const CANONICAL_LOCK_HOLDER_PHASES = [
     'preparing',
     'in-flight',
+    'ended',
+    'conflict',
+    'legacy-unresolved',
+];
+const LOCK_HOLDER_PHASES = [
+    ...CANONICAL_LOCK_HOLDER_PHASES,
     'unknown',
     'undo-unknown',
-    'conflict',
     'reconcile',
 ];
 const TERMINAL_OR_PRUNABLE_STEP_STATES = new Set([
@@ -683,8 +694,89 @@ function validateStepReconciliation(r) {
     str(r.deviceId, 64, false);
 }
 
+function validateStepExecutionInfo(ex) {
+    if (!obj(ex)) bad();
+    const required = ['state', 'operationId', 'runtimeId', 'deviceId', 'epoch'];
+    const allowed = new Set([...required, 'endedBy', 'endedAt']);
+    for (const k of required) {
+        if (!(k in ex)) bad();
+    }
+    for (const k of Object.keys(ex)) {
+        if (!allowed.has(k)) bad();
+    }
+    one(ex.state, STEP_EXECUTION_STATES);
+    str(ex.operationId, 96, false);
+    nullable(ex.runtimeId, v => str(v, 96, false));
+    str(ex.deviceId, 64, false);
+    int(ex.epoch, 0, 1000000000);
+    if (ex.endedBy !== undefined && ex.endedBy !== null) {
+        one(ex.endedBy, STEP_ENDED_BY);
+    }
+    if (ex.endedAt !== undefined && ex.endedAt !== null) {
+        int(ex.endedAt);
+    }
+    if (ex.state === 'ended' && !STEP_ENDED_BY.includes(ex.endedBy)) bad();
+}
+
+function validateStepObservationInfo(obs) {
+    if (!obj(obs)) bad();
+    keys(obs, 'result,fingerprint,observedAt,byOperationId');
+    one(obs.result, STEP_OBSERVATION_RESULTS);
+    nullable(obs.fingerprint, v => str(v, 128, false));
+    int(obs.observedAt);
+    str(obs.byOperationId, 96, false);
+}
+
+function validateStepResolutionInfo(res) {
+    if (!obj(res)) bad();
+    const required = ['state'];
+    const allowed = new Set(['state', 'choice', 'basedOnFingerprint', 'resolvedAt', 'resolvedBy', 'operationId', 'note']);
+    for (const k of required) {
+        if (!(k in res)) bad();
+    }
+    for (const k of Object.keys(res)) {
+        if (!allowed.has(k)) bad();
+    }
+    one(res.state, ['none', 'resolved']);
+    if (res.choice !== undefined && res.choice !== null) {
+        one(res.choice, ['acknowledged', 'manual-fixed']);
+    }
+    if (res.basedOnFingerprint !== undefined && res.basedOnFingerprint !== null) {
+        str(res.basedOnFingerprint, 128, false);
+    }
+    if (res.resolvedAt !== undefined && res.resolvedAt !== null) {
+        int(res.resolvedAt);
+    }
+    if (res.resolvedBy !== undefined && res.resolvedBy !== null) {
+        str(res.resolvedBy, 64, false);
+    }
+    if (res.operationId !== undefined && res.operationId !== null) {
+        str(res.operationId, 96, false);
+    }
+    if (res.note !== undefined && res.note !== null) {
+        str(res.note, 1000);
+    }
+}
+
+function validateLateCompletionEntry(lc) {
+    if (!obj(lc)) bad();
+    keys(lc, 'operationId,endedBy,observedFingerprint,at');
+    str(lc.operationId, 96, false);
+    one(lc.endedBy, ['returned', 'threw']);
+    nullable(lc.observedFingerprint, v => str(v, 128, false));
+    int(lc.at);
+}
+
 function validateStepUndo(u) {
-    keys(u, 'status,attemptId,deviceId,startedAt,finishedAt,afterBookFingerprint,error');
+    if (!obj(u)) bad();
+    const required = ['status', 'attemptId', 'deviceId', 'startedAt', 'finishedAt', 'afterBookFingerprint', 'error'];
+    const allowed = new Set([...required, 'execution', 'observation', 'resolution', 'lateCompletions']);
+    for (const k of required) {
+        if (!(k in u)) bad();
+    }
+    for (const k of Object.keys(u)) {
+        if (!allowed.has(k)) bad();
+    }
     one(u.status, ['undoing', 'undone', 'undoBlocked', 'undoUnknown', 'conflict']);
     str(u.attemptId, 96, false);
     str(u.deviceId, 64, false);
@@ -692,14 +784,34 @@ function validateStepUndo(u) {
     nullable(u.finishedAt, t => int(t));
     nullable(u.afterBookFingerprint, s => str(s, 128, false));
     str(u.error, 2000);
+    if (u.execution !== undefined && u.execution !== null) validateStepExecutionInfo(u.execution);
+    if (u.observation !== undefined && u.observation !== null) validateStepObservationInfo(u.observation);
+    if (u.resolution !== undefined && u.resolution !== null) validateStepResolutionInfo(u.resolution);
+    if (u.lateCompletions !== undefined && u.lateCompletions !== null) {
+        array(u.lateCompletions, 16, validateLateCompletionEntry);
+    }
 }
 
 function validateConflictResolution(c) {
-    keys(c, 'resolvedByDeviceId,resolvedAt,resolution,note');
+    if (!obj(c)) bad();
+    const required = ['resolvedByDeviceId', 'resolvedAt', 'resolution', 'note'];
+    const allowed = new Set([...required, 'basedOnFingerprint', 'operationId']);
+    for (const k of required) {
+        if (!(k in c)) bad();
+    }
+    for (const k of Object.keys(c)) {
+        if (!allowed.has(k)) bad();
+    }
     str(c.resolvedByDeviceId, 64, false);
     int(c.resolvedAt);
     one(c.resolution, ['acknowledged', 'manual-fixed']);
     str(c.note, 1000);
+    if (c.basedOnFingerprint !== undefined && c.basedOnFingerprint !== null) {
+        str(c.basedOnFingerprint, 128, false);
+    }
+    if (c.operationId !== undefined && c.operationId !== null) {
+        str(c.operationId, 96, false);
+    }
 }
 
 function validateExecStepRecord(p) {
@@ -710,7 +822,15 @@ function validateExecStepRecord(p) {
         'verification', 'reconciliation', 'undo', 'conflictResolution',
         'error', 'updatedAt', 'history',
     ];
-    const allowed = new Set([...required, 'dispatchPhase', 'fence']);
+    const allowed = new Set([
+        ...required,
+        'dispatchPhase',
+        'fence',
+        'execution',
+        'observation',
+        'resolution',
+        'lateCompletions',
+    ]);
     for (const k of required) {
         if (!(k in p)) bad();
     }
@@ -729,6 +849,12 @@ function validateExecStepRecord(p) {
     }
     if (p.fence !== undefined && p.fence !== null) {
         int(p.fence, 0, 1000000000);
+    }
+    if (p.execution !== undefined && p.execution !== null) validateStepExecutionInfo(p.execution);
+    if (p.observation !== undefined && p.observation !== null) validateStepObservationInfo(p.observation);
+    if (p.resolution !== undefined && p.resolution !== null) validateStepResolutionInfo(p.resolution);
+    if (p.lateCompletions !== undefined && p.lateCompletions !== null) {
+        array(p.lateCompletions, 16, validateLateCompletionEntry);
     }
     nullable(p.attemptId, v => str(v, 96, false));
     nullable(p.holderDeviceId, v => str(v, 64, false));
@@ -767,6 +893,21 @@ function validateExecStepRecord(p) {
     }
 }
 
+function isAppendOnlyLateCompletions(prevList, nextList) {
+    if (!Array.isArray(prevList) || prevList.length === 0) return true;
+    if (!Array.isArray(nextList) || nextList.length < prevList.length) return false;
+    for (let i = 0; i < prevList.length; i += 1) {
+        if (JSON.stringify(prevList[i]) !== JSON.stringify(nextList[i])) return false;
+    }
+    return true;
+}
+
+function hasAddedLateCompletion(prev, next) {
+    const prevCount = (prev?.lateCompletions?.length || 0) + (prev?.undo?.lateCompletions?.length || 0);
+    const nextCount = (next?.lateCompletions?.length || 0) + (next?.undo?.lateCompletions?.length || 0);
+    return nextCount > prevCount;
+}
+
 export function transitionLorebookExecStep(prev, next) {
     if (!prev) {
         return ['pending', 'writing'].includes(next.state);
@@ -790,6 +931,38 @@ export function transitionLorebookExecStep(prev, next) {
         if (next.allocatedUids?.[k] !== uidVal) return false;
     }
 
+    // §3.3 Step invariants:
+    // 1. lateCompletions is append-only
+    if (!isAppendOnlyLateCompletions(prev.lateCompletions, next.lateCompletions)) {
+        return false;
+    }
+    if (prev.undo?.lateCompletions && !isAppendOnlyLateCompletions(prev.undo.lateCompletions, next.undo?.lateCompletions)) {
+        return false;
+    }
+    // 2. execution.ended can only be written by matching operationId (returned/threw) or abandoned takeover
+    if (prev.execution && next.execution) {
+        if (prev.execution.state !== 'ended' && next.execution.state === 'ended') {
+            const isOwnerEnd = next.execution.operationId === prev.execution.operationId
+                && ['returned', 'threw'].includes(next.execution.endedBy);
+            const isAbandoned = next.execution.endedBy === 'abandoned';
+            if (!isOwnerEnd && !isAbandoned) return false;
+        }
+        if (prev.execution.state === 'ended' && next.execution.state !== 'ended') {
+            if (
+                !(next.execution.epoch > prev.execution.epoch && next.execution.operationId !== prev.execution.operationId)
+            ) {
+                return false;
+            }
+        }
+    }
+    // 3. resolution can only be written after execution has ended
+    const nextResolved = next.conflictResolution !== null || next.resolution?.state === 'resolved';
+    if (nextResolved) {
+        if (next.execution && next.execution.state !== 'ended') return false;
+        if (!next.execution && prev.execution && prev.execution.state !== 'ended') return false;
+        if (next.dispatchPhase === 'in-flight') return false;
+    }
+
     const from = prev.state;
     const to = next.state;
 
@@ -804,8 +977,17 @@ export function transitionLorebookExecStep(prev, next) {
         return next.baseline === null;
     }
     if (from === 'conflict') {
-        // Unresolved conflict cannot be silently overwritten back to verified/undone by a late writer
-        return to === 'conflict' && next.conflictResolution !== null;
+        const wasResolved = prev.conflictResolution !== null || prev.resolution?.state === 'resolved';
+        if (to !== 'conflict') return false;
+        if (wasResolved && !nextResolved) {
+            // Reopening resolved conflict is allowed ONLY when lateCompletion is appended (L8 / S10)
+            return hasAddedLateCompletion(prev, next);
+        }
+        // Unresolved conflict can either record a lateCompletion or be resolved
+        if (!wasResolved && !nextResolved) {
+            return hasAddedLateCompletion(prev, next);
+        }
+        return nextResolved;
     }
     if (from === 'pending') {
         if (to === 'writing') return next.baseline !== null && next.attemptId !== null;
@@ -814,17 +996,22 @@ export function transitionLorebookExecStep(prev, next) {
     }
     if (from === 'writing') {
         // In-flight protection: while a host write is in-flight, another attempt cannot mark it notWritten or strip in-flight to unknown
-        if (prev.dispatchPhase === 'in-flight' && next.attemptId !== prev.attemptId) {
+        const prevInFlight = prev.dispatchPhase === 'in-flight' || prev.execution?.state === 'in-flight';
+        if (prevInFlight && next.attemptId !== prev.attemptId) {
+            const abandonedTakeover = next.execution?.state === 'ended' && next.execution?.endedBy === 'abandoned';
             if (to === 'verified') {
-                return next.verification !== null && next.reconciliation?.outcome === 'verified';
+                return next.verification !== null && (next.reconciliation?.outcome === 'verified' || abandonedTakeover);
+            }
+            if (to === 'notWritten') {
+                return abandonedTakeover && next.observation?.result === 'matchesBefore';
             }
             if (to === 'conflict') {
-                return next.reconciliation?.outcome === 'conflict';
+                return next.reconciliation?.outcome === 'conflict' || abandonedTakeover || hasAddedLateCompletion(prev, next);
             }
             return false;
         }
         if (to === 'writing') {
-            if (prev.dispatchPhase === 'in-flight') {
+            if (prevInFlight) {
                 return next.attemptId === prev.attemptId && next.baseline !== null;
             }
             return next.attemptId !== null && next.baseline !== null;
@@ -862,21 +1049,29 @@ export function transitionLorebookExecStep(prev, next) {
         if (to === 'undoing') {
             return next.attemptId !== null && next.undo !== null && next.undo.status === 'undoing';
         }
+        if (to === 'undoBlocked') {
+            return next.undo !== null && next.undo.status === 'undoBlocked';
+        }
         if (to === 'conflict') return true;
         return false;
     }
     if (from === 'undoing') {
-        if (prev.dispatchPhase === 'in-flight' && next.attemptId !== prev.attemptId) {
+        const prevUndoInFlight = prev.dispatchPhase === 'in-flight' || prev.undo?.execution?.state === 'in-flight';
+        if (prevUndoInFlight && next.attemptId !== prev.attemptId) {
+            const abandonedUndoTakeover = next.undo?.execution?.state === 'ended' && next.undo?.execution?.endedBy === 'abandoned';
             if (to === 'undone') {
-                return next.undo?.status === 'undone' && next.reconciliation?.outcome === 'undone';
+                return next.undo?.status === 'undone' && (next.reconciliation?.outcome === 'undone' || abandonedUndoTakeover);
+            }
+            if (to === 'verified' || to === 'undoBlocked') {
+                return abandonedUndoTakeover && next.undo?.observation?.result === 'matchesBefore';
             }
             if (to === 'conflict') {
-                return next.reconciliation?.outcome === 'conflict';
+                return next.reconciliation?.outcome === 'conflict' || abandonedUndoTakeover || hasAddedLateCompletion(prev, next);
             }
             return false;
         }
         if (to === 'undoing') {
-            if (prev.dispatchPhase === 'in-flight') {
+            if (prevUndoInFlight) {
                 return next.attemptId === prev.attemptId && next.undo !== null && next.undo.status === 'undoing';
             }
             return next.attemptId !== null && next.undo !== null && next.undo.status === 'undoing';
@@ -920,10 +1115,73 @@ export function transitionLorebookExecStep(prev, next) {
     return false;
 }
 
+function validateMigrationControlRecord(p) {
+    const required = [
+        'schema', 'identity', 'book', 'kind', 'status',
+        'runtimeId', 'deviceId', 'epoch', 'acquiredAt',
+        'heartbeatAt', 'completedAt', 'summary', 'updatedAt',
+    ];
+    const allowed = new Set([...required, 'serverNow']);
+    for (const k of required) {
+        if (!(k in p)) bad();
+    }
+    for (const k of Object.keys(p)) {
+        if (!allowed.has(k)) bad();
+    }
+    if (p.schema !== 1 || p.kind !== 'migration' || p.book !== '__migration__') bad();
+    validateLorebookIdentity(p.identity);
+    one(p.status, ['in-progress', 'completed']);
+    str(p.runtimeId, 96, false);
+    str(p.deviceId, 64, false);
+    int(p.epoch, 1, 1000000000);
+    int(p.acquiredAt);
+    int(p.heartbeatAt);
+    nullable(p.completedAt, v => int(v));
+    if (!obj(p.summary)) bad();
+    keys(p.summary, 'scannedRecords,legacyLocksFound,booksMigrated,unresolvedBooks,clearedLegacyLocks');
+    int(p.summary.scannedRecords, 0, 1000000);
+    int(p.summary.legacyLocksFound, 0, 1000000);
+    int(p.summary.booksMigrated, 0, 1000000);
+    array(p.summary.unresolvedBooks, 512, b => str(b, 512, false));
+    int(p.summary.clearedLegacyLocks, 0, 1000000);
+    int(p.updatedAt);
+    if (p.serverNow !== undefined && p.serverNow !== null) int(p.serverNow);
+}
+
+function validateLegacyHolderEntry(lh) {
+    if (!obj(lh)) bad();
+    const required = ['batchId', 'threadId', 'attemptId', 'deviceId', 'mode', 'acquiredAt'];
+    const allowed = new Set([...required, 'phase', 'fence', 'chat', 'owner', 'kind', 'recordId']);
+    for (const k of required) {
+        if (!(k in lh)) bad();
+    }
+    for (const k of Object.keys(lh)) {
+        if (!allowed.has(k)) bad();
+    }
+    str(lh.batchId, 128, false);
+    str(lh.threadId, 128);
+    str(lh.attemptId, 96, false);
+    str(lh.deviceId, 64, false);
+    one(lh.mode, ['apply', 'undo', 'reconcile']);
+    if (lh.phase !== undefined && lh.phase !== null) {
+        one(lh.phase, LOCK_HOLDER_PHASES);
+    }
+    if (lh.fence !== undefined && lh.fence !== null) int(lh.fence, 0, 1000000000);
+    if (lh.chat !== undefined && lh.chat !== null) str(lh.chat, 512);
+    if (lh.owner !== undefined && lh.owner !== null) str(lh.owner, 512);
+    if (lh.kind !== undefined && lh.kind !== null) str(lh.kind, 32);
+    if (lh.recordId !== undefined && lh.recordId !== null) str(lh.recordId, 128);
+    int(lh.acquiredAt);
+}
+
 function validateBookLockRecord(p) {
     if (!obj(p)) bad();
+    if (p.kind === 'migration') {
+        validateMigrationControlRecord(p);
+        return;
+    }
     const required = ['schema', 'identity', 'book', 'holder', 'ledger', 'history', 'updatedAt'];
-    const allowed = new Set([...required, 'fence']);
+    const allowed = new Set([...required, 'fence', 'epoch', 'legacyHolders', 'serverNow']);
     for (const k of required) {
         if (!(k in p)) bad();
     }
@@ -936,10 +1194,33 @@ function validateBookLockRecord(p) {
     if (p.fence !== undefined && p.fence !== null) {
         int(p.fence, 0, 1000000000);
     }
+    if (p.epoch !== undefined && p.epoch !== null) {
+        int(p.epoch, 0, 1000000000);
+    }
+    if (p.serverNow !== undefined && p.serverNow !== null) {
+        int(p.serverNow);
+    }
+    if (p.legacyHolders !== undefined && p.legacyHolders !== null) {
+        array(p.legacyHolders, 64, validateLegacyHolderEntry);
+    }
     nullable(p.holder, h => {
         if (!obj(h)) bad();
-        const holderRequired = ['batchId', 'threadId', 'attemptId', 'deviceId', 'mode', 'acquiredAt'];
-        const holderAllowed = new Set([...holderRequired, 'phase', 'fence', 'chat']);
+        const holderRequired = ['batchId', 'threadId', 'deviceId', 'mode', 'acquiredAt'];
+        const holderAllowed = new Set([
+            ...holderRequired,
+            'attemptId',
+            'operationId',
+            'runtimeId',
+            'epoch',
+            'phase',
+            'fence',
+            'chat',
+            'chatKey',
+            'heartbeatAt',
+            'takeoverOf',
+            'remainingStaleMs',
+            'staleAfterMs',
+        ]);
         for (const k of holderRequired) {
             if (!(k in h)) bad();
         }
@@ -947,8 +1228,13 @@ function validateBookLockRecord(p) {
             if (!holderAllowed.has(k)) bad();
         }
         str(h.batchId, 128, false);
-        str(h.threadId, 128, false);
-        str(h.attemptId, 96, false);
+        str(h.threadId, 128);
+        const opId = h.operationId ?? h.attemptId;
+        str(opId, 96, false);
+        if (h.attemptId !== undefined && h.attemptId !== null) str(h.attemptId, 96, false);
+        if (h.operationId !== undefined && h.operationId !== null) str(h.operationId, 96, false);
+        if (h.runtimeId !== undefined && h.runtimeId !== null) str(h.runtimeId, 96, false);
+        if (h.epoch !== undefined && h.epoch !== null) int(h.epoch, 1, 1000000000);
         str(h.deviceId, 64, false);
         one(h.mode, ['apply', 'undo', 'reconcile']);
         if (h.phase !== undefined && h.phase !== null) {
@@ -960,7 +1246,19 @@ function validateBookLockRecord(p) {
         if (h.chat !== undefined && h.chat !== null) {
             str(h.chat, 512);
         }
+        if (h.chatKey !== undefined && h.chatKey !== null) {
+            str(h.chatKey, 512);
+        }
         int(h.acquiredAt);
+        if (h.heartbeatAt !== undefined && h.heartbeatAt !== null) int(h.heartbeatAt);
+        if (h.remainingStaleMs !== undefined && h.remainingStaleMs !== null) int(h.remainingStaleMs, 0, 1000000000);
+        if (h.staleAfterMs !== undefined && h.staleAfterMs !== null) int(h.staleAfterMs, 1, 1000000000);
+        if (h.takeoverOf !== undefined && h.takeoverOf !== null) {
+            if (!obj(h.takeoverOf)) bad();
+            keys(h.takeoverOf, 'operationId,epoch');
+            str(h.takeoverOf.operationId, 96, false);
+            int(h.takeoverOf.epoch, 1, 1000000000);
+        }
     });
     array(p.ledger, 16, l => {
         keys(
@@ -982,69 +1280,530 @@ function validateBookLockRecord(p) {
         int(l.committedAt);
     });
     array(p.history, 24, h => {
-        keys(h, 'action,batchId,attemptId,deviceId,at,reason');
-        one(h.action, ['acquire', 'in-flight', 'hold-unresolved', 'release', 'takeover', 'abort', 'conflict']);
+        if (!obj(h)) bad();
+        const histRequired = ['action', 'batchId', 'attemptId', 'deviceId', 'at', 'reason'];
+        const histAllowed = new Set([
+            ...histRequired,
+            'operationId',
+            'runtimeId',
+            'epoch',
+            'phase',
+            'chatKey',
+            'evidence',
+            'userConfirmedRisk',
+            'userConfirmedLegacyClosed',
+            'observedFingerprint',
+            'takeoverOf',
+            'resolution',
+            'lateCompletion',
+        ]);
+        for (const k of histRequired) {
+            if (!(k in h)) bad();
+        }
+        for (const k of Object.keys(h)) {
+            if (!histAllowed.has(k)) bad();
+        }
+        one(h.action, [
+            'acquire',
+            'in-flight',
+            'heartbeat',
+            'ended',
+            'hold-unresolved',
+            'release',
+            'takeover',
+            'abort',
+            'conflict',
+            'migrate-legacy',
+            'resolve-legacy',
+        ]);
         str(h.batchId, 128, false);
         str(h.attemptId, 96, false);
         str(h.deviceId, 64, false);
         int(h.at);
         str(h.reason, 500);
+        if (h.operationId !== undefined && h.operationId !== null) str(h.operationId, 96, false);
+        if (h.runtimeId !== undefined && h.runtimeId !== null) str(h.runtimeId, 96, false);
+        if (h.epoch !== undefined && h.epoch !== null) int(h.epoch, 1, 1000000000);
+        if (h.phase !== undefined && h.phase !== null) one(h.phase, LOCK_HOLDER_PHASES);
+        if (h.chatKey !== undefined && h.chatKey !== null) str(h.chatKey, 512);
+        if (h.evidence !== undefined && h.evidence !== null) one(h.evidence, ['webLockReleased', 'heartbeatStale']);
+        if (h.userConfirmedRisk !== undefined && h.userConfirmedRisk !== null) bool(h.userConfirmedRisk);
+        if (h.userConfirmedLegacyClosed !== undefined && h.userConfirmedLegacyClosed !== null) bool(h.userConfirmedLegacyClosed);
+        if (h.observedFingerprint !== undefined && h.observedFingerprint !== null) str(h.observedFingerprint, 128, false);
+        if (h.takeoverOf !== undefined && h.takeoverOf !== null) {
+            if (!obj(h.takeoverOf)) bad();
+            keys(h.takeoverOf, 'operationId,epoch');
+            str(h.takeoverOf.operationId, 96, false);
+            int(h.takeoverOf.epoch, 1, 1000000000);
+        }
+        if (h.resolution !== undefined && h.resolution !== null) {
+            if (!obj(h.resolution)) bad();
+            keys(h.resolution, 'operationId,basedOnFingerprint,choice,resolvedByDeviceId,resolvedAt');
+            str(h.resolution.operationId, 96, false);
+            str(h.resolution.basedOnFingerprint, 128, false);
+            one(h.resolution.choice, ['acknowledged', 'manual-fixed']);
+            str(h.resolution.resolvedByDeviceId, 64, false);
+            int(h.resolution.resolvedAt);
+        }
+        if (h.lateCompletion !== undefined && h.lateCompletion !== null) {
+            validateLateCompletionEntry(h.lateCompletion);
+        }
     });
     int(p.updatedAt);
 }
 
-export function transitionLorebookBookLock(prev, next) {
-    if (!prev) {
+function isCanonicalBookResourceIdentity(identity) {
+    if (!obj(identity)) return false;
+    return (
+        identity.owner === 'lorebook-resource'
+        || identity.owner === '__account_worldbook__'
+        || identity.kind === 'worldbook'
+        || identity.kind === 'account'
+    );
+}
+
+function hasCompleteCanonicalHolder(h) {
+    if (!obj(h)) return false;
+    if (h.phase === 'legacy-unresolved') {
+        return Number.isSafeInteger(h.epoch) && h.epoch >= 1;
+    }
+    return (
+        typeof h.runtimeId === 'string'
+        && h.runtimeId.trim().length > 0
+        && typeof h.operationId === 'string'
+        && h.operationId.trim().length > 0
+        && Number.isSafeInteger(h.epoch)
+        && h.epoch >= 1
+        && CANONICAL_LOCK_HOLDER_PHASES.includes(h.phase)
+    );
+}
+
+function matchesHolderTriple(a, b) {
+    if (!obj(a) || !obj(b)) return false;
+    return (
+        a.runtimeId === b.runtimeId
+        && a.operationId === b.operationId
+        && a.epoch === b.epoch
+        && a.deviceId === b.deviceId
+        && a.batchId === b.batchId
+    );
+}
+
+export function projectLorebookBookLockRead(payload, { now = Date.now() } = {}) {
+    if (!obj(payload)) return payload;
+    if (payload.kind === 'migration') {
+        return payload;
+    }
+    if (obj(payload.holder) && ['preparing', 'in-flight'].includes(payload.holder.phase)) {
+        const lastBeat = Number(payload.holder.heartbeatAt ?? payload.holder.acquiredAt ?? 0);
+        const elapsed = Math.max(0, now - lastBeat);
+        const remainingStaleMs = Math.max(0, LOREBOOK_LOCK_STALE_AFTER_MS - elapsed);
+        return {
+            ...payload,
+            holder: {
+                ...payload.holder,
+                remainingStaleMs,
+                staleAfterMs: LOREBOOK_LOCK_STALE_AFTER_MS,
+            },
+        };
+    }
+    return payload;
+}
+
+export function transitionLorebookBookLock(prev, next, meta = {}) {
+    const reject = (code = 'RECORD_TRANSITION_INVALID', details = {}) => {
+        if (meta?.throwFailures) failRecord(code, details);
+        return false;
+    };
+    const serverNow = Number.isSafeInteger(meta?.now) ? meta.now : null;
+
+    if (!obj(next)) return reject();
+
+    // 1. Account-level legacy migration control record
+    if (next.kind === 'migration' || prev?.kind === 'migration') {
+        if (next.kind !== 'migration' || next.book !== '__migration__') return reject();
+        if (prev && (prev.kind !== 'migration' || prev.book !== '__migration__')) return reject();
+        if (serverNow !== null) {
+            next.heartbeatAt = serverNow;
+            next.updatedAt = serverNow;
+        }
+        if (!prev) {
+            return next.epoch === 1 && ['in-progress', 'completed'].includes(next.status);
+        }
+        if (prev.status === 'completed') {
+            if (next.status !== 'completed') return reject();
+            return next.epoch >= prev.epoch;
+        }
+        // prev.status === 'in-progress'
+        if (next.runtimeId === prev.runtimeId && next.epoch === prev.epoch) {
+            return ['in-progress', 'completed'].includes(next.status);
+        }
+        // Takeover of stale in-progress migration mutex
+        const lastBeat = Number(prev.heartbeatAt ?? prev.acquiredAt ?? 0);
+        const nowForCheck = serverNow ?? Number(next.acquiredAt || 0);
+        const elapsed = nowForCheck - lastBeat;
+        if (elapsed < LOREBOOK_LOCK_STALE_AFTER_MS) {
+            return reject('LOREBOOK_LOCK_NOT_STALE', {
+                remainingStaleMs: Math.max(0, LOREBOOK_LOCK_STALE_AFTER_MS - Math.max(0, elapsed)),
+                staleAfterMs: LOREBOOK_LOCK_STALE_AFTER_MS,
+                serverNow: nowForCheck,
+            });
+        }
+        if (next.epoch !== prev.epoch + 1) return reject();
+        return ['in-progress', 'completed'].includes(next.status);
+    }
+
+    // 2. Identity & book immutability
+    if (prev) {
+        const prevBook = prev.book ?? prev.identity?.bookName;
+        const nextBook = next.book ?? next.identity?.bookName;
+        if (
+            prev.identity?.kind !== next.identity?.kind
+            || prev.identity?.owner !== next.identity?.owner
+            || prev.identity?.chat !== next.identity?.chat
+            || prevBook !== nextBook
+        ) {
+            return reject();
+        }
+        if (prev.fence != null && next.fence != null && next.fence < prev.fence) {
+            return reject();
+        }
+    }
+
+    const last = Array.isArray(next.history) ? next.history.at(-1) : null;
+
+    // 3. D2 / I9: Legacy chat-level book locks only allow clearing holder with CAS match; new/changed holders are forbidden
+    if (!isCanonicalBookResourceIdentity(next.identity)) {
+        if (!prev) return reject('LEGACY_LOCK_WRITE_FORBIDDEN');
+        if (next.holder !== null) return reject('LEGACY_LOCK_WRITE_FORBIDDEN');
+        if (!prev.holder) return reject('LEGACY_LOCK_WRITE_FORBIDDEN');
+        const prevOpId = prev.holder.operationId || prev.holder.attemptId;
+        if (!last || last.action !== 'release' || last.attemptId !== prevOpId) {
+            return reject('LEGACY_LOCK_WRITE_FORBIDDEN');
+        }
         return true;
     }
-    if (
-        prev.identity.kind !== next.identity.kind
-        || prev.identity.owner !== next.identity.owner
-        || prev.identity.chat !== next.identity.chat
-        || prev.book !== next.book
-    ) {
-        return false;
+
+    // 4. Canonical book resource lock (L1–L10)
+    const prevEpoch = Number(prev?.epoch ?? prev?.holder?.epoch ?? prev?.fence ?? 0);
+
+    // Preserve existing legacyHolders append-only
+    if (Array.isArray(prev?.legacyHolders) && prev.legacyHolders.length > 0) {
+        if (!Array.isArray(next.legacyHolders) || next.legacyHolders.length < prev.legacyHolders.length) {
+            return reject();
+        }
     }
-    if (prev.fence != null && next.fence != null && next.fence < prev.fence) {
-        return false;
-    }
-    if (prev.holder === null && next.holder !== null) {
+
+    // Special transition: WP4 one-time legacy lock migration into canonical lock
+    if (last?.action === 'migrate-legacy') {
+        if (typeof meta?.readRecord === 'function') {
+            const mig = meta.readRecord(LOREBOOK_LOCK_MIGRATION_RECORD_ID);
+            if (!mig || mig.kind !== 'migration' || !['in-progress', 'completed'].includes(mig.status)) {
+                return reject('LOREBOOK_MIGRATION_REQUIRED');
+            }
+        }
+        if (next.holder !== null) {
+            const keepingExistingHolder = prev?.holder && JSON.stringify(prev.holder) === JSON.stringify(next.holder);
+            if (!keepingExistingHolder && next.holder.phase !== 'legacy-unresolved') {
+                return reject();
+            }
+        }
+        const nextEpoch = Math.max(prevEpoch + 1, Number(next.epoch ?? next.holder?.epoch ?? 1));
+        next.epoch = nextEpoch;
+        if (next.holder && !next.holder.epoch) next.holder.epoch = nextEpoch;
         return true;
     }
+
+    // L9: Any non-null holder on canonical lock must have complete {runtimeId, operationId, epoch, phase}
+    if (next.holder !== null && !hasCompleteCanonicalHolder(next.holder)) {
+        return reject('LOREBOOK_LOCK_HOLDER_INVALID');
+    }
+
+    // Check migration marker requirement (L1) when acquiring/mutating canonical locks
+    if (meta?.migrationCompleted === false) {
+        return reject('LOREBOOK_MIGRATION_REQUIRED');
+    }
+    if (typeof meta?.readRecord === 'function') {
+        const mig = meta.readRecord(LOREBOOK_LOCK_MIGRATION_RECORD_ID);
+        if (!mig || mig.kind !== 'migration' || mig.status !== 'completed') {
+            return reject('LOREBOOK_MIGRATION_REQUIRED');
+        }
+    }
+
+    // Case A: Empty / released -> non-null holder (L1 preparing, or L8 reopen conflict on lateCompletion)
+    if (!prev || prev.holder === null) {
+        if (next.holder === null) {
+            next.epoch = Math.max(prevEpoch, Number(next.epoch || 0));
+            return true;
+        }
+        if (next.holder.epoch !== prevEpoch + 1) return reject();
+        next.epoch = next.holder.epoch;
+        if (next.holder.phase === 'preparing') {
+            if (!last || last.action !== 'acquire') return reject();
+            if (serverNow !== null) {
+                next.holder.heartbeatAt = serverNow;
+            } else if (next.holder.heartbeatAt == null) {
+                next.holder.heartbeatAt = next.holder.acquiredAt;
+            }
+            return true;
+        }
+        if (next.holder.phase === 'conflict') {
+            // L8: Reopen conflict from released state requires lateCompletion evidence in history
+            if (!last || last.action !== 'conflict' || !obj(last.lateCompletion)) return reject();
+            return true;
+        }
+        return reject();
+    }
+
+    // Case B: Non-null holder -> released (holder: null)
     if (prev.holder !== null && next.holder === null) {
-        const last = next.history.at(-1);
-        if (!last || !['release', 'abort'].includes(last.action)) return false;
-        if (last.action === 'release' && last.attemptId !== prev.holder.attemptId) return false;
-        if (prev.holder.phase === 'in-flight' && last.attemptId !== prev.holder.attemptId) {
-            return false;
+        if (!last || !['release', 'abort', 'resolve-legacy'].includes(last.action)) return reject();
+        const prevOpId = prev.holder.operationId || prev.holder.attemptId;
+        const prevPhase = prev.holder.phase;
+
+        if (prevPhase === 'legacy-unresolved') {
+            // D6: Resolving legacy-unresolved requires user confirmation + fresh read-back fingerprint
+            if (
+                last.userConfirmedLegacyClosed !== true
+                || typeof last.observedFingerprint !== 'string'
+                || !last.observedFingerprint.trim()
+            ) {
+                return reject();
+            }
+            next.epoch = prevEpoch + 1;
+            return true;
         }
-        if (prev.holder.phase === 'conflict' && last.action !== 'release') {
-            return false;
+
+        if (prevPhase === 'conflict') {
+            // L7: Releasing conflict requires resolution referencing the ended operationId and basedOnFingerprint
+            if (last.action !== 'release' || !obj(last.resolution)) return reject();
+            if (
+                last.resolution.operationId !== prevOpId
+                || typeof last.resolution.basedOnFingerprint !== 'string'
+                || !last.resolution.basedOnFingerprint.trim()
+            ) {
+                return reject();
+            }
+            next.epoch = prevEpoch;
+            return true;
+        }
+
+        if (prevPhase === 'preparing') {
+            const isOwnerAbortOrRelease = (
+                last.runtimeId === prev.holder.runtimeId
+                && (last.operationId || last.attemptId) === prevOpId
+                && (last.epoch ?? prev.holder.epoch) === prev.holder.epoch
+            );
+            if (isOwnerAbortOrRelease) {
+                next.epoch = prevEpoch;
+                return true;
+            }
+            // S11 / L5: Dead preparing holder cleanup
+            if (
+                obj(last.takeoverOf)
+                && last.takeoverOf.operationId === prevOpId
+                && last.takeoverOf.epoch === prev.holder.epoch
+            ) {
+                const sameDeviceDead = last.deviceId === prev.holder.deviceId && last.evidence === 'webLockReleased';
+                const lastBeat = Number(prev.holder.heartbeatAt ?? prev.holder.acquiredAt ?? 0);
+                const nowForCheck = serverNow ?? Number(last.at || 0);
+                const elapsed = nowForCheck - lastBeat;
+                if (!sameDeviceDead && elapsed < LOREBOOK_LOCK_STALE_AFTER_MS) {
+                    return reject('LOREBOOK_LOCK_NOT_STALE', {
+                        remainingStaleMs: Math.max(0, LOREBOOK_LOCK_STALE_AFTER_MS - Math.max(0, elapsed)),
+                        staleAfterMs: LOREBOOK_LOCK_STALE_AFTER_MS,
+                        serverNow: nowForCheck,
+                    });
+                }
+                next.epoch = prevEpoch + 1;
+                return true;
+            }
+            return reject();
+        }
+
+        if (prevPhase === 'in-flight' || prevPhase === 'ended') {
+            if (prevPhase === 'in-flight' && last.action !== 'release') return reject();
+            const isOwnerRelease = (
+                last.runtimeId === prev.holder.runtimeId
+                && (last.operationId || last.attemptId) === prevOpId
+                && (last.epoch ?? prev.holder.epoch) === prev.holder.epoch
+            );
+            if (!isOwnerRelease) return reject();
+            next.epoch = prevEpoch;
+            return true;
+        }
+
+        return reject();
+    }
+
+    // Case C: Non-null holder -> Non-null holder
+    const prevOpId = prev.holder.operationId || prev.holder.attemptId;
+    const nextOpId = next.holder.operationId || next.holder.attemptId;
+
+    // L10: No same-attemptId/operationId shortcut! Same operationId MUST match full {runtimeId, operationId, epoch}
+    if (nextOpId === prevOpId) {
+        if (!matchesHolderTriple(prev.holder, next.holder)) {
+            return reject();
+        }
+        next.epoch = prevEpoch;
+        const fromPhase = prev.holder.phase;
+        const toPhase = next.holder.phase;
+
+        // L2: preparing -> in-flight
+        if (fromPhase === 'preparing' && toPhase === 'in-flight') {
+            if (!last || last.action !== 'in-flight') return reject();
+            if (serverNow !== null) {
+                next.holder.heartbeatAt = serverNow;
+            } else if (next.holder.heartbeatAt == null) {
+                next.holder.heartbeatAt = next.holder.acquiredAt;
+            }
+            return true;
+        }
+        // L3: in-flight -> in-flight (heartbeat)
+        if (fromPhase === 'in-flight' && toPhase === 'in-flight') {
+            if (
+                next.holder.mode !== prev.holder.mode
+                || next.holder.threadId !== prev.holder.threadId
+                || next.holder.chat !== prev.holder.chat
+            ) {
+                return reject();
+            }
+            if (serverNow !== null) {
+                next.holder.heartbeatAt = serverNow;
+            }
+            return true;
+        }
+        // L4: in-flight -> ended | conflict, or ended -> ended | conflict
+        if (fromPhase === 'in-flight' && ['ended', 'conflict'].includes(toPhase)) {
+            return true;
+        }
+        if (fromPhase === 'ended' && ['ended', 'conflict'].includes(toPhase)) {
+            return true;
+        }
+        return reject();
+    }
+
+    // Different operationId: must increment epoch by +1 (I3 / L5 / L6 / L8 / D6)
+    if (next.holder.epoch !== prevEpoch + 1) {
+        return reject();
+    }
+    next.epoch = next.holder.epoch;
+
+    const fromPhase = prev.holder.phase;
+    const toPhase = next.holder.phase;
+
+    // D6: legacy-unresolved -> conflict (when fresh read-back after user confirmation reveals divergence)
+    if (fromPhase === 'legacy-unresolved') {
+        if (
+            toPhase === 'conflict'
+            && last
+            && ['resolve-legacy', 'conflict'].includes(last.action)
+            && last.userConfirmedLegacyClosed === true
+            && typeof last.observedFingerprint === 'string'
+            && last.observedFingerprint.trim().length > 0
+        ) {
+            return true;
+        }
+        return reject();
+    }
+
+    // L8: lateCompletion arriving while in ended or conflict
+    if (['ended', 'conflict'].includes(fromPhase) && toPhase === 'conflict' && last?.action === 'conflict' && obj(last.lateCompletion)) {
+        return true;
+    }
+
+    // Conflict lock cannot be taken over by apply/undo/preparing/in-flight; must be resolved & released first
+    if (fromPhase === 'conflict') {
+        return reject();
+    }
+
+    // L5: preparing takeover
+    if (fromPhase === 'preparing') {
+        const tk = last?.takeoverOf || next.holder.takeoverOf;
+        if (
+            !last
+            || last.action !== 'takeover'
+            || !last.reason?.trim()
+            || !obj(tk)
+            || tk.operationId !== prevOpId
+            || tk.epoch !== prev.holder.epoch
+        ) {
+            return reject();
+        }
+        const sameDeviceDead = prev.holder.deviceId === next.holder.deviceId && last.evidence === 'webLockReleased';
+        if (!sameDeviceDead) {
+            const lastBeat = Number(prev.holder.heartbeatAt ?? prev.holder.acquiredAt ?? 0);
+            const nowForCheck = serverNow ?? Number(last.at || next.holder.acquiredAt || 0);
+            const elapsed = nowForCheck - lastBeat;
+            if (elapsed < LOREBOOK_LOCK_STALE_AFTER_MS) {
+                return reject('LOREBOOK_LOCK_NOT_STALE', {
+                    remainingStaleMs: Math.max(0, LOREBOOK_LOCK_STALE_AFTER_MS - Math.max(0, elapsed)),
+                    staleAfterMs: LOREBOOK_LOCK_STALE_AFTER_MS,
+                    serverNow: nowForCheck,
+                });
+            }
+        }
+        if (!['preparing', 'ended', 'conflict'].includes(toPhase)) return reject();
+        if (serverNow !== null) {
+            next.holder.heartbeatAt = serverNow;
+        } else if (next.holder.heartbeatAt == null) {
+            next.holder.heartbeatAt = next.holder.acquiredAt;
         }
         return true;
     }
-    if (prev.holder !== null && next.holder !== null) {
-        if (prev.holder.attemptId === next.holder.attemptId) return true;
-        if (prev.holder.phase === 'in-flight') {
-            // Cannot take over an in-flight lock for apply/undo or without positive ledger/conflict evidence
-            if (next.holder.mode !== 'reconcile') return false;
-            const hasLedgerEvidence = (next.ledger?.length || 0) > (prev.ledger?.length || 0);
-            const isConflictLock = next.holder.phase === 'conflict';
-            if (!hasLedgerEvidence && !isConflictLock) return false;
+
+    // L6: in-flight takeover
+    if (fromPhase === 'in-flight') {
+        const tk = last?.takeoverOf || next.holder.takeoverOf;
+        if (
+            !last
+            || last.action !== 'takeover'
+            || !last.reason?.trim()
+            || !obj(tk)
+            || tk.operationId !== prevOpId
+            || tk.epoch !== prev.holder.epoch
+        ) {
+            return reject();
         }
-        if (['unknown', 'undo-unknown', 'conflict'].includes(prev.holder.phase)) {
-            if (['apply', 'undo'].includes(next.holder.mode)) return false;
-            if (next.holder.batchId !== prev.holder.batchId) return false;
+        // Takeover of in-flight only settles old operation by observation (ended or conflict), never starts a new write directly
+        if (!['ended', 'conflict'].includes(toPhase)) {
+            return reject();
         }
-        const last = next.history.at(-1);
-        return Boolean(
-            last
-            && last.action === 'takeover'
-            && last.attemptId === next.holder.attemptId
-            && last.reason.trim().length > 0,
-        );
+        const sameDeviceDead = prev.holder.deviceId === next.holder.deviceId && last.evidence === 'webLockReleased';
+        if (!sameDeviceDead) {
+            const lastBeat = Number(prev.holder.heartbeatAt ?? prev.holder.acquiredAt ?? 0);
+            const nowForCheck = serverNow ?? Number(last.at || next.holder.acquiredAt || 0);
+            const elapsed = nowForCheck - lastBeat;
+            if (elapsed < LOREBOOK_LOCK_STALE_AFTER_MS) {
+                return reject('LOREBOOK_LOCK_NOT_STALE', {
+                    remainingStaleMs: Math.max(0, LOREBOOK_LOCK_STALE_AFTER_MS - Math.max(0, elapsed)),
+                    staleAfterMs: LOREBOOK_LOCK_STALE_AFTER_MS,
+                    serverNow: nowForCheck,
+                });
+            }
+            if (last.userConfirmedRisk !== true) {
+                return reject('LOREBOOK_TAKEOVER_CONFIRMATION_REQUIRED');
+            }
+        }
+        if (serverNow !== null) {
+            next.holder.heartbeatAt = serverNow;
+        } else if (next.holder.heartbeatAt == null) {
+            next.holder.heartbeatAt = next.holder.acquiredAt;
+        }
+        return true;
     }
-    return true;
+
+    // From ended: previous operation already ended; allow new acquire or reconcile takeover into preparing/ended/conflict with epoch + 1
+    if (fromPhase === 'ended' && ['preparing', 'ended', 'conflict'].includes(toPhase) && ['acquire', 'takeover', 'conflict'].includes(last?.action)) {
+        if (serverNow !== null) {
+            next.holder.heartbeatAt = serverNow;
+        } else if (next.holder.heartbeatAt == null) {
+            next.holder.heartbeatAt = next.holder.acquiredAt;
+        }
+        return true;
+    }
+
+    return reject();
 }
 
 export function validateLorebookRecord(consumer, p) {
@@ -1137,5 +1896,6 @@ export const lorebookRecordConsumers = Object.freeze([
         deletable: false,
         validate: p => validateLorebookRecord('oracle-lorebook-book-locks', p),
         transition: transitionLorebookBookLock,
+        projectRead: projectLorebookBookLockRead,
     }),
 ]);

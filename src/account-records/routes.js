@@ -44,8 +44,14 @@ export function attachAccountRecordRoutes(router, { records, config, send, failu
                 RECORD_CONSUMER_NOT_REGISTERED: 404, RECORD_NOT_FOUND: 404,
                 REVISION_CONFLICT: 409, RECORD_DELETED: 409, RECORD_DELETE_FORBIDDEN: 409,
                 RECORD_TRANSITION_INVALID: 409, RECORD_SCHEMA_INCOMPATIBLE: 409,
+                LOREBOOK_MIGRATION_REQUIRED: 409, LOREBOOK_LOCK_NOT_STALE: 409,
+                LOREBOOK_TAKEOVER_CONFIRMATION_REQUIRED: 409, LEGACY_LOCK_WRITE_FORBIDDEN: 409,
                 CONTEXT_CHANGED: 409, PROTOCOL_INCOMPATIBLE: 409, CSRF_REJECTED: 403 }[code] || 503;
-            return send(res, status, failure(code, '账户记录操作未完成；请重新读取核对，未自动重试', mutation && status >= 500 ? 'unknown' : 'notApplicable'), requestId, true, 4096, true);
+            const errPayload = failure(code, '账户记录操作未完成；请重新读取核对，未自动重试', mutation && status >= 500 ? 'unknown' : 'notApplicable');
+            if (error instanceof RecordFailure && error.details && typeof error.details === 'object' && Object.keys(error.details).length > 0) {
+                errPayload.details = error.details;
+            }
+            return send(res, status, errPayload, requestId, true, 4096, true);
         }
     };
     router.get('/v1/account/records/:consumer', route('list'));

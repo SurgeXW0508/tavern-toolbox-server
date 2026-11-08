@@ -1,7 +1,7 @@
 import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
 import { useDatabase } from './database.js';
-import { fail, integer, exact, recordIdValid, registerConsumers } from './validation.js';
-export { RecordFailure } from './validation.js';
+import { RecordFailure, fail, integer, exact, recordIdValid, registerConsumers } from './validation.js';
+export { RecordFailure };
 
 export const MAX_PAGE_SIZE = 100;
 const metadataColumns = 'record_id, schema_version, revision, deleted, created_at, updated_at';
@@ -35,14 +35,20 @@ export function createAccountRecords(config, { consumers = [], now = () => Date.
         } catch { fail('RECORD_INVALID'); }
         return { encoded, parsed };
     };
-    const snapshot = (db, c, id) => {
+    const snapshot = (db, c, id, readTimestamp = now()) => {
         const row = db.prepare('SELECT * FROM records WHERE consumer=? AND record_id=?').get(c.id, id);
         if (!row) return { consumerId: c.id, recordId: id, schemaVersion: c.schemaVersion, revision: 0,
             deleted: false, status: 'missing', createdAt: null, updatedAt: null, payload: null };
         if (row.schema_version !== c.schemaVersion) fail('RECORD_SCHEMA_INCOMPATIBLE');
         let payload = null;
         if (!row.deleted) {
-            try { payload = JSON.parse(row.payload); encode(c, payload); }
+            try {
+                payload = JSON.parse(row.payload);
+                if (typeof c.projectRead === 'function') {
+                    payload = c.projectRead(payload, { now: readTimestamp, recordId: id });
+                }
+                encode(c, payload);
+            }
             catch { fail('RECORD_DATA_INVALID'); }
         }
         return { consumerId: c.id, ...metadata(row), status: row.deleted ? 'deleted' : 'active', payload };
@@ -66,7 +72,7 @@ export function createAccountRecords(config, { consumers = [], now = () => Date.
         if (!exact(body, deletion ? ['schemaVersion', 'expectedRevision'] : ['schemaVersion', 'expectedRevision', 'payload'])
             || !integer(body.expectedRevision)) fail('INVALID_REQUEST');
         const c = consumerFor(consumerId, body.schemaVersion), expected = body.expectedRevision;
-        const prepared = deletion ? null : encode(c, body.payload);
+        let prepared = deletion ? null : encode(c, body.payload);
         return use(context, db => {
             if (deletion && !c.deletable) fail('RECORD_DELETE_FORBIDDEN');
             const columns = !deletion && c.transition
@@ -78,18 +84,32 @@ export function createAccountRecords(config, { consumers = [], now = () => Date.
             if (row && row.schema_version !== c.schemaVersion) fail('RECORD_SCHEMA_INCOMPATIBLE');
             if (deletion && !row) fail('RECORD_NOT_FOUND');
             if (expected >= Number.MAX_SAFE_INTEGER) fail('RECORD_DATA_INVALID');
+            const timestamp = Math.max(now(), row?.created_at || 0);
             if (!deletion && c.transition) {
                 let previous = null;
                 if (row) {
                     try { previous = JSON.parse(row.payload); }
                     catch { fail('RECORD_DATA_INVALID'); }
                 }
+                const meta = {
+                    now: timestamp,
+                    recordId: id,
+                    throwFailures: true,
+                    readRecord: (targetId, targetConsumerId = c.id) => {
+                        const r = db.prepare('SELECT deleted,payload FROM records WHERE consumer=? AND record_id=?').get(targetConsumerId, targetId);
+                        if (!r || r.deleted) return null;
+                        try { return JSON.parse(r.payload); } catch { return null; }
+                    },
+                };
                 let allowed;
-                try { allowed = c.transition(previous, prepared.parsed); }
-                catch { fail('RECORD_TRANSITION_INVALID'); }
+                try { allowed = c.transition(previous, prepared.parsed, meta); }
+                catch (err) {
+                    if (err instanceof RecordFailure) throw err;
+                    fail('RECORD_TRANSITION_INVALID');
+                }
                 if (allowed === false || allowed?.then) fail('RECORD_TRANSITION_INVALID');
+                prepared = encode(c, prepared.parsed);
             }
-            const timestamp = Math.max(now(), row?.created_at || 0);
             const usage = db.prepare('SELECT records,tombstones,bytes FROM collections WHERE consumer=?').get(c.id)
                 || { records: 0, tombstones: 0, bytes: 0 };
             if (deletion) {
@@ -131,10 +151,10 @@ export function createAccountRecords(config, { consumers = [], now = () => Date.
                 db.prepare('INSERT INTO collections(consumer,records,tombstones,bytes) VALUES(?,?,?,?) ON CONFLICT(consumer) DO UPDATE SET records=excluded.records,tombstones=excluded.tombstones,bytes=excluded.bytes')
                     .run(c.id, count, tombstones, bytes);
             }
-            return snapshot(db, c, id);
+            return snapshot(db, c, id, timestamp);
         }, true);
     }
-    const advertised = [...registered.values()].map(({ validate, transition, tombstoneRetentionMs, ...c }) => c);
+    const advertised = [...registered.values()].map(({ validate, transition, projectRead, tombstoneRetentionMs, ...c }) => c);
     return {
         consumer: id => consumerFor(id),
         definition: { id: 'account-records', version: '0.1.0', dependsOn: ['core'],
