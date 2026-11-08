@@ -39,6 +39,20 @@ const STEP_STATES = [
     'conflict',
     'pruned',
 ];
+const STEP_DISPATCH_PHASES = [
+    'idle',
+    'preparing',
+    'in-flight',
+    'settled',
+];
+const LOCK_HOLDER_PHASES = [
+    'preparing',
+    'in-flight',
+    'unknown',
+    'undo-unknown',
+    'conflict',
+    'reconcile',
+];
 const TERMINAL_OR_PRUNABLE_STEP_STATES = new Set([
     'verified',
     'notWritten',
@@ -689,10 +703,20 @@ function validateConflictResolution(c) {
 }
 
 function validateExecStepRecord(p) {
-    keys(
-        p,
-        'schema,identity,threadId,batchId,book,stepIndex,state,attemptId,holderDeviceId,allocatedUids,baseline,verification,reconciliation,undo,conflictResolution,error,updatedAt,history',
-    );
+    if (!obj(p)) bad();
+    const required = [
+        'schema', 'identity', 'threadId', 'batchId', 'book', 'stepIndex',
+        'state', 'attemptId', 'holderDeviceId', 'allocatedUids', 'baseline',
+        'verification', 'reconciliation', 'undo', 'conflictResolution',
+        'error', 'updatedAt', 'history',
+    ];
+    const allowed = new Set([...required, 'dispatchPhase', 'fence']);
+    for (const k of required) {
+        if (!(k in p)) bad();
+    }
+    for (const k of Object.keys(p)) {
+        if (!allowed.has(k)) bad();
+    }
     if (p.schema !== 1) bad();
     validateLorebookIdentity(p.identity);
     str(p.threadId, 128, false);
@@ -700,6 +724,12 @@ function validateExecStepRecord(p) {
     str(p.book, 512, false);
     int(p.stepIndex, 0, 128);
     one(p.state, STEP_STATES);
+    if (p.dispatchPhase !== undefined && p.dispatchPhase !== null) {
+        one(p.dispatchPhase, STEP_DISPATCH_PHASES);
+    }
+    if (p.fence !== undefined && p.fence !== null) {
+        int(p.fence, 0, 1000000000);
+    }
     nullable(p.attemptId, v => str(v, 96, false));
     nullable(p.holderDeviceId, v => str(v, 64, false));
     for (const [k, uidVal] of safeDict(p.allocatedUids, 256)) {
@@ -752,6 +782,9 @@ export function transitionLorebookExecStep(prev, next) {
     ) {
         return false;
     }
+    if (prev.fence != null && next.fence != null && next.fence < prev.fence) {
+        return false;
+    }
     // Pre-allocated create UIDs cannot be altered once assigned
     for (const [k, uidVal] of Object.entries(prev.allocatedUids || {})) {
         if (next.allocatedUids?.[k] !== uidVal) return false;
@@ -780,8 +813,25 @@ export function transitionLorebookExecStep(prev, next) {
         return false;
     }
     if (from === 'writing') {
+        // In-flight protection: while a host write is in-flight, another attempt cannot mark it notWritten or strip in-flight to unknown
+        if (prev.dispatchPhase === 'in-flight' && next.attemptId !== prev.attemptId) {
+            if (to === 'verified') {
+                return next.verification !== null && next.reconciliation?.outcome === 'verified';
+            }
+            if (to === 'conflict') {
+                return next.reconciliation?.outcome === 'conflict';
+            }
+            return false;
+        }
+        if (to === 'writing') {
+            if (prev.dispatchPhase === 'in-flight') {
+                return next.attemptId === prev.attemptId && next.baseline !== null;
+            }
+            return next.attemptId !== null && next.baseline !== null;
+        }
         if (to === 'verified') {
-            return next.attemptId === prev.attemptId && next.verification !== null;
+            if (next.verification === null) return false;
+            return next.attemptId === prev.attemptId || next.reconciliation?.outcome === 'verified';
         }
         if (to === 'notWritten' || to === 'unknown' || to === 'conflict') {
             return true;
@@ -789,6 +839,7 @@ export function transitionLorebookExecStep(prev, next) {
         return false;
     }
     if (from === 'unknown') {
+        if (to === 'unknown') return true;
         if (['verified', 'notWritten', 'conflict'].includes(to)) {
             if (next.reconciliation === null || next.reconciliation.outcome !== to) return false;
             if (to === 'verified' && next.verification === null) return false;
@@ -801,9 +852,13 @@ export function transitionLorebookExecStep(prev, next) {
         if (to === 'writing') {
             return next.attemptId !== null && next.attemptId !== prev.attemptId && next.baseline !== null;
         }
+        if (to === 'conflict') return true;
         return false;
     }
     if (from === 'verified') {
+        if (to === 'verified') {
+            return next.verification !== null;
+        }
         if (to === 'undoing') {
             return next.attemptId !== null && next.undo !== null && next.undo.status === 'undoing';
         }
@@ -811,6 +866,21 @@ export function transitionLorebookExecStep(prev, next) {
         return false;
     }
     if (from === 'undoing') {
+        if (prev.dispatchPhase === 'in-flight' && next.attemptId !== prev.attemptId) {
+            if (to === 'undone') {
+                return next.undo?.status === 'undone' && next.reconciliation?.outcome === 'undone';
+            }
+            if (to === 'conflict') {
+                return next.reconciliation?.outcome === 'conflict';
+            }
+            return false;
+        }
+        if (to === 'undoing') {
+            if (prev.dispatchPhase === 'in-flight') {
+                return next.attemptId === prev.attemptId && next.undo !== null && next.undo.status === 'undoing';
+            }
+            return next.attemptId !== null && next.undo !== null && next.undo.status === 'undoing';
+        }
         if (to === 'undone') {
             return next.undo !== null && next.undo.status === 'undone';
         }
@@ -824,6 +894,9 @@ export function transitionLorebookExecStep(prev, next) {
         return false;
     }
     if (from === 'undoUnknown') {
+        if (to === 'undoUnknown') {
+            return next.undo !== null && next.undo.status === 'undoUnknown';
+        }
         if (['undone', 'verified', 'conflict'].includes(to)) {
             return next.reconciliation !== null && next.reconciliation.outcome === to;
         }
@@ -837,21 +910,56 @@ export function transitionLorebookExecStep(prev, next) {
         if (to === 'conflict') return true;
         return false;
     }
+    if (from === 'undone') {
+        if (to === 'undone') {
+            return next.undo !== null && next.undo.status === 'undone';
+        }
+        if (to === 'conflict') return true;
+        return false;
+    }
     return false;
 }
 
 function validateBookLockRecord(p) {
-    keys(p, 'schema,identity,book,holder,ledger,history,updatedAt');
+    if (!obj(p)) bad();
+    const required = ['schema', 'identity', 'book', 'holder', 'ledger', 'history', 'updatedAt'];
+    const allowed = new Set([...required, 'fence']);
+    for (const k of required) {
+        if (!(k in p)) bad();
+    }
+    for (const k of Object.keys(p)) {
+        if (!allowed.has(k)) bad();
+    }
     if (p.schema !== 1) bad();
     validateLorebookIdentity(p.identity);
     str(p.book, 512, false);
+    if (p.fence !== undefined && p.fence !== null) {
+        int(p.fence, 0, 1000000000);
+    }
     nullable(p.holder, h => {
-        keys(h, 'batchId,threadId,attemptId,deviceId,mode,acquiredAt');
+        if (!obj(h)) bad();
+        const holderRequired = ['batchId', 'threadId', 'attemptId', 'deviceId', 'mode', 'acquiredAt'];
+        const holderAllowed = new Set([...holderRequired, 'phase', 'fence', 'chat']);
+        for (const k of holderRequired) {
+            if (!(k in h)) bad();
+        }
+        for (const k of Object.keys(h)) {
+            if (!holderAllowed.has(k)) bad();
+        }
         str(h.batchId, 128, false);
         str(h.threadId, 128, false);
         str(h.attemptId, 96, false);
         str(h.deviceId, 64, false);
         one(h.mode, ['apply', 'undo', 'reconcile']);
+        if (h.phase !== undefined && h.phase !== null) {
+            one(h.phase, LOCK_HOLDER_PHASES);
+        }
+        if (h.fence !== undefined && h.fence !== null) {
+            int(h.fence, 0, 1000000000);
+        }
+        if (h.chat !== undefined && h.chat !== null) {
+            str(h.chat, 512);
+        }
         int(h.acquiredAt);
     });
     array(p.ledger, 16, l => {
@@ -875,7 +983,7 @@ function validateBookLockRecord(p) {
     });
     array(p.history, 24, h => {
         keys(h, 'action,batchId,attemptId,deviceId,at,reason');
-        one(h.action, ['acquire', 'release', 'takeover', 'abort']);
+        one(h.action, ['acquire', 'in-flight', 'hold-unresolved', 'release', 'takeover', 'abort', 'conflict']);
         str(h.batchId, 128, false);
         str(h.attemptId, 96, false);
         str(h.deviceId, 64, false);
@@ -897,6 +1005,9 @@ export function transitionLorebookBookLock(prev, next) {
     ) {
         return false;
     }
+    if (prev.fence != null && next.fence != null && next.fence < prev.fence) {
+        return false;
+    }
     if (prev.holder === null && next.holder !== null) {
         return true;
     }
@@ -904,10 +1015,27 @@ export function transitionLorebookBookLock(prev, next) {
         const last = next.history.at(-1);
         if (!last || !['release', 'abort'].includes(last.action)) return false;
         if (last.action === 'release' && last.attemptId !== prev.holder.attemptId) return false;
+        if (prev.holder.phase === 'in-flight' && last.attemptId !== prev.holder.attemptId) {
+            return false;
+        }
+        if (prev.holder.phase === 'conflict' && last.action !== 'release') {
+            return false;
+        }
         return true;
     }
     if (prev.holder !== null && next.holder !== null) {
         if (prev.holder.attemptId === next.holder.attemptId) return true;
+        if (prev.holder.phase === 'in-flight') {
+            // Cannot take over an in-flight lock for apply/undo or without positive ledger/conflict evidence
+            if (next.holder.mode !== 'reconcile') return false;
+            const hasLedgerEvidence = (next.ledger?.length || 0) > (prev.ledger?.length || 0);
+            const isConflictLock = next.holder.phase === 'conflict';
+            if (!hasLedgerEvidence && !isConflictLock) return false;
+        }
+        if (['unknown', 'undo-unknown', 'conflict'].includes(prev.holder.phase)) {
+            if (['apply', 'undo'].includes(next.holder.mode)) return false;
+            if (next.holder.batchId !== prev.holder.batchId) return false;
+        }
         const last = next.history.at(-1);
         return Boolean(
             last

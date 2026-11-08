@@ -467,4 +467,103 @@ test('Lorebook batch, execution, step and book-lock state machines enforce freez
         books: [{ ...execFrozen.books[0], state: 'verified' }],
     });
     assert.equal(transitionLorebookExecution(execSettled, execUndoRunning), true);
+
+    // 5. In-flight step & book-lock protection
+    const sWritingInFlight = execStepRecord({
+        state: 'writing',
+        dispatchPhase: 'in-flight',
+        fence: 2,
+        attemptId: 'att-1',
+        holderDeviceId: 'dev-1',
+        baseline: stepBaseline(),
+    });
+    validateLorebookRecord('oracle-lorebook-exec-steps', sWritingInFlight);
+
+    // Another attempt cannot mark an in-flight writing step as notWritten or unknown
+    const sInFlightTakeoverNotWritten = structuredClone(sWritingInFlight);
+    sInFlightTakeoverNotWritten.state = 'notWritten';
+    sInFlightTakeoverNotWritten.attemptId = 'att-rec-2';
+    assert.equal(transitionLorebookExecStep(sWritingInFlight, sInFlightTakeoverNotWritten), false);
+
+    const sInFlightTakeoverUnknown = structuredClone(sWritingInFlight);
+    sInFlightTakeoverUnknown.state = 'unknown';
+    sInFlightTakeoverUnknown.attemptId = 'att-rec-2';
+    assert.equal(transitionLorebookExecStep(sWritingInFlight, sInFlightTakeoverUnknown), false);
+
+    // Positive reconciliation to verified with evidence IS allowed
+    const sInFlightReconcileVerified = structuredClone(sWritingInFlight);
+    sInFlightReconcileVerified.state = 'verified';
+    sInFlightReconcileVerified.dispatchPhase = 'settled';
+    sInFlightReconcileVerified.attemptId = 'att-rec-2';
+    sInFlightReconcileVerified.verification = {
+        afterBookFingerprint: 'fp-book-2',
+        receipts: stepBaseline().pendingReceipts,
+        verifiedAt: 1025,
+        persistenceMode: 'reconciled',
+    };
+    sInFlightReconcileVerified.reconciliation = {
+        outcome: 'verified',
+        reason: '',
+        evidenceDigest: 'ev-after',
+        reconciledAt: 1025,
+        deviceId: 'dev-2',
+    };
+    assert.equal(transitionLorebookExecStep(sWritingInFlight, sInFlightReconcileVerified), true);
+
+    // Book lock in-flight cannot be aborted or taken over without positive ledger/conflict evidence
+    const lockInFlight = bookLockRecord({
+        fence: 2,
+        holder: {
+            batchId: 'lorebook-review-1',
+            threadId: 'thread-1',
+            attemptId: 'att-1',
+            deviceId: 'dev-1',
+            mode: 'apply',
+            phase: 'in-flight',
+            fence: 2,
+            chat: 'chat-1',
+            acquiredAt: 1000,
+        },
+    });
+    validateLorebookRecord('oracle-lorebook-book-locks', lockInFlight);
+
+    const lockInFlightTakeoverNoEvidence = structuredClone(lockInFlight);
+    lockInFlightTakeoverNoEvidence.holder = {
+        ...lockInFlight.holder,
+        attemptId: 'att-rec-2',
+        deviceId: 'dev-2',
+        mode: 'reconcile',
+        phase: 'reconcile',
+    };
+    lockInFlightTakeoverNoEvidence.history.push({
+        action: 'takeover',
+        batchId: 'lorebook-review-1',
+        attemptId: 'att-rec-2',
+        deviceId: 'dev-2',
+        at: 1025,
+        reason: '跨设备核验',
+    });
+    assert.equal(transitionLorebookBookLock(lockInFlight, lockInFlightTakeoverNoEvidence), false);
+
+    // Unresolved unknown/conflict lock blocks other batches from taking over
+    const lockUnknown = structuredClone(lockInFlight);
+    lockUnknown.holder.phase = 'unknown';
+    const lockOtherBatch = structuredClone(lockUnknown);
+    lockOtherBatch.holder = {
+        ...lockUnknown.holder,
+        batchId: 'lorebook-review-2',
+        attemptId: 'att-other-batch',
+        deviceId: 'dev-2',
+        mode: 'apply',
+        phase: 'preparing',
+    };
+    lockOtherBatch.history.push({
+        action: 'takeover',
+        batchId: 'lorebook-review-2',
+        attemptId: 'att-other-batch',
+        deviceId: 'dev-2',
+        at: 1030,
+        reason: '跨批次抢锁',
+    });
+    assert.equal(transitionLorebookBookLock(lockUnknown, lockOtherBatch), false);
 });
