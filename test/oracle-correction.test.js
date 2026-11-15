@@ -9,6 +9,8 @@ import { advisorRecordConsumers } from '../src/account-documents/oracle-advisor.
 import { diagnosisRecordConsumers } from '../src/account-documents/oracle-diagnosis.js';
 import {
     correctionRecordConsumers,
+    correctionCandidateRecordId,
+    correctionApplicationRecordId,
     validateCorrectionSettings,
     validateCorrectionRecord,
     transitionCorrectionApplication,
@@ -531,29 +533,41 @@ test('Correction production consumers enforce CAS, transition hook, and non-dele
         { code: 'RECORD_DELETE_FORBIDDEN' },
     );
 
-    await records.commit(alice, 'oracle-correction-candidates', 'cand-1', {
+    const body = candidateBody();
+    const candRecordId = correctionCandidateRecordId(body.identity, body.candidate.id);
+    const applyRecordId = correctionApplicationRecordId(body.candidate.versionKey);
+    const claim = applicationClaim({ candidateId: body.candidate.id });
+
+    await assert.rejects(
+        records.commit(alice, 'oracle-correction-applications', applyRecordId, {
+            schemaVersion: 1,
+            expectedRevision: 0,
+            payload: claim,
+        }),
+        { code: 'CORRECTION_CANDIDATE_UNAVAILABLE' },
+    );
+
+    await records.commit(alice, 'oracle-correction-candidates', candRecordId, {
         schemaVersion: 1,
         expectedRevision: 0,
-        payload: candidateBody(),
+        payload: body,
     });
-    const deletedCand = await records.delete(alice, 'oracle-correction-candidates', 'cand-1', {
-        schemaVersion: 1,
-        expectedRevision: 1,
-    });
-    assert.equal(deletedCand.status, 'deleted');
 
-    const claim = applicationClaim();
-    await records.commit(alice, 'oracle-correction-applications', 'apply-1', {
+    await records.commit(alice, 'oracle-correction-applications', applyRecordId, {
         schemaVersion: 1,
         expectedRevision: 0,
         payload: claim,
     });
     await assert.rejects(
-        records.delete(alice, 'oracle-correction-applications', 'apply-1', { schemaVersion: 1, expectedRevision: 1 }),
+        records.delete(alice, 'oracle-correction-applications', applyRecordId, { schemaVersion: 1, expectedRevision: 1 }),
         { code: 'RECORD_DELETE_FORBIDDEN' },
     );
     await assert.rejects(
-        records.commit(alice, 'oracle-correction-applications', 'apply-1', {
+        records.delete(alice, 'oracle-correction-candidates', candRecordId, { schemaVersion: 1, expectedRevision: 1 }),
+        { code: 'CORRECTION_CANDIDATE_IN_USE' },
+    );
+    await assert.rejects(
+        records.commit(alice, 'oracle-correction-applications', applyRecordId, {
             schemaVersion: 1,
             expectedRevision: 1,
             payload: {
@@ -563,5 +577,50 @@ test('Correction production consumers enforce CAS, transition hook, and non-dele
             },
         }),
         { code: 'RECORD_TRANSITION_INVALID' },
+    );
+
+    await records.commit(alice, 'oracle-correction-applications', applyRecordId, {
+        schemaVersion: 1,
+        expectedRevision: 1,
+        payload: {
+            ...claim,
+            state: 'applying',
+            updatedAt: 1500,
+        },
+    });
+    await assert.rejects(
+        records.delete(alice, 'oracle-correction-candidates', candRecordId, { schemaVersion: 1, expectedRevision: 1 }),
+        { code: 'CORRECTION_CANDIDATE_IN_USE' },
+    );
+
+    await records.commit(alice, 'oracle-correction-applications', applyRecordId, {
+        schemaVersion: 1,
+        expectedRevision: 2,
+        payload: {
+            ...claim,
+            state: 'released',
+            releaseReason: 'cancelled',
+            updatedAt: 1800,
+        },
+    });
+    const deletedCand = await records.delete(alice, 'oracle-correction-candidates', candRecordId, {
+        schemaVersion: 1,
+        expectedRevision: 1,
+    });
+    assert.equal(deletedCand.status, 'deleted');
+
+    await assert.rejects(
+        records.commit(alice, 'oracle-correction-applications', applyRecordId, {
+            schemaVersion: 1,
+            expectedRevision: 3,
+            payload: {
+                ...claim,
+                cycle: 2,
+                operationId: 'op-reclaim-deleted',
+                state: 'claimed',
+                updatedAt: 2200,
+            },
+        }),
+        { code: 'CORRECTION_CANDIDATE_UNAVAILABLE' },
     );
 });

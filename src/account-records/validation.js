@@ -23,10 +23,12 @@ export function registerConsumers(consumers) {
         const maxTombstones = c?.maxTombstones === undefined ? (deletable ? c?.maxRecords : 0) : c.maxTombstones;
         const tombstoneRetentionMs = c?.tombstoneRetentionMs === undefined ? DEFAULT_TOMBSTONE_RETENTION_MS : c.tombstoneRetentionMs;
         const transition = c?.transition === undefined ? null : c.transition;
+        const beforeDelete = c?.beforeDelete === undefined ? null : c.beforeDelete;
         const projectRead = c?.projectRead === undefined ? null : c.projectRead;
         if (!c || typeof c.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(c.id) || registered.has(c.id)
             || !integer(c.schemaVersion, 1) || typeof c.validate !== 'function'
             || (transition !== null && typeof transition !== 'function')
+            || (beforeDelete !== null && typeof beforeDelete !== 'function')
             || (projectRead !== null && typeof projectRead !== 'function')
             || typeof deletable !== 'boolean'
             || !integer(c.maxBytes, 1) || c.maxBytes > 2 * 1024 * 1024
@@ -40,6 +42,7 @@ export function registerConsumers(consumers) {
             schemaVersion: c.schemaVersion,
             validate: c.validate,
             transition,
+            beforeDelete,
             projectRead,
             maxBytes: c.maxBytes,
             maxRecords: c.maxRecords,

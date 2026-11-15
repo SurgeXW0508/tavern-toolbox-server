@@ -75,7 +75,8 @@ export function createAccountRecords(config, { consumers = [], now = () => Date.
         let prepared = deletion ? null : encode(c, body.payload);
         return use(context, db => {
             if (deletion && !c.deletable) fail('RECORD_DELETE_FORBIDDEN');
-            const columns = !deletion && c.transition
+            const needExistingPayload = (!deletion && c.transition) || (deletion && c.beforeDelete);
+            const columns = needExistingPayload
                 ? 'schema_version,revision,deleted,created_at,storage_bytes,payload'
                 : 'schema_version,revision,deleted,created_at,storage_bytes';
             const row = db.prepare(`SELECT ${columns} FROM records WHERE consumer=? AND record_id=?`).get(c.id, id);
@@ -85,22 +86,23 @@ export function createAccountRecords(config, { consumers = [], now = () => Date.
             if (deletion && !row) fail('RECORD_NOT_FOUND');
             if (expected >= Number.MAX_SAFE_INTEGER) fail('RECORD_DATA_INVALID');
             const timestamp = Math.max(now(), row?.created_at || 0);
+            const buildMeta = () => ({
+                now: timestamp,
+                recordId: id,
+                throwFailures: true,
+                readRecord: (targetId, targetConsumerId = c.id) => {
+                    const r = db.prepare('SELECT deleted,payload FROM records WHERE consumer=? AND record_id=?').get(targetConsumerId, targetId);
+                    if (!r || r.deleted) return null;
+                    try { return JSON.parse(r.payload); } catch { return null; }
+                },
+            });
             if (!deletion && c.transition) {
                 let previous = null;
                 if (row) {
                     try { previous = JSON.parse(row.payload); }
                     catch { fail('RECORD_DATA_INVALID'); }
                 }
-                const meta = {
-                    now: timestamp,
-                    recordId: id,
-                    throwFailures: true,
-                    readRecord: (targetId, targetConsumerId = c.id) => {
-                        const r = db.prepare('SELECT deleted,payload FROM records WHERE consumer=? AND record_id=?').get(targetConsumerId, targetId);
-                        if (!r || r.deleted) return null;
-                        try { return JSON.parse(r.payload); } catch { return null; }
-                    },
-                };
+                const meta = buildMeta();
                 let allowed;
                 try { allowed = c.transition(previous, prepared.parsed, meta); }
                 catch (err) {
@@ -109,6 +111,18 @@ export function createAccountRecords(config, { consumers = [], now = () => Date.
                 }
                 if (allowed === false || allowed?.then) fail('RECORD_TRANSITION_INVALID');
                 prepared = encode(c, prepared.parsed);
+            } else if (deletion && c.beforeDelete) {
+                let previous = null;
+                try { previous = JSON.parse(row.payload); }
+                catch { fail('RECORD_DATA_INVALID'); }
+                const meta = buildMeta();
+                let allowed;
+                try { allowed = c.beforeDelete(previous, meta); }
+                catch (err) {
+                    if (err instanceof RecordFailure) throw err;
+                    fail('RECORD_DELETE_FORBIDDEN');
+                }
+                if (allowed === false || allowed?.then) fail('RECORD_DELETE_FORBIDDEN');
             }
             const usage = db.prepare('SELECT records,tombstones,bytes FROM collections WHERE consumer=?').get(c.id)
                 || { records: 0, tombstones: 0, bytes: 0 };
@@ -154,7 +168,7 @@ export function createAccountRecords(config, { consumers = [], now = () => Date.
             return snapshot(db, c, id, timestamp);
         }, true);
     }
-    const advertised = [...registered.values()].map(({ validate, transition, projectRead, tombstoneRetentionMs, ...c }) => c);
+    const advertised = [...registered.values()].map(({ validate, transition, beforeDelete, projectRead, tombstoneRetentionMs, ...c }) => c);
     return {
         consumer: id => consumerFor(id),
         definition: { id: 'account-records', version: '0.1.0', dependsOn: ['core'],

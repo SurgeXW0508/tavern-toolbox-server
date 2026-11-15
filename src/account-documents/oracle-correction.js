@@ -1,10 +1,22 @@
+import { createHash } from 'node:crypto';
 import {
     bad, obj, keys, str, int, bool, one, array, unique, nullable,
     validateCloudConnectionId, validateOracleIdentity, validateOracleRecipe,
     validatePromptProfiles,
 } from './oracle-validation.js';
+import { fail as failRecord } from '../account-records/validation.js';
 
 export const validateCorrectionIdentity = validateOracleIdentity;
+
+export function correctionCandidateRecordId(identity, candidateIdValue) {
+    const key = JSON.stringify([identity.kind, identity.owner, identity.chat]);
+    const digest = createHash('sha256').update(`${key}\0${candidateIdValue}`, 'utf8').digest('hex');
+    return `cand-${digest}`;
+}
+
+export function correctionApplicationRecordId(versionKey) {
+    return `apply-${versionKey}`;
+}
 
 const SHARED_SOURCES = Object.freeze([
     'persona',
@@ -329,7 +341,7 @@ function hasPriorHistoryOp(prev, operationId, candidateId, fullTextDigest, allow
     );
 }
 
-export function transitionCorrectionApplication(prev, next) {
+function checkCorrectionApplicationTransitionStructure(prev, next) {
     if (!prev) {
         if (next.state === 'claimed' && next.cycle === 1) return true;
         if (next.state === 'applied' && next.cycle === 1 && next.result?.verification === 'imported') return true;
@@ -466,6 +478,85 @@ export function transitionCorrectionApplication(prev, next) {
     return false;
 }
 
+export function claimBlocksCandidateDelete(claim, candidateIdValue) {
+    if (!obj(claim)) return false;
+    if (['claimed', 'applying', 'recovery'].includes(claim.state) && claim.candidateId === candidateIdValue) {
+        return true;
+    }
+    if (hasUnresolvedConflict(claim)) {
+        if (claim.candidateId === candidateIdValue) return true;
+        if (Array.isArray(claim.history)) {
+            for (let i = claim.history.length - 1; i >= 0; i -= 1) {
+                const entry = claim.history[i];
+                const outcome = String(entry?.outcome || '');
+                if (outcome.startsWith('recovered-') || outcome === 'reopened' || outcome === 'forced') break;
+                if (
+                    (outcome === 'applied-after-takeover' || outcome === 'conflict-detected')
+                    && entry?.candidateId === candidateIdValue
+                ) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+export function beforeDeleteCorrectionCandidate(prev, meta) {
+    if (!prev?.candidate?.id || !prev?.candidate?.versionKey || typeof meta?.readRecord !== 'function') {
+        return true;
+    }
+    const claim = meta.readRecord(
+        correctionApplicationRecordId(prev.candidate.versionKey),
+        'oracle-correction-applications',
+    );
+    if (claimBlocksCandidateDelete(claim, prev.candidate.id)) {
+        if (meta?.throwFailures) {
+            failRecord('CORRECTION_CANDIDATE_IN_USE', {
+                candidateId: prev.candidate.id,
+                versionKey: prev.candidate.versionKey,
+                state: claim.state,
+            });
+        }
+        return false;
+    }
+    return true;
+}
+
+export function transitionCorrectionApplication(prev, next, meta) {
+    if (!checkCorrectionApplicationTransitionStructure(prev, next)) {
+        return false;
+    }
+    if (
+        typeof meta?.readRecord === 'function'
+        && (next.state === 'claimed' || (prev?.state === 'claimed' && next.state === 'applying'))
+    ) {
+        const candidateBody = meta.readRecord(
+            correctionCandidateRecordId(next.identity, next.candidateId),
+            'oracle-correction-candidates',
+        );
+        const expectedApplyRecordId = candidateBody?.candidate?.versionKey
+            ? correctionApplicationRecordId(candidateBody.candidate.versionKey)
+            : '';
+        if (
+            !candidateBody?.candidate
+            || candidateBody.candidate.id !== next.candidateId
+            || candidateBody.identity?.kind !== next.identity.kind
+            || candidateBody.identity?.owner !== next.identity.owner
+            || candidateBody.identity?.chat !== next.identity.chat
+            || (typeof meta.recordId === 'string' && expectedApplyRecordId !== meta.recordId)
+        ) {
+            if (meta?.throwFailures) {
+                failRecord('CORRECTION_CANDIDATE_UNAVAILABLE', {
+                    candidateId: next.candidateId,
+                });
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
 export function validateCorrectionRecord(consumer, p) {
     if (consumer === 'oracle-correction-workspace') validateWorkspaceRecord(p);
     else if (consumer === 'oracle-correction-candidate-index') validateCandidateIndexRecord(p);
@@ -503,6 +594,7 @@ export const correctionRecordConsumers = Object.freeze([
         maxStorageBytes: 256 * 1024 * 1024,
         deletable: true,
         validate: p => validateCorrectionRecord('oracle-correction-candidates', p),
+        beforeDelete: beforeDeleteCorrectionCandidate,
     }),
     Object.freeze({
         id: 'oracle-correction-applications',

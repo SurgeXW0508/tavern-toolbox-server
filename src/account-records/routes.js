@@ -46,6 +46,7 @@ export function attachAccountRecordRoutes(router, { records, config, send, failu
                 RECORD_TRANSITION_INVALID: 409, RECORD_SCHEMA_INCOMPATIBLE: 409,
                 LOREBOOK_MIGRATION_REQUIRED: 409, LOREBOOK_LOCK_NOT_STALE: 409,
                 LOREBOOK_TAKEOVER_CONFIRMATION_REQUIRED: 409, LEGACY_LOCK_WRITE_FORBIDDEN: 409,
+                CORRECTION_CANDIDATE_IN_USE: 409, CORRECTION_CANDIDATE_UNAVAILABLE: 409,
                 CONTEXT_CHANGED: 409, PROTOCOL_INCOMPATIBLE: 409, CSRF_REJECTED: 403 }[code] || 503;
             const errPayload = failure(code, '账户记录操作未完成；请重新读取核对，未自动重试', mutation && status >= 500 ? 'unknown' : 'notApplicable');
             if (error instanceof RecordFailure && error.details && typeof error.details === 'object' && Object.keys(error.details).length > 0) {
