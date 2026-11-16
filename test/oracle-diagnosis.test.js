@@ -107,7 +107,7 @@ test('Diagnosis settings validator enforces v4 contract, protected nodes, option
 
 test('Diagnosis record validators enforce 80-message cap, stripped runtime fields and lore selection bounds', () => {
     validateDiagnosisRecord('oracle-diagnosis-threads', thread());
-    for (const state of ['ready', 'applied', 'nochange', 'undone']) {
+    for (const state of ['ready', 'pending', 'applied', 'nochange', 'undone']) {
         const p = thread();
         p.thread.messages[1].diagnosis = { applyState: state };
         validateDiagnosisRecord('oracle-diagnosis-threads', p);

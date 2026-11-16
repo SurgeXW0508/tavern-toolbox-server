@@ -92,7 +92,7 @@ export function validateDiagnosisRecord(consumer, p) {
             if (m.diagnosis !== undefined) {
                 if (m.role !== 'assistant') bad();
                 keys(m.diagnosis, 'applyState');
-                one(m.diagnosis.applyState, ['ready', 'applied', 'nochange', 'undone']);
+                one(m.diagnosis.applyState, ['ready', 'pending', 'applied', 'nochange', 'undone']);
             }
         });
         unique(p.thread.messages, 'id');
