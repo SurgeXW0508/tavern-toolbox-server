@@ -77,6 +77,21 @@ test('Diagnosis settings validator enforces v4 contract, protected nodes, option
     };
     validateDiagnosisSettings(withCloudAndProfile);
 
+    for (const mode of ['mvu', 'rules', 'all']) {
+        const scoped = settings();
+        scoped.recipe.nodes.find(n => n.source === 'diagnosis-rules').options = { mode };
+        scoped.promptProfiles = {
+            version: 1,
+            activeId: 'custom-scope',
+            items: [{
+                id: 'custom-scope',
+                name: `范围-${mode}`,
+                payload: { recipe: structuredClone(scoped.recipe) },
+            }],
+        };
+        validateDiagnosisSettings(scoped);
+    }
+
     const invalidCases = [
         p => { p.tokenBudget = 12000; },
         p => { p.historyDepth = 20; },
@@ -90,6 +105,10 @@ test('Diagnosis settings validator enforces v4 contract, protected nodes, option
         p => { p.recipe.nodes.find(n => n.source === 'stat-data').type = 'source'; },
         p => { p.recipe.nodes = p.recipe.nodes.filter(n => n.source !== 'latest-update'); },
         p => { p.recipe.nodes.push({ ...p.recipe.nodes.find(n => n.source === 'current-input'), id: 'dup-input' }); },
+        p => { p.recipe.nodes.find(n => n.source === 'diagnosis-rules').options = { mode: 'unknown' }; },
+        p => { p.recipe.nodes.find(n => n.source === 'diagnosis-rules').options = { mode: 'mvu', extra: true }; },
+        p => { p.recipe.nodes.find(n => n.source === 'diagnosis-rules').options = { extra: true }; },
+        p => { p.recipe.nodes.find(n => n.source === 'diagnosis-rules').options = null; },
         p => { p.recipe.nodes.find(n => n.source === 'diagnosis-history').options = { depth: 10 }; },
         p => { p.recipe.nodes.find(n => n.source === 'main-chat').options = { depth: 10 }; },
         p => { p.recipe.nodes.find(n => n.source === 'main-chat').options.depth = 501; },

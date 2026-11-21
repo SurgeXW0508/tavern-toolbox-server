@@ -35,6 +35,11 @@ export function validateDiagnosisRecipe(v) {
                 keys(options, 'depth,includeHidden');
                 int(options.depth, -1, 500);
                 bool(options.includeHidden);
+            } else if (source === 'diagnosis-rules') {
+                if (!obj(options)) bad();
+                if (Object.keys(options).length === 0) return;
+                keys(options, 'mode');
+                one(options.mode, ['mvu', 'rules', 'all']);
             } else {
                 keys(options, '');
             }
