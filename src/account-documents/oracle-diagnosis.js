@@ -25,7 +25,9 @@ const DIAGNOSIS_PROTECTED_SOURCES = Object.freeze([
     'current-input',
 ]);
 
-export function validateDiagnosisRecipe(v) {
+const DIAGNOSIS_RULE_MODES = Object.freeze(['mvu', 'rules', 'all']);
+
+export function validateDiagnosisRecipe(v, { allowEmptyDiagnosisRulesOptions = false } = {}) {
     validateOracleRecipe(v, {
         sources: DIAGNOSIS_SOURCES,
         protectedSources: DIAGNOSIS_PROTECTED_SOURCES,
@@ -37,9 +39,9 @@ export function validateDiagnosisRecipe(v) {
                 bool(options.includeHidden);
             } else if (source === 'diagnosis-rules') {
                 if (!obj(options)) bad();
-                if (Object.keys(options).length === 0) return;
+                if (allowEmptyDiagnosisRulesOptions && Object.keys(options).length === 0) return;
                 keys(options, 'mode');
-                one(options.mode, ['mvu', 'rules', 'all']);
+                one(options.mode, DIAGNOSIS_RULE_MODES);
             } else {
                 keys(options, '');
             }
@@ -47,26 +49,67 @@ export function validateDiagnosisRecipe(v) {
     });
 }
 
-export function validateDiagnosisSettings(p) {
+function validateDiagnosisSettingsBody(p, recipeOpts = {}) {
     keys(p, 'settingsVersion,connectionId,recipe,promptProfiles');
     if (p.settingsVersion !== 4) bad();
     validateCloudConnectionId(p.connectionId);
-    validateDiagnosisRecipe(p.recipe);
+    validateDiagnosisRecipe(p.recipe, recipeOpts);
     validatePromptProfiles(p.promptProfiles, {
         payloadKeys: 'recipe',
         validatePayload(payload) {
-            validateDiagnosisRecipe(payload.recipe);
+            validateDiagnosisRecipe(payload.recipe, recipeOpts);
         },
     });
     return p;
 }
 
+export function validateDiagnosisSettings(p) {
+    return validateDiagnosisSettingsBody(p, { allowEmptyDiagnosisRulesOptions: false });
+}
+
+export function validateDiagnosisSettingsV1(p) {
+    return validateDiagnosisSettingsBody(p, { allowEmptyDiagnosisRulesOptions: true });
+}
+
+function normalizeDiagnosisRulesRecipeToV2(recipe) {
+    return {
+        ...recipe,
+        nodes: recipe.nodes.map(node => node.source === 'diagnosis-rules'
+            ? { ...node, options: { mode: node.options?.mode || 'mvu' } }
+            : node),
+    };
+}
+
+export function migrateDiagnosisSettingsV1ToV2(p) {
+    const cloned = structuredClone(p);
+    cloned.recipe = normalizeDiagnosisRulesRecipeToV2(cloned.recipe);
+    cloned.promptProfiles = {
+        ...cloned.promptProfiles,
+        items: cloned.promptProfiles.items.map(item => ({
+            ...item,
+            payload: {
+                ...item.payload,
+                recipe: normalizeDiagnosisRulesRecipeToV2(item.payload.recipe),
+            },
+        })),
+    };
+    return cloned;
+}
+
 export const diagnosisSettingsConsumer = Object.freeze({
     id: 'oracle-diagnosis-settings',
-    schemaVersion: 1,
+    schemaVersion: 2,
     maxBytes: 2 * 1024 * 1024,
     limits: { maxProfiles: 100, maxRecipeNodes: 128 },
     validate: validateDiagnosisSettings,
+    migrations: Object.freeze([
+        Object.freeze({
+            fromVersion: 1,
+            toVersion: 2,
+            validateSource: validateDiagnosisSettingsV1,
+            convert: migrateDiagnosisSettingsV1ToV2,
+        }),
+    ]),
 });
 
 export function validateDiagnosisRecord(consumer, p) {

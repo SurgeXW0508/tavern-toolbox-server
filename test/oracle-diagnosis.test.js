@@ -3,12 +3,15 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { createAccountDocuments } from '../src/account-documents/store.js';
 import { createAccountRecords } from '../src/account-records/store.js';
 import { advisorRecordConsumers } from '../src/account-documents/oracle-advisor.js';
 import {
+    diagnosisSettingsConsumer,
     diagnosisRecordConsumers,
     validateDiagnosisSettings,
+    validateDiagnosisSettingsV1,
     validateDiagnosisRecord,
 } from '../src/account-documents/oracle-diagnosis.js';
 
@@ -16,7 +19,7 @@ const config = { policy: { core: { allowedOrigins: ['https://example.test'] } } 
 const identity = { kind: 'character', owner: 'Alice.png', chat: 'chat-1' };
 const protectedSources = ['diagnosis-rules', 'stat-data', 'latest-update', 'patch-protocol', 'current-input'];
 
-const recipe = () => ({
+const recipe = (rulesOptions = { mode: 'mvu' }) => ({
     version: 1,
     nodes: [
         { id: 'character-card', type: 'source', title: '角色设定', role: 'system', enabled: true, source: 'character-card', options: {} },
@@ -29,15 +32,15 @@ const recipe = () => ({
             role: source === 'current-input' ? 'user' : 'system',
             enabled: true,
             source,
-            options: {},
+            options: source === 'diagnosis-rules' ? structuredClone(rulesOptions) : {},
         })),
     ],
 });
 
-const settings = () => ({
+const settings = (rulesOptions = { mode: 'mvu' }) => ({
     settingsVersion: 4,
     connectionId: '',
-    recipe: recipe(),
+    recipe: recipe(rulesOptions),
     promptProfiles: { version: 1, activeId: 'official', items: [] },
 });
 
@@ -66,20 +69,20 @@ const loreSelection = () => ({
     },
 });
 
-test('Diagnosis settings validator enforces v4 contract, protected nodes, options and Cloud connection references', () => {
+test('Diagnosis settings validator enforces v2 schema (strict diagnosis-rules.options.mode), protected nodes and Cloud connection references', () => {
+    assert.equal(diagnosisSettingsConsumer.schemaVersion, 2);
     validateDiagnosisSettings(settings());
     const withCloudAndProfile = settings();
     withCloudAndProfile.connectionId = 'cloud:conn_01';
     withCloudAndProfile.promptProfiles = {
         version: 1,
         activeId: 'custom-1',
-        items: [{ id: 'custom-1', name: '严格模式', payload: { recipe: recipe() } }],
+        items: [{ id: 'custom-1', name: '严格模式', payload: { recipe: recipe({ mode: 'rules' }) } }],
     };
     validateDiagnosisSettings(withCloudAndProfile);
 
     for (const mode of ['mvu', 'rules', 'all']) {
-        const scoped = settings();
-        scoped.recipe.nodes.find(n => n.source === 'diagnosis-rules').options = { mode };
+        const scoped = settings({ mode });
         scoped.promptProfiles = {
             version: 1,
             activeId: 'custom-scope',
@@ -91,6 +94,10 @@ test('Diagnosis settings validator enforces v4 contract, protected nodes, option
         };
         validateDiagnosisSettings(scoped);
     }
+
+    // V1 source validator still accepts empty diagnosis-rules.options and Stage { mode }
+    validateDiagnosisSettingsV1(settings({}));
+    validateDiagnosisSettingsV1(settings({ mode: 'rules' }));
 
     const invalidCases = [
         p => { p.tokenBudget = 12000; },
@@ -105,10 +112,18 @@ test('Diagnosis settings validator enforces v4 contract, protected nodes, option
         p => { p.recipe.nodes.find(n => n.source === 'stat-data').type = 'source'; },
         p => { p.recipe.nodes = p.recipe.nodes.filter(n => n.source !== 'latest-update'); },
         p => { p.recipe.nodes.push({ ...p.recipe.nodes.find(n => n.source === 'current-input'), id: 'dup-input' }); },
+        p => { p.recipe.nodes.find(n => n.source === 'diagnosis-rules').options = {}; },
         p => { p.recipe.nodes.find(n => n.source === 'diagnosis-rules').options = { mode: 'unknown' }; },
         p => { p.recipe.nodes.find(n => n.source === 'diagnosis-rules').options = { mode: 'mvu', extra: true }; },
         p => { p.recipe.nodes.find(n => n.source === 'diagnosis-rules').options = { extra: true }; },
         p => { p.recipe.nodes.find(n => n.source === 'diagnosis-rules').options = null; },
+        p => {
+            p.promptProfiles = {
+                version: 1,
+                activeId: 'p1',
+                items: [{ id: 'p1', name: 'P1', payload: { recipe: recipe({}) } }],
+            };
+        },
         p => { p.recipe.nodes.find(n => n.source === 'diagnosis-history').options = { depth: 10 }; },
         p => { p.recipe.nodes.find(n => n.source === 'main-chat').options = { depth: 10 }; },
         p => { p.recipe.nodes.find(n => n.source === 'main-chat').options.depth = 501; },
@@ -191,7 +206,7 @@ test('Diagnosis record validators enforce 80-message cap, stripped runtime field
     }
 });
 
-test('Diagnosis production consumers use independent Document and Record CAS, isolate users and reject Tombstone reuse', async t => {
+test('Diagnosis production consumers use independent Document (v2) and Record CAS, isolate users and reject v1 requests', async t => {
     const root = await mkdtemp(path.join(tmpdir(), 'ttb-diagnosis-server-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     const documents = createAccountDocuments(config);
@@ -206,9 +221,18 @@ test('Diagnosis production consumers use independent Document and Record CAS, is
     const alice = { userRoot: path.join(root, 'alice'), contextId: 'alice' };
     const bob = { userRoot: path.join(root, 'bob'), contextId: 'bob' };
 
-    await documents.commit(alice, 'oracle-diagnosis-settings', { schemaVersion: 1, expectedRevision: 0, payload: settings() });
-    assert.equal((await documents.read(alice, 'oracle-diagnosis-settings', 1)).revision, 1);
-    assert.equal((await documents.read(bob, 'oracle-diagnosis-settings', 1)).revision, 0);
+    assert.throws(() => documents.read(alice, 'oracle-diagnosis-settings', 1), { code: 'DOCUMENT_SCHEMA_INCOMPATIBLE' });
+    assert.throws(
+        () => documents.commit(alice, 'oracle-diagnosis-settings', { schemaVersion: 1, expectedRevision: 0, payload: settings({}) }),
+        { code: 'DOCUMENT_SCHEMA_INCOMPATIBLE' },
+    );
+
+    await documents.commit(alice, 'oracle-diagnosis-settings', { schemaVersion: 2, expectedRevision: 0, payload: settings({ mode: 'rules' }) });
+    const readAlice = await documents.read(alice, 'oracle-diagnosis-settings', 2);
+    assert.equal(readAlice.schemaVersion, 2);
+    assert.equal(readAlice.revision, 1);
+    assert.equal(readAlice.payload.recipe.nodes.find(n => n.source === 'diagnosis-rules').options.mode, 'rules');
+    assert.equal((await documents.read(bob, 'oracle-diagnosis-settings', 2)).revision, 0);
     assert.equal((await documents.read(alice, 'oracle-advisor-settings', 1)).revision, 0);
 
     await records.commit(alice, 'oracle-diagnosis-threads', 'thread-a', { schemaVersion: 1, expectedRevision: 0, payload: thread('a') });
@@ -235,4 +259,79 @@ test('Diagnosis production consumers use independent Document and Record CAS, is
     for (const consumer of ['oracle-correction', 'oracle-lorebook-manager']) {
         assert.throws(() => records.consumer(consumer), { code: 'RECORD_CONSUMER_NOT_REGISTERED' });
     }
+});
+
+test('oracle-diagnosis-settings auto-migrates v1 formal ({}) and stage ({ mode }) rows to v2, rejects corrupt v1 and old v1 readers', async t => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ttb-diagnosis-migrate-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const v1Store = createAccountDocuments(config, {
+        consumers: [{
+            id: 'oracle-diagnosis-settings',
+            schemaVersion: 1,
+            maxBytes: 2 * 1024 * 1024,
+            validate: validateDiagnosisSettingsV1,
+        }],
+    });
+    const v2Store = createAccountDocuments(config);
+    await v1Store.definition.initialize(); t.after(() => v1Store.definition.shutdown());
+    await v2Store.definition.initialize(); t.after(() => v2Store.definition.shutdown());
+
+    const formalUser = { userRoot: path.join(root, 'formal') };
+    const stageUser = { userRoot: path.join(root, 'stage') };
+    const corruptUser = { userRoot: path.join(root, 'corrupt') };
+
+    // Formal v0.13.0 payload: empty diagnosis-rules.options in root and custom profile
+    const formalV1 = settings({});
+    formalV1.connectionId = 'cloud:conn_01';
+    formalV1.promptProfiles = {
+        version: 1,
+        activeId: 'custom-1',
+        items: [{ id: 'custom-1', name: '旧档案', payload: { recipe: recipe({}) } }],
+    };
+    await v1Store.commit(formalUser, 'oracle-diagnosis-settings', { schemaVersion: 1, expectedRevision: 0, payload: formalV1 });
+
+    const migratedFormal = await v2Store.read(formalUser, 'oracle-diagnosis-settings', 2);
+    assert.equal(migratedFormal.schemaVersion, 2);
+    assert.equal(migratedFormal.revision, 2);
+    assert.deepEqual(
+        migratedFormal.payload.recipe.nodes.find(n => n.source === 'diagnosis-rules').options,
+        { mode: 'mvu' },
+    );
+    assert.deepEqual(
+        migratedFormal.payload.promptProfiles.items[0].payload.recipe.nodes.find(n => n.source === 'diagnosis-rules').options,
+        { mode: 'mvu' },
+    );
+
+    // Downgraded v1 Server reading the migrated v2 DB fails closed with DOCUMENT_SCHEMA_INCOMPATIBLE
+    await assert.rejects(v1Store.read(formalUser, 'oracle-diagnosis-settings', 1), { code: 'DOCUMENT_SCHEMA_INCOMPATIBLE' });
+
+    // Earlier Stage v1 payload with explicit mode values in root and custom profile
+    const stageV1 = settings({ mode: 'rules' });
+    stageV1.promptProfiles = {
+        version: 1,
+        activeId: 'custom-all',
+        items: [{ id: 'custom-all', name: '全量档案', payload: { recipe: recipe({ mode: 'all' }) } }],
+    };
+    await v1Store.commit(stageUser, 'oracle-diagnosis-settings', { schemaVersion: 1, expectedRevision: 0, payload: stageV1 });
+
+    const migratedStage = await v2Store.read(stageUser, 'oracle-diagnosis-settings', 2);
+    assert.equal(migratedStage.schemaVersion, 2);
+    assert.equal(migratedStage.revision, 2);
+    assert.deepEqual(
+        migratedStage.payload.recipe.nodes.find(n => n.source === 'diagnosis-rules').options,
+        { mode: 'rules' },
+    );
+    assert.deepEqual(
+        migratedStage.payload.promptProfiles.items[0].payload.recipe.nodes.find(n => n.source === 'diagnosis-rules').options,
+        { mode: 'all' },
+    );
+
+    // Corrupt v1 stored row fails closed with DOCUMENT_DATA_INVALID
+    await v1Store.commit(corruptUser, 'oracle-diagnosis-settings', { schemaVersion: 1, expectedRevision: 0, payload: settings({}) });
+    const corruptFile = path.join(corruptUser.userRoot, 'tavern-toolbox-server/account-documents-v1/documents.sqlite');
+    const badPayload = settings({ mode: 'invalid-mode' });
+    const db = new DatabaseSync(corruptFile);
+    db.prepare('UPDATE documents SET payload=? WHERE id=?').run(JSON.stringify(badPayload), 'oracle-diagnosis-settings');
+    db.close();
+    await assert.rejects(v2Store.read(corruptUser, 'oracle-diagnosis-settings', 2), { code: 'DOCUMENT_DATA_INVALID' });
 });

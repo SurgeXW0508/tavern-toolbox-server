@@ -140,3 +140,155 @@ test('HTTP enforces session/context/origin/CSRF, restart rejects old context, an
     const failed = await call(); assert.equal(failed.status, 503);
     assert(!JSON.stringify(failed.body).includes(root)); assert(!JSON.stringify(failed.body).includes('Synthetic fixed'));
 });
+
+test('consumer migrations upgrade on demand with single revision bump, reject blind commit, and fail closed on incompatible or corrupt rows', async t => {
+    const { alice, bob } = await fixture(t);
+    const v1Consumer = {
+        id: 'migratable-doc',
+        schemaVersion: 1,
+        maxBytes: 4096,
+        validate: v => {
+            if (!v || typeof v !== 'object' || typeof v.name !== 'string') throw new Error('bad v1');
+            return v;
+        },
+    };
+    const v2Consumer = {
+        id: 'migratable-doc',
+        schemaVersion: 2,
+        maxBytes: 4096,
+        validate: v => {
+            if (!v || typeof v !== 'object' || typeof v.name !== 'string' || !['a', 'b'].includes(v.mode)) throw new Error('bad v2');
+            return v;
+        },
+        migrations: [{
+            fromVersion: 1,
+            toVersion: 2,
+            validateSource: v1Consumer.validate,
+            convert: v => ({ ...v, mode: v.mode || 'a' }),
+        }],
+    };
+    const v3Consumer = {
+        id: 'migratable-doc',
+        schemaVersion: 3,
+        maxBytes: 4096,
+        validate: v => {
+            if (!v || typeof v !== 'object' || typeof v.name !== 'string' || !['a', 'b'].includes(v.mode) || v.tag !== 'v3') throw new Error('bad v3');
+            return v;
+        },
+        migrations: [
+            ...v2Consumer.migrations,
+            {
+                fromVersion: 2,
+                toVersion: 3,
+                validateSource: v2Consumer.validate,
+                convert: v => ({ ...v, tag: 'v3' }),
+            },
+        ],
+    };
+
+    // Seed v1 row using v1 store
+    const s1 = createAccountDocuments(config, { consumers: [v1Consumer] });
+    await s1.definition.initialize(); t.after(() => s1.definition.shutdown());
+    assert.equal((await s1.commit(alice, 'migratable-doc', { schemaVersion: 1, expectedRevision: 0, payload: { name: 'alpha' } })).revision, 1);
+
+    // Blind commit against unmigrated v1 row fails with REVISION_CONFLICT (both rev 1 and rev 2) without mutating row
+    let convertCount = 0;
+    const countedV2 = {
+        ...v2Consumer,
+        migrations: [{
+            ...v2Consumer.migrations[0],
+            convert: v => { convertCount += 1; return { ...v, mode: v.mode || 'a' }; },
+        }],
+    };
+    const s2a = createAccountDocuments(config, { consumers: [countedV2] });
+    const s2b = createAccountDocuments(config, { consumers: [countedV2] });
+    await s2a.definition.initialize(); t.after(() => s2a.definition.shutdown());
+    await s2b.definition.initialize(); t.after(() => s2b.definition.shutdown());
+
+    await assert.rejects(
+        s2a.commit(alice, 'migratable-doc', { schemaVersion: 2, expectedRevision: 1, payload: { name: 'blind', mode: 'b' } }),
+        { code: 'REVISION_CONFLICT' },
+    );
+    await assert.rejects(
+        s2a.commit(alice, 'migratable-doc', { schemaVersion: 2, expectedRevision: 2, payload: { name: 'blind', mode: 'b' } }),
+        { code: 'REVISION_CONFLICT' },
+    );
+    const file = path.join(alice.userRoot, 'tavern-toolbox-server/account-documents-v1/documents.sqlite');
+    let rawRow = new DatabaseSync(file);
+    assert.equal(rawRow.prepare('SELECT schema_version, revision FROM documents WHERE id=?').get('migratable-doc').schema_version, 1);
+    assert.equal(rawRow.prepare('SELECT schema_version, revision FROM documents WHERE id=?').get('migratable-doc').revision, 1);
+    rawRow.close();
+
+    // Concurrent reads upgrade v1 -> v2 once and bump revision only once (1 -> 2)
+    convertCount = 0;
+    const [r1, r2] = await Promise.all([
+        s2a.read(alice, 'migratable-doc', 2),
+        s2b.read(alice, 'migratable-doc', 2),
+    ]);
+    assert.equal(r1.schemaVersion, 2);
+    assert.equal(r2.schemaVersion, 2);
+    assert.equal(r1.revision, 2);
+    assert.equal(r2.revision, 2);
+    assert.deepEqual(r1.payload, { name: 'alpha', mode: 'a' });
+    assert.deepEqual(r2.payload, { name: 'alpha', mode: 'a' });
+    assert.equal(convertCount, 1);
+
+    // Subsequent commit at migrated revision succeeds
+    const committed = await s2a.commit(alice, 'migratable-doc', { schemaVersion: 2, expectedRevision: 2, payload: { name: 'alpha', mode: 'b' } });
+    assert.equal(committed.revision, 3);
+
+    // Downgraded v1 store reading v2 DB fails closed with DOCUMENT_SCHEMA_INCOMPATIBLE and preserves DB
+    await assert.rejects(s1.read(alice, 'migratable-doc', 1), { code: 'DOCUMENT_SCHEMA_INCOMPATIBLE' });
+
+    // Multi-step chain v1 -> v2 -> v3 works in a single atomic revision bump
+    await s1.commit(bob, 'migratable-doc', { schemaVersion: 1, expectedRevision: 0, payload: { name: 'beta' } });
+    const s3 = createAccountDocuments(config, { consumers: [v3Consumer] });
+    await s3.definition.initialize(); t.after(() => s3.definition.shutdown());
+    const bobV3 = await s3.read(bob, 'migratable-doc', 3);
+    assert.equal(bobV3.schemaVersion, 3);
+    assert.equal(bobV3.revision, 2);
+    assert.deepEqual(bobV3.payload, { name: 'beta', mode: 'a', tag: 'v3' });
+
+    // Missing migration step fails closed with DOCUMENT_SCHEMA_INCOMPATIBLE
+    const gapV3 = createAccountDocuments(config, {
+        consumers: [{ ...v3Consumer, migrations: [v3Consumer.migrations[1]] }],
+    });
+    await gapV3.definition.initialize(); t.after(() => gapV3.definition.shutdown());
+    rawRow = new DatabaseSync(file);
+    rawRow.prepare('UPDATE documents SET schema_version=1, revision=5, payload=? WHERE id=?').run(JSON.stringify({ name: 'gap' }), 'migratable-doc');
+    rawRow.close();
+    await assert.rejects(gapV3.read(alice, 'migratable-doc', 3), { code: 'DOCUMENT_SCHEMA_INCOMPATIBLE' });
+
+    // Corrupt v1 row fails closed with DOCUMENT_DATA_INVALID and leaves stored row untouched
+    rawRow = new DatabaseSync(file);
+    rawRow.prepare('UPDATE documents SET schema_version=1, revision=6, payload=? WHERE id=?').run(JSON.stringify({ name: 123 }), 'migratable-doc');
+    rawRow.close();
+    await assert.rejects(s2a.read(alice, 'migratable-doc', 2), { code: 'DOCUMENT_DATA_INVALID' });
+    rawRow = new DatabaseSync(file);
+    const untouched = rawRow.prepare('SELECT schema_version, revision FROM documents WHERE id=?').get('migratable-doc');
+    assert.equal(untouched.schema_version, 1);
+    assert.equal(untouched.revision, 6);
+    rawRow.close();
+
+    // Converted payload exceeding maxBytes fails with DOCUMENT_TOO_LARGE and rolls back
+    const tightV2 = createAccountDocuments(config, {
+        consumers: [{
+            ...v2Consumer,
+            maxBytes: 40,
+            migrations: [{
+                fromVersion: 1,
+                toVersion: 2,
+                validateSource: v1Consumer.validate,
+                convert: v => ({ name: v.name + 'x'.repeat(50), mode: 'a' }),
+            }],
+        }],
+    });
+    await tightV2.definition.initialize(); t.after(() => tightV2.definition.shutdown());
+    rawRow = new DatabaseSync(file);
+    rawRow.prepare('UPDATE documents SET schema_version=1, revision=7, payload=? WHERE id=?').run(JSON.stringify({ name: 'ok' }), 'migratable-doc');
+    rawRow.close();
+    await assert.rejects(tightV2.read(alice, 'migratable-doc', 2), { code: 'DOCUMENT_TOO_LARGE' });
+    rawRow = new DatabaseSync(file);
+    assert.equal(rawRow.prepare('SELECT schema_version FROM documents WHERE id=?').get('migratable-doc').schema_version, 1);
+    rawRow.close();
+});
