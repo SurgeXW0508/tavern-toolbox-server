@@ -1,0 +1,609 @@
+import { createHash } from 'node:crypto';
+import {
+    bad, obj, keys, str, int, bool, one, array, unique, nullable,
+    validateCloudConnectionId, validateOracleIdentity, validateOracleRecipe,
+    validatePromptProfiles,
+} from './oracle-validation.js';
+import { fail as failRecord } from '../account-records/validation.js';
+
+export const validateCorrectionIdentity = validateOracleIdentity;
+
+export function correctionCandidateRecordId(identity, candidateIdValue) {
+    const key = JSON.stringify([identity.kind, identity.owner, identity.chat]);
+    const digest = createHash('sha256').update(`${key}\0${candidateIdValue}`, 'utf8').digest('hex');
+    return `cand-${digest}`;
+}
+
+export function correctionApplicationRecordId(versionKey) {
+    return `apply-${versionKey}`;
+}
+
+const SHARED_SOURCES = Object.freeze([
+    'persona',
+    'character-card',
+    'story-summary',
+    'world-info',
+    'main-chat',
+]);
+
+const FULL_SOURCES = Object.freeze([
+    ...SHARED_SOURCES,
+    'current-target',
+    'fixed-protocol',
+    'current-input',
+]);
+
+const FULL_PROTECTED_SOURCES = Object.freeze([
+    'current-target',
+    'fixed-protocol',
+    'current-input',
+]);
+
+const SELECTION_SOURCES = Object.freeze([
+    ...SHARED_SOURCES,
+    'selected-span',
+    'span-before',
+    'span-after',
+    'full-target-background',
+    'fixed-protocol',
+    'current-input',
+]);
+
+const SELECTION_PROTECTED_SOURCES = Object.freeze([
+    'selected-span',
+    'fixed-protocol',
+    'current-input',
+]);
+
+const METRIC_BOOL_KEYS = new Set([
+    'streamRequested', 'usedStreamFallback', 'lateStreamRecovered',
+    'completionEventAvailable', 'lateStreamTimedOut', 'stopAccepted',
+]);
+const METRIC_INT_KEYS = new Set([
+    'streamEvents', 'ignoredStreamEvents', 'requestSentMs', 'firstContentMs',
+    'lastContentMs', 'resolvedMs', 'settleLagMs', 'lateStreamWaitMs', 'stopAttempts',
+]);
+const METRIC_STR_KEYS = new Set([
+    'generationId', 'environment', 'completionSource', 'model', 'provider',
+]);
+
+const hex64 = v => {
+    if (typeof v !== 'string' || !/^[0-9a-f]{64}$/.test(v)) bad();
+};
+
+const candidateId = v => {
+    str(v, 96, false);
+    if (!/^correction-[A-Za-z0-9_-]{1,80}$/.test(v)) bad();
+};
+
+export function validateCorrectionRecipe(v, mode = 'full') {
+    const isSelection = mode === 'selection';
+    const sources = isSelection ? SELECTION_SOURCES : FULL_SOURCES;
+    const protectedSources = isSelection ? SELECTION_PROTECTED_SOURCES : FULL_PROTECTED_SOURCES;
+    validateOracleRecipe(v, {
+        sources,
+        protectedSources,
+        requiredSources: protectedSources,
+        validateOptions(source, options) {
+            if (source === 'world-info') {
+                keys(options, 'mode');
+                one(options.mode, ['st', 'off']);
+            } else if (source === 'main-chat') {
+                keys(options, 'depth');
+                int(options.depth, 0, 100);
+            } else {
+                keys(options, '');
+            }
+        },
+    });
+}
+
+function validateCorrectionRecipesPair(recipes) {
+    keys(recipes, 'full,selection');
+    validateCorrectionRecipe(recipes.full, 'full');
+    validateCorrectionRecipe(recipes.selection, 'selection');
+}
+
+export function validateCorrectionSettings(p) {
+    keys(
+        p,
+        'settingsVersion,connectionId,selectionContextChars,includeFullTargetForSelection,quickCommands,recipes,promptProfiles',
+    );
+    if (p.settingsVersion !== 4) bad();
+    validateCloudConnectionId(p.connectionId);
+    int(p.selectionContextChars, 0, 4000);
+    bool(p.includeFullTargetForSelection);
+    array(p.quickCommands, 50, q => {
+        keys(q, 'id,name,content,favorite');
+        str(q.id, 90, false);
+        str(q.name, 60, false);
+        str(q.content, 8000, false);
+        bool(q.favorite);
+    });
+    unique(p.quickCommands, 'id');
+    validateCorrectionRecipesPair(p.recipes);
+    validatePromptProfiles(p.promptProfiles, {
+        payloadKeys: 'recipes,selectionContextChars,includeFullTargetForSelection',
+        validatePayload(payload) {
+            validateCorrectionRecipesPair(payload.recipes);
+            int(payload.selectionContextChars, 0, 4000);
+            bool(payload.includeFullTargetForSelection);
+        },
+    });
+    return p;
+}
+
+export const correctionSettingsConsumer = Object.freeze({
+    id: 'oracle-correction-settings',
+    schemaVersion: 1,
+    maxBytes: 2 * 1024 * 1024,
+    limits: { maxProfiles: 100, maxRecipeNodes: 128, maxQuickCommands: 50 },
+    validate: validateCorrectionSettings,
+});
+
+function validateCandidateMetrics(m) {
+    if (!obj(m)) bad();
+    for (const [k, v] of Object.entries(m)) {
+        if (METRIC_BOOL_KEYS.has(k)) bool(v);
+        else if (METRIC_INT_KEYS.has(k)) nullable(v, x => int(x, 0, 86400000));
+        else if (METRIC_STR_KEYS.has(k)) nullable(v, x => str(x, 120));
+        else bad();
+    }
+}
+
+function validateWorkspaceRecord(p) {
+    keys(p, 'identity,mode,targetMessageId,selection,selectionTargetKey,instruction,activeCandidateId');
+    validateCorrectionIdentity(p.identity);
+    one(p.mode, ['full', 'selection']);
+    nullable(p.targetMessageId, v => int(v, 0, 1000000));
+    keys(p.selection, 'start,end');
+    int(p.selection.start, 0, 1000000);
+    int(p.selection.end, p.selection.start, 1000000);
+    str(p.selectionTargetKey, 700);
+    str(p.instruction, 20000);
+    str(p.activeCandidateId, 96);
+    if (p.activeCandidateId) candidateId(p.activeCandidateId);
+}
+
+function validateCandidateIndexRecord(p) {
+    keys(p, 'identity,candidates');
+    validateCorrectionIdentity(p.identity);
+    array(p.candidates, 30, c => {
+        keys(
+            c,
+            'id,createdAt,messageId,mode,lockDigest,versionKey,applicable,staleReason,manualRecovery,warningCounts,stats,instructionPreview,bodyBytes',
+        );
+        candidateId(c.id);
+        int(c.createdAt);
+        int(c.messageId, 0, 1000000);
+        one(c.mode, ['full', 'selection']);
+        hex64(c.lockDigest);
+        hex64(c.versionKey);
+        bool(c.applicable);
+        str(c.staleReason, 200);
+        bool(c.manualRecovery);
+        keys(c.warningCounts, 'blocked,confirm,notice');
+        int(c.warningCounts.blocked, 0, 100);
+        int(c.warningCounts.confirm, 0, 100);
+        int(c.warningCounts.notice, 0, 100);
+        keys(c.stats, 'beforeChars,afterChars,changedChars');
+        int(c.stats.beforeChars, 0, 1000000);
+        int(c.stats.afterChars, 0, 1000000);
+        int(c.stats.changedChars, 0, 1000000);
+        str(c.instructionPreview, 120);
+        int(c.bodyBytes, 1, 1024 * 1024);
+    });
+    unique(p.candidates, 'id');
+}
+
+function validateCandidateBodyRecord(p) {
+    keys(p, 'identity,candidate');
+    validateCorrectionIdentity(p.identity);
+    const c = p.candidate;
+    keys(
+        c,
+        'id,chatKey,targetLock,mode,selection,instruction,replacement,fullText,rawOutput,protectedBlocks,staleReason,manualRecovery,metrics,createdAt,lockDigest,versionKey,basedOnCandidateId',
+    );
+    candidateId(c.id);
+    str(c.chatKey, 512, false);
+    if (c.chatKey !== p.identity.chat) bad();
+    keys(
+        c.targetLock,
+        'schema,chatKey,messageId,role,name,swipeId,swipeCount,content,currentSwipeData,currentSwipeInfo',
+    );
+    if (c.targetLock.schema !== 2 || c.targetLock.chatKey !== p.identity.chat || c.targetLock.role !== 'assistant') {
+        bad();
+    }
+    int(c.targetLock.messageId, 0, 1000000);
+    str(c.targetLock.name, 512);
+    int(c.targetLock.swipeId, 0, 100000);
+    int(c.targetLock.swipeCount, c.targetLock.swipeId + 1, 100000);
+    str(c.targetLock.content, 400000, false);
+    str(c.targetLock.currentSwipeData, 200000, false);
+    str(c.targetLock.currentSwipeInfo, 200000, false);
+    one(c.mode, ['full', 'selection']);
+    if (c.mode === 'selection') {
+        keys(c.selection, 'start,end');
+        int(c.selection.start, 0, c.targetLock.content.length);
+        int(c.selection.end, c.selection.start, c.targetLock.content.length);
+    } else if (c.selection !== null) {
+        bad();
+    }
+    str(c.instruction, 20000);
+    str(c.replacement, 400000);
+    str(c.fullText, 400000, false);
+    str(c.rawOutput, 450000);
+    int(c.protectedBlocks, 0, 10000);
+    str(c.staleReason, 200);
+    bool(c.manualRecovery);
+    nullable(c.metrics, validateCandidateMetrics);
+    int(c.createdAt);
+    hex64(c.lockDigest);
+    hex64(c.versionKey);
+    str(c.basedOnCandidateId, 96);
+    if (c.basedOnCandidateId) candidateId(c.basedOnCandidateId);
+}
+
+function validateApplicationRecord(p) {
+    keys(
+        p,
+        'schema,identity,version,state,cycle,operationId,candidateId,fullTextDigest,holder,updatedAt,result,releaseReason,recoveryReason,history',
+    );
+    if (p.schema !== 1) bad();
+    validateCorrectionIdentity(p.identity);
+    keys(p.version, 'messageId,swipeId,swipeCount,contentDigest');
+    int(p.version.messageId, 0, 1000000);
+    int(p.version.swipeId, 0, 100000);
+    int(p.version.swipeCount, p.version.swipeId + 1, 100000);
+    hex64(p.version.contentDigest);
+    one(p.state, ['claimed', 'applying', 'applied', 'recovery', 'released']);
+    int(p.cycle, 1, 1000000);
+    str(p.operationId, 64, false);
+    if (!/^op-[A-Za-z0-9._:-]{1,60}$/.test(p.operationId)) bad();
+    candidateId(p.candidateId);
+    hex64(p.fullTextDigest);
+    str(p.holder, 40, false);
+    if (!/^[A-Za-z0-9._:-]{1,40}$/.test(p.holder)) bad();
+    int(p.updatedAt);
+
+    if (p.state === 'applied') {
+        if (!obj(p.result) || p.releaseReason !== null || p.recoveryReason !== null) bad();
+        keys(p.result, 'sourceSwipeId,appendedSwipeId,appliedAt,verification');
+        int(p.result.sourceSwipeId, 0, 100000);
+        int(p.result.appendedSwipeId, 0, 100000);
+        int(p.result.appliedAt);
+        one(p.result.verification, [
+            'read-back',
+            'marker',
+            'marker-text-modified',
+            'message-moved',
+            'legacy',
+            'imported',
+        ]);
+    } else if (p.state === 'recovery') {
+        if (p.result !== null || p.releaseReason !== null) bad();
+        str(p.recoveryReason, 500, false);
+    } else if (p.state === 'released') {
+        if (p.result !== null || p.recoveryReason !== null) bad();
+        one(p.releaseReason, [
+            'cancelled',
+            'lock-mismatch',
+            'write-failed-unchanged',
+            'forced',
+            'reopened',
+            'takeover',
+        ]);
+    } else if (p.result !== null || p.releaseReason !== null || p.recoveryReason !== null) {
+        bad();
+    }
+
+    array(p.history, 8, h => {
+        if (!obj(h)) bad();
+        const allowed = new Set(['cycle', 'operationId', 'candidateId', 'fullTextDigest', 'holder', 'outcome', 'at']);
+        const required = ['cycle', 'operationId', 'candidateId', 'outcome', 'at'];
+        const hKeys = Object.keys(h);
+        if (hKeys.some(k => !allowed.has(k)) || required.some(k => !(k in h))) bad();
+        int(h.cycle, 1, 1000000);
+        str(h.operationId, 64, false);
+        if (!/^op-[A-Za-z0-9._:-]{1,60}$/.test(h.operationId)) bad();
+        candidateId(h.candidateId);
+        if (h.fullTextDigest !== undefined) hex64(h.fullTextDigest);
+        if (h.holder !== undefined) {
+            str(h.holder, 40, false);
+            if (!/^[A-Za-z0-9._:-]{1,40}$/.test(h.holder)) bad();
+        }
+        str(h.outcome, 80, false);
+        int(h.at);
+    });
+}
+
+export function hasUnresolvedConflict(record) {
+    const history = Array.isArray(record?.history) ? record.history : [];
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+        const outcome = String(history[i]?.outcome || '');
+        if (outcome === 'applied-after-takeover' || outcome === 'conflict-detected') {
+            return true;
+        }
+        if (outcome.startsWith('recovered-') || outcome === 'reopened' || outcome === 'forced') {
+            return false;
+        }
+    }
+    return false;
+}
+
+function hasPriorHistoryOp(prev, operationId, candidateId, fullTextDigest, allowedOutcomes = null) {
+    const history = Array.isArray(prev?.history) ? prev.history : [];
+    return history.some(
+        h => h.operationId === operationId
+            && h.candidateId === candidateId
+            && (!h.fullTextDigest || !fullTextDigest || h.fullTextDigest === fullTextDigest)
+            && (!allowedOutcomes || allowedOutcomes.includes(h.outcome)),
+    );
+}
+
+function checkCorrectionApplicationTransitionStructure(prev, next) {
+    if (!prev) {
+        if (next.state === 'claimed' && next.cycle === 1) return true;
+        if (next.state === 'applied' && next.cycle === 1 && next.result?.verification === 'imported') return true;
+        return false;
+    }
+    if (
+        prev.identity.kind !== next.identity.kind
+        || prev.identity.owner !== next.identity.owner
+        || prev.identity.chat !== next.identity.chat
+        || prev.version.messageId !== next.version.messageId
+        || prev.version.swipeId !== next.version.swipeId
+        || prev.version.swipeCount !== next.version.swipeCount
+        || prev.version.contentDigest !== next.version.contentDigest
+    ) {
+        return false;
+    }
+
+    const from = prev.state;
+    const to = next.state;
+    if (to === 'applied' && hasUnresolvedConflict(next)) {
+        return false;
+    }
+
+    const sameOp = next.cycle === prev.cycle && next.operationId === prev.operationId;
+    const sameCandidate = sameOp
+        && next.candidateId === prev.candidateId
+        && next.fullTextDigest === prev.fullTextDigest;
+    const lastHistory = next.history.at(-1);
+
+    const isTakeoverConflict = Boolean(lastHistory)
+        && lastHistory.outcome === 'applied-after-takeover'
+        && lastHistory.operationId !== prev.operationId
+        && hasPriorHistoryOp(prev, lastHistory.operationId, lastHistory.candidateId, lastHistory.fullTextDigest, ['takeover', 'forced']);
+
+    const isSameOpTakeoverConflict = hasUnresolvedConflict(prev)
+        && Boolean(lastHistory)
+        && lastHistory.outcome === 'applied-after-takeover'
+        && lastHistory.operationId === prev.operationId
+        && lastHistory.candidateId === prev.candidateId
+        && (!lastHistory.fullTextDigest || lastHistory.fullTextDigest === prev.fullTextDigest)
+        && !prev.history.some(
+            h => h.operationId === prev.operationId && h.outcome === 'applied-after-takeover',
+        );
+
+    const isVerifiedRecoverResult = next.result !== null
+        && ['marker', 'marker-text-modified', 'message-moved'].includes(next.result.verification)
+        && Boolean(lastHistory)
+        && lastHistory.operationId === next.operationId
+        && lastHistory.candidateId === next.candidateId
+        && (!lastHistory.fullTextDigest || lastHistory.fullTextDigest === next.fullTextDigest)
+        && lastHistory.outcome === `recovered-${next.result.verification}`;
+
+    const isHistoryReconcile = next.cycle === prev.cycle
+        && isVerifiedRecoverResult
+        && hasPriorHistoryOp(prev, next.operationId, next.candidateId, next.fullTextDigest);
+
+    if (from === 'released' && to === 'claimed') {
+        return next.cycle === prev.cycle + 1 && next.operationId !== prev.operationId;
+    }
+    if (from === 'released' && to === 'applied') {
+        const isSameOpForcedLate = sameCandidate && prev.releaseReason === 'forced';
+        const isPriorOpAfterAbortedClaim = next.cycle === prev.cycle
+            && next.operationId !== prev.operationId
+            && ['cancelled', 'lock-mismatch', 'write-failed-unchanged', 'forced'].includes(prev.releaseReason)
+            && hasPriorHistoryOp(prev, next.operationId, next.candidateId, next.fullTextDigest, ['takeover', 'forced']);
+        return (isSameOpForcedLate || isPriorOpAfterAbortedClaim)
+            && next.result !== null
+            && next.result.verification === 'read-back'
+            && Boolean(lastHistory)
+            && lastHistory.operationId === next.operationId
+            && lastHistory.candidateId === next.candidateId
+            && (!lastHistory.fullTextDigest || lastHistory.fullTextDigest === next.fullTextDigest)
+            && lastHistory.outcome === 'applied-after-release';
+    }
+    if (from === 'claimed' && to === 'claimed') {
+        return next.cycle === prev.cycle && next.operationId !== prev.operationId;
+    }
+    if (from === 'claimed' && to === 'applying') {
+        return sameCandidate;
+    }
+    if (from === 'claimed' && to === 'applied') {
+        return next.cycle === prev.cycle
+            && next.operationId !== prev.operationId
+            && next.result !== null
+            && next.result.verification === 'read-back'
+            && hasPriorHistoryOp(prev, next.operationId, next.candidateId, next.fullTextDigest, ['takeover', 'forced'])
+            && Boolean(lastHistory)
+            && lastHistory.operationId === next.operationId
+            && lastHistory.candidateId === next.candidateId
+            && (!lastHistory.fullTextDigest || lastHistory.fullTextDigest === next.fullTextDigest)
+            && lastHistory.outcome === 'applied-preempted-claim';
+    }
+    if (from === 'claimed' && to === 'released') {
+        return sameOp && ['cancelled', 'lock-mismatch'].includes(next.releaseReason);
+    }
+    if (from === 'applying' && to === 'applied') {
+        return sameCandidate
+            && !hasUnresolvedConflict(prev)
+            && next.result !== null
+            && next.result.verification !== 'imported';
+    }
+    if (from === 'applying' && to === 'recovery') {
+        return sameCandidate && Boolean(next.recoveryReason) && (!hasUnresolvedConflict(next) || isTakeoverConflict);
+    }
+    if (from === 'applying' && to === 'released') {
+        return sameOp && ['cancelled', 'lock-mismatch', 'write-failed-unchanged', 'forced'].includes(next.releaseReason);
+    }
+    if (from === 'recovery' && to === 'recovery') {
+        return sameCandidate && Boolean(next.recoveryReason) && (isTakeoverConflict || isSameOpTakeoverConflict);
+    }
+    if (from === 'recovery' && to === 'applied') {
+        if (hasUnresolvedConflict(prev)) {
+            return (sameCandidate && isVerifiedRecoverResult) || isHistoryReconcile;
+        }
+        return (sameCandidate && next.result !== null && next.result.verification !== 'imported')
+            || isHistoryReconcile;
+    }
+    if (from === 'recovery' && to === 'released') {
+        return sameOp && next.releaseReason === 'forced';
+    }
+    if (from === 'applied' && to === 'recovery') {
+        const isConflictDetected = Boolean(lastHistory)
+            && lastHistory.outcome === 'conflict-detected'
+            && lastHistory.operationId === prev.operationId
+            && lastHistory.candidateId === prev.candidateId;
+        return sameCandidate && Boolean(next.recoveryReason) && (isTakeoverConflict || isConflictDetected);
+    }
+    if (from === 'applied' && to === 'applied') {
+        return next.operationId !== prev.operationId && isHistoryReconcile;
+    }
+    if (from === 'applied' && to === 'released') {
+        return sameOp && next.releaseReason === 'reopened';
+    }
+    return false;
+}
+
+export function claimBlocksCandidateDelete(claim, candidateIdValue) {
+    if (!obj(claim)) return false;
+    if (['claimed', 'applying', 'recovery'].includes(claim.state) && claim.candidateId === candidateIdValue) {
+        return true;
+    }
+    if (hasUnresolvedConflict(claim)) {
+        if (claim.candidateId === candidateIdValue) return true;
+        if (Array.isArray(claim.history)) {
+            for (let i = claim.history.length - 1; i >= 0; i -= 1) {
+                const entry = claim.history[i];
+                const outcome = String(entry?.outcome || '');
+                if (outcome.startsWith('recovered-') || outcome === 'reopened' || outcome === 'forced') break;
+                if (
+                    (outcome === 'applied-after-takeover' || outcome === 'conflict-detected')
+                    && entry?.candidateId === candidateIdValue
+                ) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+export function beforeDeleteCorrectionCandidate(prev, meta) {
+    if (!prev?.candidate?.id || !prev?.candidate?.versionKey || typeof meta?.readRecord !== 'function') {
+        return true;
+    }
+    const claim = meta.readRecord(
+        correctionApplicationRecordId(prev.candidate.versionKey),
+        'oracle-correction-applications',
+    );
+    if (claimBlocksCandidateDelete(claim, prev.candidate.id)) {
+        if (meta?.throwFailures) {
+            failRecord('CORRECTION_CANDIDATE_IN_USE', {
+                candidateId: prev.candidate.id,
+                versionKey: prev.candidate.versionKey,
+                state: claim.state,
+            });
+        }
+        return false;
+    }
+    return true;
+}
+
+export function transitionCorrectionApplication(prev, next, meta) {
+    if (!checkCorrectionApplicationTransitionStructure(prev, next)) {
+        return false;
+    }
+    if (
+        typeof meta?.readRecord === 'function'
+        && (next.state === 'claimed' || (prev?.state === 'claimed' && next.state === 'applying'))
+    ) {
+        const candidateBody = meta.readRecord(
+            correctionCandidateRecordId(next.identity, next.candidateId),
+            'oracle-correction-candidates',
+        );
+        const expectedApplyRecordId = candidateBody?.candidate?.versionKey
+            ? correctionApplicationRecordId(candidateBody.candidate.versionKey)
+            : '';
+        if (
+            !candidateBody?.candidate
+            || candidateBody.candidate.id !== next.candidateId
+            || candidateBody.identity?.kind !== next.identity.kind
+            || candidateBody.identity?.owner !== next.identity.owner
+            || candidateBody.identity?.chat !== next.identity.chat
+            || (typeof meta.recordId === 'string' && expectedApplyRecordId !== meta.recordId)
+        ) {
+            if (meta?.throwFailures) {
+                failRecord('CORRECTION_CANDIDATE_UNAVAILABLE', {
+                    candidateId: next.candidateId,
+                });
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+export function validateCorrectionRecord(consumer, p) {
+    if (consumer === 'oracle-correction-workspace') validateWorkspaceRecord(p);
+    else if (consumer === 'oracle-correction-candidate-index') validateCandidateIndexRecord(p);
+    else if (consumer === 'oracle-correction-candidates') validateCandidateBodyRecord(p);
+    else if (consumer === 'oracle-correction-applications') validateApplicationRecord(p);
+    else bad();
+    return p;
+}
+
+export const correctionRecordConsumers = Object.freeze([
+    Object.freeze({
+        id: 'oracle-correction-workspace',
+        schemaVersion: 1,
+        maxBytes: 64 * 1024,
+        maxRecords: 4000,
+        maxStorageBytes: 64 * 1024 * 1024,
+        deletable: false,
+        validate: p => validateCorrectionRecord('oracle-correction-workspace', p),
+    }),
+    Object.freeze({
+        id: 'oracle-correction-candidate-index',
+        schemaVersion: 1,
+        maxBytes: 64 * 1024,
+        maxRecords: 4000,
+        maxStorageBytes: 64 * 1024 * 1024,
+        deletable: false,
+        validate: p => validateCorrectionRecord('oracle-correction-candidate-index', p),
+    }),
+    Object.freeze({
+        id: 'oracle-correction-candidates',
+        schemaVersion: 1,
+        maxBytes: 1024 * 1024,
+        maxRecords: 10000,
+        maxTombstones: 20000,
+        maxStorageBytes: 256 * 1024 * 1024,
+        deletable: true,
+        validate: p => validateCorrectionRecord('oracle-correction-candidates', p),
+        beforeDelete: beforeDeleteCorrectionCandidate,
+    }),
+    Object.freeze({
+        id: 'oracle-correction-applications',
+        schemaVersion: 1,
+        maxBytes: 8 * 1024,
+        maxRecords: 20000,
+        maxStorageBytes: 32 * 1024 * 1024,
+        deletable: false,
+        validate: p => validateCorrectionRecord('oracle-correction-applications', p),
+        transition: transitionCorrectionApplication,
+    }),
+]);

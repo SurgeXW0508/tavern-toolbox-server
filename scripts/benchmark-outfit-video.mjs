@@ -69,8 +69,8 @@ export function outfitFixture(size) {
                 chatId: `chat-${n}`,
                 personId,
                 mode: "fixed",
-                outfitId: `outfit-${n}`,
-                kitId: `kit-${n}`,
+                wearStateVersion: 2,
+                outfitComponents: [{ outfitId: `outfit-${n}`, kitId: `kit-${n}` }],
                 wardrobeIds: [`wardrobe-${n}`],
                 extraItemIds: [],
                 removedItemIds: [],
@@ -136,7 +136,7 @@ export async function benchmark(size, { repetitions = 15 } = {}) {
         video.registerReferenceProvider(worldbook.videoReferenceProvider);
         video.registerReferenceProvider(outfit.referenceProvider);
         const document = outfitFixture(size);
-        await business.commit(context, "outfit", 1, 0, document);
+        await business.commit(context, "outfit", 2, 0, document);
         const bytes = Buffer.concat([
             Buffer.from([0, 0, 0, 24]),
             Buffer.from("ftypisom"),
@@ -251,7 +251,7 @@ export async function benchmark(size, { repetitions = 15 } = {}) {
         );
         db.close();
         const catalogSnapshot = await measure(() =>
-            business.read(context, "outfit", 1),
+            business.read(context, "outfit", 2),
         );
         const emptyEditor = await measure(() =>
             outfit.read(context, { assetId: "item-1" }),
@@ -349,7 +349,7 @@ export async function benchmark(size, { repetitions = 15 } = {}) {
                 2,
             ),
         );
-        assert.equal((await business.read(context, "outfit", 1)).revision, 1);
+        assert.equal((await business.read(context, "outfit", 2)).revision, 1);
         return {
             size,
             jsonBytes: Buffer.byteLength(json),

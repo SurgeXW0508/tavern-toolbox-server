@@ -89,7 +89,7 @@ async function fixture(t) {
             await api.definition.shutdown();
         await rm(root, { recursive: true, force: true });
     });
-    let snapshot = await business.commit(context, "outfit", 1, 0, {
+    let snapshot = await business.commit(context, "outfit", 2, 0, {
         assets: ["item", "wardrobe", "outfit", "kit"].map((kind) =>
             asset(kind, kind),
         ),
@@ -121,13 +121,13 @@ async function fixture(t) {
                 action,
                 data: { assetId: "item", ...data },
             }),
-        read = () => business.read(context, "outfit", 1),
+        read = () => business.read(context, "outfit", 2),
         commit = async (document) => {
             const current = await read();
             return business.commit(
                 context,
                 "outfit",
-                1,
+                2,
                 current.revision,
                 document,
             );

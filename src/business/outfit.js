@@ -1,7 +1,7 @@
 import { BusinessFailure } from './store.js';
 
 export const OUTFIT_NAMESPACE = 'outfit';
-export const OUTFIT_BUSINESS_SCHEMA = 1;
+export const OUTFIT_BUSINESS_SCHEMA = 2;
 export const emptyOutfit = () => ({ assets: [], persons: [], wearStates: [] });
 const ID = /^[a-z0-9][a-z0-9._:-]{0,127}$/i;
 const ASSET_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -75,13 +75,25 @@ function person(value) {
     id(value.id); str(value.name, 120, true);
     str(value.createdAt, 64, true); str(value.updatedAt, 64, true);
 }
-function wear(value) {
-    object(value, ['chatId', 'personId', 'mode', 'outfitId', 'kitId', 'wardrobeIds',
+function wear(value, version) {
+    object(value, ['chatId', 'personId', 'mode', ...(version === 1 ? ['outfitId', 'kitId'] : ['wearStateVersion', 'outfitComponents']), 'wardrobeIds',
         'extraItemIds', 'removedItemIds', 'perspectiveRole', 'updatedAt']);
     hostKey(value.chatId); id(value.personId);
     if (!modes.has(value.mode)) invalid();
-    for (const key of ['outfitId', 'kitId']) { str(value[key], 128); if (value[key]) id(value[key]); }
+    if (version === 1) {
+        for (const key of ['outfitId', 'kitId']) { str(value[key], 128); if (value[key]) id(value[key]); }
+    } else {
+        if (value.wearStateVersion !== 2 || !Array.isArray(value.outfitComponents) || value.outfitComponents.length > 5000) invalid();
+        const seen = new Set();
+        for (const component of value.outfitComponents) {
+            object(component, ['outfitId', 'kitId']); id(component.outfitId);
+            str(component.kitId, 128); if (component.kitId) id(component.kitId);
+            if (seen.has(component.outfitId)) invalid();
+            seen.add(component.outfitId);
+        }
+    }
     ['wardrobeIds', 'extraItemIds', 'removedItemIds'].forEach(key => list(value[key]));
+    if (version === 2 && value.extraItemIds.some(id => value.removedItemIds.includes(id))) invalid();
     if (!['ordinary', 'player-protagonist'].includes(value.perspectiveRole)) invalid();
     str(value.updatedAt, 64, true);
 }
@@ -89,12 +101,12 @@ function compatibleScope(container, member) {
     return member.type === 'global' || container.type === member.type && container.id === member.id;
 }
 
-export function validateOutfit(document) {
+function validateDocument(document, version) {
     object(document, ['assets', 'persons', 'wearStates']);
     if (!Array.isArray(document.assets) || document.assets.length > 5000
         || !Array.isArray(document.persons) || document.persons.length > 1000
         || !Array.isArray(document.wearStates) || document.wearStates.length > 10000) invalid();
-    document.assets.forEach(asset); document.persons.forEach(person); document.wearStates.forEach(wear);
+    document.assets.forEach(asset); document.persons.forEach(person); document.wearStates.forEach(value => wear(value, version));
     const assets = new Map(document.assets.map(item => [item.id, item]));
     const persons = new Set(document.persons.map(item => item.id));
     if (assets.size !== document.assets.length || persons.size !== document.persons.length) invalid();
@@ -124,15 +136,36 @@ export function validateOutfit(document) {
                 || target.ownerPersonId && target.ownerPersonId !== item.personId) invalid();
             return target;
         };
-        if (item.outfitId) {
-            const outfit = check(item.outfitId, 'outfit');
-            if (item.kitId && (!outfit.kitIds.includes(item.kitId) || check(item.kitId, 'kit').id !== item.kitId)) invalid();
-        } else if (item.kitId) invalid();
+        const components = version === 1 ? (item.outfitId ? [item] : []) : item.outfitComponents;
+        if (version === 1 && !item.outfitId && item.kitId) invalid();
+        for (const component of components) {
+            const outfit = check(component.outfitId, 'outfit');
+            if (component.kitId) {
+                if (!outfit.kitIds.includes(component.kitId)) invalid();
+                check(component.kitId, 'kit');
+            } else if (version === 2 && outfit.kitIds.length) invalid();
+        }
         item.wardrobeIds.forEach(value => check(value, 'wardrobe'));
         [...item.extraItemIds, ...item.removedItemIds].forEach(value => check(value, 'item'));
     }
     return document;
 }
+
+export const validateOutfitV1 = document => validateDocument(document, 1);
+export const validateOutfit = document => validateDocument(document, 2);
+
+export function migrateOutfitV1(document) {
+    const assets = new Map(document.assets.map(asset => [asset.id, asset]));
+    return { ...document, wearStates: document.wearStates.map(wear => {
+        const { outfitId, kitId, ...rest } = wear;
+        const outfit = assets.get(outfitId);
+        return { ...rest, wearStateVersion: 2, outfitComponents: outfitId ? [{ outfitId,
+            kitId: kitId || outfit.defaultKitId || outfit.kitIds[0] || '' }] : [] };
+    }) };
+}
+
+export const outfitMigration = Object.freeze({ fromVersion: 1, validateSource: validateOutfitV1,
+    convert: migrateOutfitV1, validateTarget: validateOutfit });
 
 export function addedMediaRefs(document, previous) {
     const old = new Map((previous?.assets || []).map(item => [item.id, item.mediaRef?.assetId || null]));

@@ -180,7 +180,7 @@ test("Optional Outfit Video HTTP enforces Origin, CSRF, context, bounded DTOs an
         (
             await request(
                 "/v1/business/collections/outfit",
-                { schemaVersion: 1, revision: 0, document },
+                { schemaVersion: 2, revision: 0, document },
                 {},
                 "PUT",
             )
@@ -258,7 +258,7 @@ test("Optional Outfit Video HTTP enforces Origin, CSRF, context, bounded DTOs an
     assert.equal(receipt.body.data.result.relation.revision, 1);
     assert.equal(receipt.headers.get("cache-control"), "no-store");
     const business = await (
-        await fetch(base + "/v1/business/collections/outfit?schemaVersion=1", {
+        await fetch(base + "/v1/business/collections/outfit?schemaVersion=2", {
             headers,
         })
     ).json();

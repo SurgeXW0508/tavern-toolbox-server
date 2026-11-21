@@ -367,7 +367,7 @@ test('Worldbook and Outfit protect a shared Asset until every real consumer unli
     wearSlot: 'outer-layer',
     modelDescription: '',
   };
-  await business.commit(f.context, 'outfit', 1, 0, {
+  await business.commit(f.context, 'outfit', 2, 0, {
     assets: [item],
     persons: [],
     wearStates: [],
@@ -388,7 +388,7 @@ test('Worldbook and Outfit protect a shared Asset until every real consumer unli
   await assert.rejects(f.governance.delete(f.context, asset.mediaRef.assetId), {
     code: 'MEDIA_REFERENCED',
   });
-  await business.commit(f.context, 'outfit', 1, 1, {
+  await business.commit(f.context, 'outfit', 2, 1, {
     assets: [],
     persons: [],
     wearStates: [],

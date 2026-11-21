@@ -64,18 +64,18 @@ test('Business and Media ownership remain separate; missing old media can be rep
     await business.definition.initialize();
     const ref = '12345678-1234-4123-8123-123456789abc';
     const document = sample(); document.assets[0].mediaRef = { provider: 'server', assetId: ref };
-    await assert.rejects(business.commit({ userRoot: alice }, 'outfit', 1, 0, document),
+    await assert.rejects(business.commit({ userRoot: alice }, 'outfit', 2, 0, document),
         { code: 'BUSINESS_MEDIA_UNAVAILABLE' });
     seen.add(ref);
-    const committed = await business.commit({ userRoot: alice }, 'outfit', 1, 0, document);
+    const committed = await business.commit({ userRoot: alice }, 'outfit', 2, 0, document);
     assert.equal(committed.revision, 1);
-    await assert.rejects(business.commit({ userRoot: bob }, 'outfit', 1, 0, document),
+    await assert.rejects(business.commit({ userRoot: bob }, 'outfit', 2, 0, document),
         { code: 'BUSINESS_MEDIA_UNAVAILABLE' });
     seen.clear();
     const renamed = structuredClone(document); renamed.assets[0].name = 'Repaired later';
-    assert.equal((await business.commit({ userRoot: alice }, 'outfit', 1, 1, renamed)).revision, 2);
+    assert.equal((await business.commit({ userRoot: alice }, 'outfit', 2, 1, renamed)).revision, 2);
     const removed = emptyOutfit();
-    await business.commit({ userRoot: alice }, 'outfit', 1, 2, removed);
+    await business.commit({ userRoot: alice }, 'outfit', 2, 2, removed);
     // Business deletion has no media.delete call; the asset remains independently owned.
     await business.definition.shutdown();
 });
