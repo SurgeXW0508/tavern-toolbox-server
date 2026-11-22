@@ -71,6 +71,15 @@ const hex64 = v => {
     if (typeof v !== 'string' || !/^[0-9a-f]{64}$/.test(v)) bad();
 };
 
+const keysWithOptional = (v, requiredNames, optionalNames = '') => {
+    if (!obj(v)) bad();
+    const required = requiredNames ? requiredNames.split(',') : [];
+    const optional = optionalNames ? optionalNames.split(',') : [];
+    const allowed = new Set([...required, ...optional]);
+    const actual = Object.keys(v);
+    if (actual.some(k => !allowed.has(k)) || required.some(k => !(k in v))) bad();
+};
+
 const candidateId = v => {
     str(v, 96, false);
     if (!/^correction-[A-Za-z0-9_-]{1,80}$/.test(v)) bad();
@@ -87,7 +96,7 @@ export function validateCorrectionRecipe(v, mode = 'full') {
         validateOptions(source, options) {
             if (source === 'world-info') {
                 keys(options, 'mode');
-                one(options.mode, ['st', 'off']);
+                one(options.mode, ['st', 'char', 'all', 'off']);
             } else if (source === 'main-chat') {
                 keys(options, 'depth');
                 int(options.depth, 0, 100);
@@ -200,27 +209,48 @@ function validateCandidateBodyRecord(p) {
     keys(p, 'identity,candidate');
     validateCorrectionIdentity(p.identity);
     const c = p.candidate;
-    keys(
+    keysWithOptional(
         c,
         'id,chatKey,targetLock,mode,selection,instruction,replacement,fullText,rawOutput,protectedBlocks,staleReason,manualRecovery,metrics,createdAt,lockDigest,versionKey,basedOnCandidateId',
+        'notes,manualEdited',
     );
     candidateId(c.id);
     str(c.chatKey, 512, false);
     if (c.chatKey !== p.identity.chat) bad();
-    keys(
-        c.targetLock,
-        'schema,chatKey,messageId,role,name,swipeId,swipeCount,content,currentSwipeData,currentSwipeInfo',
-    );
-    if (c.targetLock.schema !== 2 || c.targetLock.chatKey !== p.identity.chat || c.targetLock.role !== 'assistant') {
+    if (!obj(c.targetLock)) bad();
+    if (c.targetLock.schema === 2) {
+        keys(
+            c.targetLock,
+            'schema,chatKey,messageId,role,name,swipeId,swipeCount,content,currentSwipeData,currentSwipeInfo',
+        );
+        if (c.targetLock.chatKey !== p.identity.chat || c.targetLock.role !== 'assistant') {
+            bad();
+        }
+        int(c.targetLock.messageId, 0, 1000000);
+        str(c.targetLock.name, 512);
+        int(c.targetLock.swipeId, 0, 100000);
+        int(c.targetLock.swipeCount, c.targetLock.swipeId + 1, 100000);
+        str(c.targetLock.content, 400000, false);
+        str(c.targetLock.currentSwipeData, 200000, false);
+        str(c.targetLock.currentSwipeInfo, 200000, false);
+    } else if (c.targetLock.schema === 3) {
+        keys(
+            c.targetLock,
+            'schema,chatKey,messageId,role,name,swipeId,content,hostScope,swipeDataDigest,swipeInfoDigest',
+        );
+        if (c.targetLock.chatKey !== p.identity.chat || c.targetLock.role !== 'assistant') {
+            bad();
+        }
+        int(c.targetLock.messageId, 0, 1000000);
+        str(c.targetLock.name, 512);
+        int(c.targetLock.swipeId, 0, 100000);
+        str(c.targetLock.content, 400000, false);
+        str(c.targetLock.hostScope, 512, false);
+        hex64(c.targetLock.swipeDataDigest);
+        hex64(c.targetLock.swipeInfoDigest);
+    } else {
         bad();
     }
-    int(c.targetLock.messageId, 0, 1000000);
-    str(c.targetLock.name, 512);
-    int(c.targetLock.swipeId, 0, 100000);
-    int(c.targetLock.swipeCount, c.targetLock.swipeId + 1, 100000);
-    str(c.targetLock.content, 400000, false);
-    str(c.targetLock.currentSwipeData, 200000, false);
-    str(c.targetLock.currentSwipeInfo, 200000, false);
     one(c.mode, ['full', 'selection']);
     if (c.mode === 'selection') {
         keys(c.selection, 'start,end');
@@ -242,6 +272,8 @@ function validateCandidateBodyRecord(p) {
     hex64(c.versionKey);
     str(c.basedOnCandidateId, 96);
     if (c.basedOnCandidateId) candidateId(c.basedOnCandidateId);
+    if ('notes' in c) str(c.notes, 4000);
+    if ('manualEdited' in c) bool(c.manualEdited);
 }
 
 function validateApplicationRecord(p) {
