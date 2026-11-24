@@ -42,9 +42,19 @@ export function validateAdvisorRecipe(v, arc = false) {
 }
 
 function validateAdvisorSettingsBody(v) {
-    keys(v, 'settingsVersion,connectionId,recipe,promptProfiles');
-    if (v.settingsVersion !== 4 && v.settingsVersion !== 5) bad();
+    keysWithOptional(v, 'settingsVersion,connectionId,recipe,promptProfiles', 'quickCommands');
+    if (v.settingsVersion !== 4 && v.settingsVersion !== 5 && v.settingsVersion !== 6) bad();
     validateCloudConnectionId(v.connectionId);
+    if (Object.hasOwn(v, 'quickCommands')) {
+        array(v.quickCommands, 50, q => {
+            keys(q, 'id,name,content,favorite');
+            str(q.id, 90, false);
+            str(q.name, 60, false);
+            str(q.content, 8000, false);
+            bool(q.favorite);
+        });
+        unique(v.quickCommands, 'id');
+    }
     validateAdvisorRecipe(v.recipe);
     validatePromptProfiles(v.promptProfiles, {
         payloadKeys: 'recipe',
@@ -80,21 +90,35 @@ export function validateOraclePersonas(p) {
 }
 
 export function reconcileAdvisorSettingsCommit(incoming, currentPayload) {
-    if (!currentPayload?.advisor || currentPayload.advisor.settingsVersion < 5) return incoming;
-    if (!incoming?.advisor || incoming.advisor.settingsVersion >= 5) return incoming;
+    if (!currentPayload?.advisor || !incoming?.advisor) return incoming;
+    const currentVer = Number(currentPayload.advisor.settingsVersion) || 0;
+    const incomingVer = Number(incoming.advisor.settingsVersion) || 0;
+    const needsV5Protection = currentVer >= 5 && incomingVer < 5;
+    const needsQuickCommandsProtection = incomingVer < 6
+        && !Object.hasOwn(incoming.advisor, 'quickCommands')
+        && Array.isArray(currentPayload.advisor.quickCommands);
+    const needsVersionFloor = currentVer > incomingVer && currentVer >= 5;
+    if (!needsV5Protection && !needsQuickCommandsProtection && !needsVersionFloor) return incoming;
     const next = structuredClone(incoming);
-    next.advisor.settingsVersion = currentPayload.advisor.settingsVersion;
-    if (!Object.hasOwn(next, 'guidanceShouldScan')) {
-        next.guidanceShouldScan = typeof currentPayload.guidanceShouldScan === 'boolean'
-            ? currentPayload.guidanceShouldScan
-            : true;
+    if (needsVersionFloor) {
+        next.advisor.settingsVersion = currentVer;
     }
-    if (next.advisor.promptProfiles?.activeId === 'official' && Array.isArray(next.advisor.recipe?.nodes)) {
-        for (const node of next.advisor.recipe.nodes) {
-            if (node?.source === 'main-chat' && node.options && node.options.depth === -1) {
-                node.options.depth = 10;
+    if (needsV5Protection) {
+        if (!Object.hasOwn(next, 'guidanceShouldScan')) {
+            next.guidanceShouldScan = typeof currentPayload.guidanceShouldScan === 'boolean'
+                ? currentPayload.guidanceShouldScan
+                : true;
+        }
+        if (next.advisor.promptProfiles?.activeId === 'official' && Array.isArray(next.advisor.recipe?.nodes)) {
+            for (const node of next.advisor.recipe.nodes) {
+                if (node?.source === 'main-chat' && node.options && node.options.depth === -1) {
+                    node.options.depth = 10;
+                }
             }
         }
+    }
+    if (needsQuickCommandsProtection) {
+        next.advisor.quickCommands = structuredClone(currentPayload.advisor.quickCommands);
     }
     return next;
 }
@@ -103,7 +127,7 @@ export const advisorSettingsConsumer = Object.freeze({
     id: 'oracle-advisor-settings',
     schemaVersion: 1,
     maxBytes: 2 * 1024 * 1024,
-    limits: { maxProfiles: 100, maxRecipeNodes: 128 },
+    limits: { maxProfiles: 100, maxRecipeNodes: 128, maxQuickCommands: 50 },
     validate: validateAdvisorSettings,
     reconcileCommit: reconcileAdvisorSettingsCommit,
 });
@@ -115,10 +139,13 @@ export const oraclePersonasConsumer = Object.freeze({
     validate: validateOraclePersonas,
 });
 
-function guidance(v, ended = false) {
-    const names = 'id,title,goal,seed,why,intensity,sourceThreadId,sourceMessageId,adoptedAt,adoptedAtMessageCount,reminded,injectionOverride';
-    const optional = ['remindedAt', ...(ended ? ['outcome', 'endedAt'] : [])];
-    if (!obj(v) || Object.keys(v).some(k => !names.split(',').concat(optional).includes(k)) || names.split(',').some(k => !Object.hasOwn(v, k))) bad();
+function validateSingleGuidance(v, ended = false) {
+    const required = ended
+        ? 'id,title,goal,seed,why,intensity,sourceThreadId,sourceMessageId,adoptedAt,adoptedAtMessageCount,reminded,injectionOverride,outcome,endedAt'
+        : 'id,title,goal,seed,why,intensity,sourceThreadId,sourceMessageId,adoptedAt,adoptedAtMessageCount,reminded,injectionOverride';
+    keysWithOptional(v, required, 'kind,paused,remindedAt');
+    if (Object.hasOwn(v, 'kind') && v.kind !== 'single') bad();
+    if (Object.hasOwn(v, 'paused')) bool(v.paused);
     for (const k of ['id', 'sourceThreadId', 'sourceMessageId']) str(v[k], 512);
     for (const k of ['title', 'goal', 'seed', 'why', 'injectionOverride']) str(v[k], 30000);
     if (!v.goal.trim()) bad();
@@ -126,12 +153,65 @@ function guidance(v, ended = false) {
     str(v.adoptedAt, 64, false);
     int(v.adoptedAtMessageCount);
     bool(v.reminded);
-    if (v.remindedAt !== undefined) str(v.remindedAt, 64);
+    if (Object.hasOwn(v, 'remindedAt')) str(v.remindedAt, 64);
     if (ended) {
         // LEGACY_ARC_COMPAT: preserve historical 'replaced-by-arc' outcome
         one(v.outcome, ['completed', 'abandoned', 'replaced', 'replaced-by-arc']);
         str(v.endedAt, 64, false);
     }
+}
+
+function validateSequenceGuidance(v, ended = false) {
+    const required = ended
+        ? 'kind,id,title,beats,cursor,paused,sourceThreadId,sourceMessageId,adoptedAt,adoptedAtMessageCount,reminded,outcome,endedAt'
+        : 'kind,id,title,beats,cursor,paused,sourceThreadId,sourceMessageId,adoptedAt,adoptedAtMessageCount,reminded';
+    keysWithOptional(v, required, 'remindedAt');
+    if (v.kind !== 'sequence') bad();
+    str(v.id, 512, false);
+    str(v.title, 30000);
+    for (const k of ['sourceThreadId', 'sourceMessageId']) str(v[k], 512);
+    str(v.adoptedAt, 64, false);
+    int(v.adoptedAtMessageCount);
+    bool(v.paused);
+    bool(v.reminded);
+    if (Object.hasOwn(v, 'remindedAt')) str(v.remindedAt, 64);
+    array(v.beats, 24, b => {
+        keys(b, 'id,title,goal,seed,why,status,intensity,injectionOverride');
+        str(b.id, 128, false);
+        str(b.title, 1000);
+        str(b.goal, 30000);
+        if (!b.goal.trim()) bad();
+        str(b.seed, 30000);
+        str(b.why, 30000);
+        one(b.status, ['done', 'active', 'pending', 'skipped']);
+        one(b.intensity, ['seed', 'normal', 'push']);
+        str(b.injectionOverride, 30000);
+    });
+    if (v.beats.length < 1) bad();
+    unique(v.beats, 'id');
+    int(v.cursor, 0, v.beats.length - 1);
+    if (!ended) {
+        if (v.beats[v.cursor].status !== 'active') bad();
+        for (let i = 0; i < v.beats.length; i += 1) {
+            const s = v.beats[i].status;
+            if (i < v.cursor && s !== 'done' && s !== 'skipped') bad();
+            if (i > v.cursor && s !== 'pending' && s !== 'skipped') bad();
+        }
+    } else {
+        one(v.outcome, ['completed', 'abandoned', 'replaced']);
+        str(v.endedAt, 64, false);
+        if (v.outcome === 'completed') {
+            if (v.beats.some(b => b.status === 'active' || b.status === 'pending')) bad();
+        } else if (v.beats.filter(b => b.status === 'active').length > 1) {
+            bad();
+        }
+    }
+}
+
+function guidance(v, ended = false) {
+    if (!obj(v)) bad();
+    if (v.kind === 'sequence') validateSequenceGuidance(v, ended);
+    else validateSingleGuidance(v, ended);
 }
 
 export function validateAdvisorRecord(consumer, p) {

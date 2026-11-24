@@ -34,7 +34,7 @@ test('Advisor documents enforce canonical settings, profile recipes and independ
   validateAdvisorSettings(modernSettings());
   validateAdvisorSettings({advisor:modernSettings().advisor,guidanceDepth:1});
   validateOraclePersonas({personas:[]});
-  for(const mutate of [p=>p.extra=1,p=>p.advisor.apiKey='secret',p=>p.guidanceDepth=-1,p=>p.advisor.settingsVersion=3,p=>p.advisor.settingsVersion=6,
+  for(const mutate of [p=>p.extra=1,p=>p.advisor.apiKey='secret',p=>p.guidanceDepth=-1,p=>p.advisor.settingsVersion=3,p=>p.advisor.settingsVersion=7,
     p=>p.guidanceShouldScan='yes',p=>p.guidanceShouldScan=null,p=>p.arc=null,
     p=>p.advisor.connectionId='device-local-id',p=>p.arc.connectionId='tavern-current',p=>p.advisor.connectionId='cloud:bad/path',
     p=>p.advisor.recipe.nodes[0].enabled=false,p=>p.advisor.recipe.nodes[0].source='correction',p=>p.advisor.recipe.nodes[0].options.path='/tmp/private',
@@ -149,4 +149,157 @@ test('reconcileAdvisorSettingsCommit protects v5 fields from v0.57.0 v4 write-ba
   assert.equal(r3.payload.advisor.settingsVersion,5);
   assert.equal(r3.payload.guidanceShouldScan,false);
   assert.equal(r3.payload.advisor.recipe.nodes[0].options.depth,-1,'custom profile main-chat depth -1 must stay untouched');
+});
+
+test('Stage 3: oracle-advisor-settings validates v6 quickCommands and preserves them across v4/v5 write-backs',async t=>{
+  const quick=(i,extra={})=>({id:`aq-${i}`,name:`指令 ${i}`,content:`请帮我推进第 ${i} 步`,favorite:i%2===0,...extra});
+  const v6Settings=(commands=[quick(1),quick(2)],extra={})=>({
+    advisor:{
+      settingsVersion:6,
+      connectionId:'cloud:stage3',
+      recipe:recipeWithMainChat(10),
+      promptProfiles:{version:1,activeId:'official',items:[]},
+      quickCommands:commands,
+    },
+    arc:settings(4).arc,
+    guidanceDepth:1,
+    guidanceShouldScan:true,
+    ...extra,
+  });
+
+  validateAdvisorSettings(v6Settings([]));
+  validateAdvisorSettings(v6Settings(Array.from({length:50},(_,i)=>quick(i))));
+
+  // Reject invalid quickCommands payloads
+  for(const badCommands of [
+    'not-array',
+    Array.from({length:51},(_,i)=>quick(i)),
+    [quick(1),quick(1)],
+    [quick(1,{id:''})],
+    [quick(1,{name:'   '})],
+    [quick(1,{content:''})],
+    [quick(1,{favorite:'yes'})],
+    [{...quick(1),extra:true}],
+    [quick(1,{name:'x'.repeat(61)})],
+    [quick(1,{content:'x'.repeat(8001)})],
+  ]){
+    assert.throws(()=>validateAdvisorSettings(v6Settings(badCommands)),{code:'DOCUMENT_INVALID'});
+  }
+
+  // End-to-end SQLite commit reconciliation for v6 -> v5 and v6 -> v4 write-backs
+  const root=await mkdtemp(path.join(tmpdir(),'ttb-advisor-stage3-reconcile-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const documents=createAccountDocuments(config);
+  await documents.definition.initialize();t.after(()=>documents.definition.shutdown());
+  const alice={userRoot:path.join(root,'alice'),contextId:'alice'};
+
+  const initialCmds=[quick(1,{favorite:true}),quick(2,{favorite:false})];
+  const r1=await documents.commit(alice,'oracle-advisor-settings',{schemaVersion:1,expectedRevision:0,payload:v6Settings(initialCmds,{guidanceShouldScan:false})});
+  assert.equal(r1.revision,1);
+  assert.deepEqual(r1.payload.advisor.quickCommands,initialCmds);
+
+  // Stage 2 (v5) client edits guidanceShouldScan without quickCommands -> must keep v6 + quickCommands while respecting v5 edit
+  const v5WriteBack={
+    advisor:{settingsVersion:5,connectionId:'cloud:from-v5',recipe:recipeWithMainChat(10),promptProfiles:{version:1,activeId:'official',items:[]}},
+    arc:settings(4).arc,
+    guidanceDepth:2,
+    guidanceShouldScan:true,
+  };
+  const r2=await documents.commit(alice,'oracle-advisor-settings',{schemaVersion:1,expectedRevision:1,payload:v5WriteBack});
+  assert.equal(r2.revision,2);
+  assert.equal(r2.payload.advisor.settingsVersion,6,'must preserve v6 on v5 write-back');
+  assert.equal(r2.payload.advisor.connectionId,'cloud:from-v5');
+  assert.equal(r2.payload.guidanceShouldScan,true,'must respect explicit v5 guidanceShouldScan edit');
+  assert.deepEqual(r2.payload.advisor.quickCommands,initialCmds,'must preserve quickCommands on v5 write-back');
+
+  // Legacy v0.57.0 (v4) client writes back without guidanceShouldScan or quickCommands and resets official main-chat depth to -1
+  const v4WriteBack={
+    advisor:{settingsVersion:4,connectionId:'cloud:from-v4',recipe:recipeWithMainChat(-1),promptProfiles:{version:1,activeId:'official',items:[]}},
+    arc:settings(4).arc,
+    guidanceDepth:2,
+  };
+  const r3=await documents.commit(alice,'oracle-advisor-settings',{schemaVersion:1,expectedRevision:2,payload:v4WriteBack});
+  assert.equal(r3.revision,3);
+  assert.equal(r3.payload.advisor.settingsVersion,6,'must preserve v6 on v4 write-back');
+  assert.equal(r3.payload.guidanceShouldScan,true,'must preserve guidanceShouldScan on v4 write-back');
+  assert.equal(r3.payload.advisor.recipe.nodes[0].options.depth,10,'must restore official main-chat depth 10');
+  assert.deepEqual(r3.payload.advisor.quickCommands,initialCmds,'must preserve quickCommands on v4 write-back');
+
+  // Explicit v6 commit emptying quickCommands must pass through verbatim
+  const v6Cleared=v6Settings([]);
+  const r4=await documents.commit(alice,'oracle-advisor-settings',{schemaVersion:1,expectedRevision:3,payload:v6Cleared});
+  assert.equal(r4.revision,4);
+  assert.deepEqual(r4.payload.advisor.quickCommands,[],'v6 explicit empty quickCommands must not be overridden');
+});
+
+test('Stage 3: oracle-advisor-story validates dual-mode single (with kind/paused) and sequence with strict cursor invariants',()=>{
+  const beat=(i,status,extra={})=>({
+    id:`beat-${i}`,
+    title:`第 ${i} 拍`,
+    goal:`完成第 ${i} 阶段推进`,
+    seed:`线索 ${i}`,
+    why:`契合理由 ${i}`,
+    status,
+    intensity:'normal',
+    injectionOverride:'',
+    ...extra,
+  });
+  const seq=(beats,cursor,extra={})=>({
+    kind:'sequence',
+    id:'seq-1',
+    title:'长线序列',
+    beats,
+    cursor,
+    paused:false,
+    sourceThreadId:'t-1',
+    sourceMessageId:'m-1',
+    adoptedAt:'2026-11-24T00:00:00.000Z',
+    adoptedAtMessageCount:4,
+    reminded:false,
+    ...extra,
+  });
+
+  // Valid single variants: legacy (no kind/paused), explicit kind + paused
+  validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:guidanceItem({kind:'single',paused:true}),lastEnded:guidanceItem({kind:'single',paused:false,outcome:'completed',endedAt:'2026-11-24T01:00:00.000Z'})}});
+
+  // Valid active sequence (done, skipped, active, pending, skipped) & 1-beat / 24-beat bounds
+  const activeSeq=seq([beat(1,'done'),beat(2,'skipped'),beat(3,'active',{intensity:'push'}),beat(4,'pending'),beat(5,'skipped')],2,{paused:true});
+  const completedSeq=seq([beat(1,'done'),beat(2,'skipped'),beat(3,'done')],2,{outcome:'completed',endedAt:'2026-11-24T02:00:00.000Z'});
+  const abandonedSeq=seq([beat(1,'done'),beat(2,'active'),beat(3,'pending')],1,{outcome:'abandoned',endedAt:'2026-11-24T02:00:00.000Z'});
+  const maxSeq=seq([beat(0,'active'),...Array.from({length:23},(_,i)=>beat(i+1,'pending'))],0);
+
+  validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:activeSeq,lastEnded:completedSeq}});
+  validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:seq([beat(1,'active')],0),lastEnded:abandonedSeq}});
+  validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:maxSeq,lastEnded:null}});
+  validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:activeSeq,lastEnded:null},arc:legacyArcRecord(null)});
+
+  // Invalid single variants
+  assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:guidanceItem({kind:'arc'}),lastEnded:null}}),{code:'DOCUMENT_INVALID'});
+  assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:guidanceItem({paused:'yes'}),lastEnded:null}}),{code:'DOCUMENT_INVALID'});
+
+  // Invalid active sequences
+  const invalidActives=[
+    seq([],0), // 0 beats
+    seq([beat(0,'active'),...Array.from({length:24},(_,i)=>beat(i+1,'pending'))],0), // 25 beats
+    seq([beat(1,'active'),beat(1,'pending')],0), // duplicate beat id
+    seq([beat(1,'active',{goal:'   '})],0), // blank goal
+    seq([beat(1,'active'),beat(2,'active')],0), // two active beats
+    seq([beat(1,'done'),beat(2,'pending')],1), // cursor beat not active
+    seq([beat(1,'pending'),beat(2,'active')],1), // pending before cursor
+    seq([beat(1,'active'),beat(2,'done')],0), // done after cursor
+    seq([beat(1,'active'),beat(2,'pending')],2), // cursor out of range
+    seq([beat(1,'active')],-1), // negative cursor
+    seq([beat(1,'active')],0,{paused:'no'}), // non-bool paused
+    seq([beat(1,'active')],0,{id:''}), // empty id
+  ];
+  for(const badSeq of invalidActives){
+    assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:badSeq,lastEnded:null}}),{code:'DOCUMENT_INVALID'});
+  }
+
+  // Invalid lastEnded sequences
+  assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:null,lastEnded:seq([beat(1,'done'),beat(2,'active')],1,{outcome:'completed',endedAt:'2026-11-24T02:00:00.000Z'})}}),{code:'DOCUMENT_INVALID'});
+  assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:null,lastEnded:seq([beat(1,'done'),beat(2,'pending')],0,{outcome:'completed',endedAt:'2026-11-24T02:00:00.000Z'})}}),{code:'DOCUMENT_INVALID'});
+  assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:null,lastEnded:seq([beat(1,'active'),beat(2,'active')],0,{outcome:'abandoned',endedAt:'2026-11-24T02:00:00.000Z'})}}),{code:'DOCUMENT_INVALID'});
+
+  // Sequence active + legacy arc active must still be rejected
+  assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:activeSeq,lastEnded:null},arc:legacyArcRecord(legacyActiveArc())}),{code:'DOCUMENT_INVALID'});
 });
