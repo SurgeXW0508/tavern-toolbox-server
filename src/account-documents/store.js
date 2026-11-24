@@ -177,8 +177,16 @@ export function createAccountDocuments(config, { consumers = [outfitSettingsCons
                 const { snapshot: current, migrated } = migrateRow(db, consumer);
                 if (migrated || current.revision !== expectedRevision) fail('REVISION_CONFLICT');
                 if (current.revision >= Number.MAX_SAFE_INTEGER) fail('DOCUMENT_DATA_INVALID');
+                let nextEncoded = encoded;
+                if (typeof consumer.reconcileCommit === 'function') {
+                    const finalPayload = consumer.reconcileCommit(JSON.parse(encoded), current.payload);
+                    const validated = validate(consumer, finalPayload);
+                    nextEncoded = JSON.stringify(validated);
+                    if (typeof nextEncoded !== 'string') fail('DOCUMENT_DATA_INVALID');
+                    if (Buffer.byteLength(nextEncoded) > consumer.maxBytes) fail('DOCUMENT_TOO_LARGE');
+                }
                 db.prepare('INSERT INTO documents VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET schema_version=excluded.schema_version, revision=excluded.revision, payload=excluded.payload')
-                    .run(id, consumer.schemaVersion, current.revision + 1, encoded);
+                    .run(id, consumer.schemaVersion, current.revision + 1, nextEncoded);
                 return snapshot(db, consumer);
             }, { write: true });
         },

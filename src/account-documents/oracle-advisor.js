@@ -79,12 +79,33 @@ export function validateOraclePersonas(p) {
     return p;
 }
 
+export function reconcileAdvisorSettingsCommit(incoming, currentPayload) {
+    if (!currentPayload?.advisor || currentPayload.advisor.settingsVersion < 5) return incoming;
+    if (!incoming?.advisor || incoming.advisor.settingsVersion >= 5) return incoming;
+    const next = structuredClone(incoming);
+    next.advisor.settingsVersion = currentPayload.advisor.settingsVersion;
+    if (!Object.hasOwn(next, 'guidanceShouldScan')) {
+        next.guidanceShouldScan = typeof currentPayload.guidanceShouldScan === 'boolean'
+            ? currentPayload.guidanceShouldScan
+            : true;
+    }
+    if (next.advisor.promptProfiles?.activeId === 'official' && Array.isArray(next.advisor.recipe?.nodes)) {
+        for (const node of next.advisor.recipe.nodes) {
+            if (node?.source === 'main-chat' && node.options && node.options.depth === -1) {
+                node.options.depth = 10;
+            }
+        }
+    }
+    return next;
+}
+
 export const advisorSettingsConsumer = Object.freeze({
     id: 'oracle-advisor-settings',
     schemaVersion: 1,
     maxBytes: 2 * 1024 * 1024,
     limits: { maxProfiles: 100, maxRecipeNodes: 128 },
     validate: validateAdvisorSettings,
+    reconcileCommit: reconcileAdvisorSettingsCommit,
 });
 export const oraclePersonasConsumer = Object.freeze({
     id: 'oracle-voice-personas',

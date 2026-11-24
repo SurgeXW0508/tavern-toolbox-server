@@ -5,10 +5,23 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createAccountDocuments } from '../src/account-documents/store.js';
 import { createAccountRecords } from '../src/account-records/store.js';
-import { advisorRecordConsumers,validateAdvisorSettings,validateOraclePersonas,validateAdvisorRecord } from '../src/account-documents/oracle-advisor.js';
+import {
+  advisorRecordConsumers,
+  reconcileAdvisorSettingsCommit,
+  validateAdvisorSettings,
+  validateOraclePersonas,
+  validateAdvisorRecord,
+} from '../src/account-documents/oracle-advisor.js';
 const config={policy:{core:{allowedOrigins:['https://example.test']}}};
 const identity={kind:'character',owner:'Alice.png',chat:'chat-1'};
 const recipe=arc=>({version:1,nodes:(arc?['arc-beat-protocol','compile-task']:['story-plan-protocol','current-input']).map(source=>({id:source,type:'protected',title:source,role:'system',enabled:true,source,options:{}}))});
+const recipeWithMainChat=(depth=-1)=>({
+  version:1,
+  nodes:[
+    {id:'main-chat',type:'source',title:'主聊天记录',role:'system',enabled:true,source:'main-chat',options:{depth,includeHidden:false}},
+    ...recipe(false).nodes,
+  ],
+});
 const settings=(version=4,extra={})=>({advisor:{settingsVersion:version,connectionId:'',recipe:recipe(false),promptProfiles:{version:1,activeId:'official',items:[]}},arc:{settingsVersion:3,connectionId:'',tokenBudget:0,recipe:recipe(true),promptProfiles:{version:1,activeId:'official',items:[]}},guidanceDepth:4,...extra});
 const modernSettings=(extra={})=>({advisor:{settingsVersion:5,connectionId:'',recipe:recipe(false),promptProfiles:{version:1,activeId:'official',items:[]}},guidanceDepth:1,guidanceShouldScan:true,...extra});
 const guidanceItem=(extra={})=>({id:'g-1',title:'推进',goal:'先试探态度',seed:'借一杯热茶开口',why:'顺理成章',intensity:'normal',sourceThreadId:'t',sourceMessageId:'m',adoptedAt:'2026-11-24T00:00:00.000Z',adoptedAtMessageCount:2,reminded:false,injectionOverride:'',...extra});
@@ -83,4 +96,57 @@ test('Advisor production consumers use independent Document and Record CAS witho
   assert.equal(deleted.status,'deleted');
   assert.equal((await records.read(alice,'oracle-advisor-workspace','ws-a',1)).status,'deleted');
   for(const consumer of ['oracle-correction','oracle-diagnosis','oracle-lorebook-manager'])assert.throws(()=>records.consumer(consumer),{code:'RECORD_CONSUMER_NOT_REGISTERED'});
+});
+test('reconcileAdvisorSettingsCommit protects v5 fields from v0.57.0 v4 write-backs while keeping v4-only and v5 commits verbatim',async t=>{
+  // 1. Direct unit checks: null / v4 current returns incoming verbatim; v5 incoming returns verbatim
+  const v4Init=settings(4);
+  assert.equal(reconcileAdvisorSettingsCommit(v4Init,null),v4Init);
+  assert.equal(reconcileAdvisorSettingsCommit(v4Init,settings(4)),v4Init);
+  const v5Explicit=modernSettings({guidanceDepth:4,guidanceShouldScan:false,advisor:{...modernSettings().advisor,recipe:recipeWithMainChat(-1)}});
+  assert.equal(reconcileAdvisorSettingsCommit(v5Explicit,modernSettings()),v5Explicit);
+
+  // 2. End-to-end SQLite commit reconciliation
+  const root=await mkdtemp(path.join(tmpdir(),'ttb-advisor-reconcile-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const documents=createAccountDocuments(config);
+  await documents.definition.initialize();t.after(()=>documents.definition.shutdown());
+  const alice={userRoot:path.join(root,'alice'),contextId:'alice'};
+
+  // Stage 2 saves v5 with shouldScan: false, guidanceDepth: 4, official main-chat depth 10, and arc stub
+  const v5Saved={
+    advisor:{settingsVersion:5,connectionId:'cloud:stage2',recipe:recipeWithMainChat(10),promptProfiles:{version:1,activeId:'official',items:[]}},
+    arc:settings(4).arc,
+    guidanceDepth:4,
+    guidanceShouldScan:false,
+  };
+  const r1=await documents.commit(alice,'oracle-advisor-settings',{schemaVersion:1,expectedRevision:0,payload:v5Saved});
+  assert.equal(r1.revision,1);
+  assert.deepEqual(r1.payload,v5Saved);
+
+  // Legacy v0.57.0 client reads and writes back v4 (edits connectionId, drops guidanceShouldScan, resets official main-chat depth to -1)
+  const v4FromOldClient={
+    advisor:{settingsVersion:4,connectionId:'cloud:from-old-device',recipe:recipeWithMainChat(-1),promptProfiles:{version:1,activeId:'official',items:[]}},
+    arc:settings(4).arc,
+    guidanceDepth:4,
+  };
+  const r2=await documents.commit(alice,'oracle-advisor-settings',{schemaVersion:1,expectedRevision:1,payload:v4FromOldClient});
+  assert.equal(r2.revision,2);
+  assert.equal(r2.payload.advisor.settingsVersion,5,'must keep settingsVersion 5');
+  assert.equal(r2.payload.advisor.connectionId,'cloud:from-old-device','must preserve legacy client edit');
+  assert.equal(r2.payload.guidanceShouldScan,false,'must preserve existing guidanceShouldScan');
+  assert.equal(r2.payload.guidanceDepth,4,'must preserve guidanceDepth');
+  assert.equal(r2.payload.advisor.recipe.nodes[0].options.depth,10,'official main-chat depth reset to -1 must be restored to 10');
+  assert.deepEqual(r2.payload.arc,settings(4).arc,'must keep legacy arc intact');
+
+  // Legacy v0.57.0 client editing a custom profile with main-chat depth -1 must NOT override custom profile depth
+  const customProfile={id:'custom-1',name:'我的配置',payload:{recipe:recipeWithMainChat(-1)}};
+  const v4CustomFromOldClient={
+    advisor:{settingsVersion:4,connectionId:'cloud:custom',recipe:recipeWithMainChat(-1),promptProfiles:{version:1,activeId:'custom-1',items:[customProfile]}},
+    arc:settings(4).arc,
+    guidanceDepth:4,
+  };
+  const r3=await documents.commit(alice,'oracle-advisor-settings',{schemaVersion:1,expectedRevision:2,payload:v4CustomFromOldClient});
+  assert.equal(r3.revision,3);
+  assert.equal(r3.payload.advisor.settingsVersion,5);
+  assert.equal(r3.payload.guidanceShouldScan,false);
+  assert.equal(r3.payload.advisor.recipe.nodes[0].options.depth,-1,'custom profile main-chat depth -1 must stay untouched');
 });

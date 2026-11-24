@@ -4,7 +4,7 @@ import { mkdtemp, rm, copyFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createAccountDocuments } from '../src/account-documents/store.js';
+import { createAccountDocuments, DocumentFailure } from '../src/account-documents/store.js';
 import { outfitSettingsConsumer, OUTFIT_LIMITS } from '../src/account-documents/outfit.js';
 
 const config = { policy: { core: { allowedOrigins: ['https://example.test'] } } };
@@ -291,4 +291,69 @@ test('consumer migrations upgrade on demand with single revision bump, reject bl
     rawRow = new DatabaseSync(file);
     assert.equal(rawRow.prepare('SELECT schema_version FROM documents WHERE id=?').get('migratable-doc').schema_version, 1);
     rawRow.close();
+});
+
+test('consumer reconcileCommit runs inside write transaction, re-validates payload and size, and rolls back on failure', async t => {
+    const { alice } = await fixture(t);
+    let reconcileCalls = 0;
+    const baseConsumer = {
+        id: 'reconcilable-doc',
+        schemaVersion: 1,
+        maxBytes: 120,
+        validate: v => {
+            if (!v || typeof v !== 'object' || typeof v.name !== 'string') throw new DocumentFailure('DOCUMENT_INVALID');
+            if (Object.hasOwn(v, 'flag') && typeof v.flag !== 'boolean') throw new DocumentFailure('DOCUMENT_INVALID');
+            return v;
+        },
+        reconcileCommit: (incoming, current) => {
+            reconcileCalls += 1;
+            if (current && !Object.hasOwn(incoming, 'flag') && Object.hasOwn(current, 'flag')) {
+                return { ...incoming, flag: current.flag };
+            }
+            return incoming;
+        },
+    };
+    const s = createAccountDocuments(config, { consumers: [baseConsumer] });
+    await s.definition.initialize(); t.after(() => s.definition.shutdown());
+
+    const r1 = await s.commit(alice, 'reconcilable-doc', { schemaVersion: 1, expectedRevision: 0, payload: { name: 'v1', flag: false } });
+    assert.equal(r1.revision, 1);
+    assert.deepEqual(r1.payload, { name: 'v1', flag: false });
+    assert.equal(reconcileCalls, 1);
+
+    // Revision conflict short-circuits before reconcileCommit
+    await assert.rejects(
+        s.commit(alice, 'reconcilable-doc', { schemaVersion: 1, expectedRevision: 0, payload: { name: 'stale' } }),
+        { code: 'REVISION_CONFLICT' },
+    );
+    assert.equal(reconcileCalls, 1);
+
+    // Legacy writer omitting flag preserves current.flag atomically
+    const r2 = await s.commit(alice, 'reconcilable-doc', { schemaVersion: 1, expectedRevision: 1, payload: { name: 'v2' } });
+    assert.equal(r2.revision, 2);
+    assert.deepEqual(r2.payload, { name: 'v2', flag: false });
+    assert.equal(reconcileCalls, 2);
+
+    // Reconciled payload failing validate or maxBytes rolls back cleanly
+    const badValidate = createAccountDocuments(config, {
+        consumers: [{ ...baseConsumer, reconcileCommit: incoming => ({ ...incoming, flag: 'invalid' }) }],
+    });
+    await badValidate.definition.initialize(); t.after(() => badValidate.definition.shutdown());
+    await assert.rejects(
+        badValidate.commit(alice, 'reconcilable-doc', { schemaVersion: 1, expectedRevision: 2, payload: { name: 'v3' } }),
+        { code: 'DOCUMENT_INVALID' },
+    );
+
+    const tooLarge = createAccountDocuments(config, {
+        consumers: [{ ...baseConsumer, reconcileCommit: incoming => ({ ...incoming, name: 'x'.repeat(200) }) }],
+    });
+    await tooLarge.definition.initialize(); t.after(() => tooLarge.definition.shutdown());
+    await assert.rejects(
+        tooLarge.commit(alice, 'reconcilable-doc', { schemaVersion: 1, expectedRevision: 2, payload: { name: 'v3' } }),
+        { code: 'DOCUMENT_TOO_LARGE' },
+    );
+
+    const after = await s.read(alice, 'reconcilable-doc', 1);
+    assert.equal(after.revision, 2);
+    assert.deepEqual(after.payload, { name: 'v2', flag: false });
 });
