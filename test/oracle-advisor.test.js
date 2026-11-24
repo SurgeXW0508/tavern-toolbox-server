@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp,rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { createAccountDocuments } from '../src/account-documents/store.js';
 import { createAccountRecords } from '../src/account-records/store.js';
 import {
@@ -24,7 +25,8 @@ const recipeWithMainChat=(depth=-1)=>({
 });
 const settings=(version=4,extra={})=>({advisor:{settingsVersion:version,connectionId:'',recipe:recipe(false),promptProfiles:{version:1,activeId:'official',items:[]}},arc:{settingsVersion:3,connectionId:'',tokenBudget:0,recipe:recipe(true),promptProfiles:{version:1,activeId:'official',items:[]}},guidanceDepth:4,...extra});
 const modernSettings=(extra={})=>({advisor:{settingsVersion:5,connectionId:'',recipe:recipe(false),promptProfiles:{version:1,activeId:'official',items:[]}},guidanceDepth:1,guidanceShouldScan:true,...extra});
-const guidanceItem=(extra={})=>({id:'g-1',title:'推进',goal:'先试探态度',seed:'借一杯热茶开口',why:'顺理成章',intensity:'normal',sourceThreadId:'t',sourceMessageId:'m',adoptedAt:'2026-11-24T00:00:00.000Z',adoptedAtMessageCount:2,reminded:false,injectionOverride:'',...extra});
+const legacyGuidanceItem=(extra={})=>({id:'g-1',title:'推进',goal:'先试探态度',seed:'借一杯热茶开口',why:'顺理成章',intensity:'normal',sourceThreadId:'t',sourceMessageId:'m',adoptedAt:'2026-11-24T00:00:00.000Z',adoptedAtMessageCount:2,reminded:false,injectionOverride:'',...extra});
+const guidanceItem=(extra={})=>legacyGuidanceItem({kind:'single',paused:false,...extra});
 const legacyArcRecord=(active=null)=>({draft:{mode:'transparent',throughline:'主线',span:'short',waypoints:['起点','中段','收束'],difficulty:'normal',direction:'',redlines:[]},compiled:null,lastAttempt:null,active,lastEnded:null});
 const legacyActiveArc=()=>({id:'arc-1',mode:'transparent',throughline:'主线',span:'short',waypoints:['起点','中段','收束'],difficulty:'normal',direction:'',redlines:[],waypointIndex:0,currentBeat:{title:'拍1',goal:'铺垫',objective:'打开线索',seed:'细节',why:'自然',type:'setup'},intensity:'normal',injectionOverride:'',status:'active',history:[],startedAt:1,updatedAt:1,adoptedAtMessageCount:1,reminded:false,remindedAt:0});
 const thread=(id='t',messages=[{id:'m',role:'user',content:'保留完整内容'}])=>({identity:{...identity},thread:{id,title:'对话',autoTitle:true,createdAt:1,updatedAt:1,messages}});
@@ -62,7 +64,7 @@ test('record validators reject malformed identities, unknown fields, truncated m
   assert.throws(()=>validateAdvisorRecord('oracle-advisor-thread-index',{identity,threads:Array.from({length:51},(_,i)=>({id:'t'+i,title:'T',autoTitle:true,createdAt:1,updatedAt:1,messageCount:0}))}),{code:'DOCUMENT_INVALID'});
   assert.throws(()=>validateAdvisorRecord('oracle-advisor-workspace',{identity,threadId:'t',draft:'D',loreSelection:{selected:{},hybrid:false},scrollTop:10}),{code:'DOCUMENT_INVALID'});
   // Story records: new payloads omit arc, preserve historical replaced-by-arc outcome, and keep legacy arc readable while rejecting dual-active or malformed arc.
-  validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:guidanceItem(),lastEnded:guidanceItem({outcome:'replaced-by-arc',endedAt:'2026-11-24T00:05:00.000Z'})}});
+  validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:guidanceItem(),lastEnded:legacyGuidanceItem({outcome:'replaced-by-arc',endedAt:'2026-11-24T00:05:00.000Z'})}});
   validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:null,lastEnded:null},arc:legacyArcRecord(legacyActiveArc())});
   assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:guidanceItem(),lastEnded:null},arc:legacyArcRecord(legacyActiveArc())}),{code:'DOCUMENT_INVALID'});
   assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:null,lastEnded:null},arc:null}),{code:'DOCUMENT_INVALID'});
@@ -303,3 +305,111 @@ test('Stage 3: oracle-advisor-story validates dual-mode single (with kind/paused
   // Sequence active + legacy arc active must still be rejected
   assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:activeSeq,lastEnded:null},arc:legacyArcRecord(legacyActiveArc())}),{code:'DOCUMENT_INVALID'});
 });
+
+test('[S3-R2-Server-2] oracle-advisor-story upgrades to schemaVersion 2 with 1->2 on-demand migration, strict v2 active single validation, and old-client rejection',async t=>{
+  // Only oracle-advisor-story moves to schemaVersion 2; all other Advisor record consumers remain schemaVersion 1.
+  const storyConsumer=advisorRecordConsumers.find(c=>c.id==='oracle-advisor-story');
+  assert.equal(storyConsumer.schemaVersion,2);
+  assert.equal(Array.isArray(storyConsumer.migrations),true);
+  for(const c of advisorRecordConsumers.filter(x=>x.id!=='oracle-advisor-story')){
+    assert.equal(c.schemaVersion,1,`consumer ${c.id} must remain schemaVersion 1`);
+  }
+
+  // v2 strict validation rejects active single missing kind or paused, while allowing legacy lastEnded without kind/paused
+  assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:legacyGuidanceItem(),lastEnded:null}}),{code:'DOCUMENT_INVALID'});
+  assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:legacyGuidanceItem({kind:'single'}),lastEnded:null}}),{code:'DOCUMENT_INVALID'});
+  assert.throws(()=>validateAdvisorRecord('oracle-advisor-story',{identity,guidance:{active:legacyGuidanceItem({paused:false}),lastEnded:null}}),{code:'DOCUMENT_INVALID'});
+  validateAdvisorRecord('oracle-advisor-story',{
+    identity,
+    guidance:{active:null,lastEnded:legacyGuidanceItem({outcome:'replaced-by-arc',endedAt:'2026-11-24T00:05:00.000Z'})},
+  });
+
+  const root=await mkdtemp(path.join(tmpdir(),'ttb-advisor-story-v2-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const records=createAccountRecords(config,{consumers:advisorRecordConsumers});
+  await records.definition.initialize();t.after(()=>records.definition.shutdown());
+  const advertisedStory=records.definition.capabilities[0].constraints.consumers.find(c=>c.id==='oracle-advisor-story');
+  assert.equal(advertisedStory.schemaVersion,2);
+  assert.equal('migrations' in advertisedStory,false);
+
+  const alice={userRoot:path.join(root,'alice'),contextId:'alice'};
+  // Initialize DB by writing one unrelated v1 thread record
+  await records.commit(alice,'oracle-advisor-threads','init-thread',{schemaVersion:1,expectedRevision:0,payload:thread('init-thread')});
+  const file=path.join(alice.userRoot,'tavern-toolbox-server/account-records-v1/records.sqlite');
+
+  // Seed 3 v1 oracle-advisor-story rows directly in SQLite:
+  // 1) Stage 2 v1 single (no kind, no paused) + arc.draft + legacy lastEnded(replaced-by-arc)
+  const stage2Payload={
+    identity,
+    guidance:{
+      active:legacyGuidanceItem({id:'s2-single'}),
+      lastEnded:legacyGuidanceItem({id:'s2-ended',outcome:'replaced-by-arc',endedAt:'2026-11-24T00:05:00.000Z'}),
+    },
+    arc:legacyArcRecord(null),
+  };
+  // 2) Early Stage 3 (b563ff0) v1 paused single (paused: true, without kind)
+  const earlyPausedPayload={
+    identity:{...identity,chat:'chat-paused'},
+    guidance:{active:legacyGuidanceItem({id:'s3-paused',paused:true}),lastEnded:null},
+  };
+  // 3) Early Stage 3 (b563ff0) v1 sequence (kind: 'sequence')
+  const earlySeqPayload={
+    identity:{...identity,chat:'chat-seq'},
+    guidance:{
+      active:{
+        kind:'sequence',id:'seq-v1',title:'序列测试',
+        beats:[
+          {id:'b1',title:'拍1',goal:'铺垫冲突',seed:'茶杯',why:'自然',status:'done',intensity:'normal',injectionOverride:''},
+          {id:'b2',title:'拍2',goal:'揭开疑点',seed:'门铃',why:'推进',status:'active',intensity:'push',injectionOverride:'自定义'},
+          {id:'b3',title:'拍3',goal:'收束转折',seed:'眼神',why:'落点',status:'pending',intensity:'seed',injectionOverride:''},
+        ],
+        cursor:1,paused:false,sourceThreadId:'t',sourceMessageId:'m',adoptedAt:'2026-11-24T00:00:00.000Z',adoptedAtMessageCount:3,reminded:false,
+      },
+      lastEnded:null,
+    },
+  };
+
+  const db=new DatabaseSync(file);
+  const seed=(recordId,payload)=>{
+    const encoded=JSON.stringify(payload);
+    const charge=256+Buffer.byteLength(recordId,'utf8')+Buffer.byteLength(encoded,'utf8');
+    db.prepare('INSERT INTO records(consumer,record_id,schema_version,revision,deleted,created_at,updated_at,payload,storage_bytes) VALUES(?,?,?,?,0,1000,2000,?,?)')
+      .run('oracle-advisor-story',recordId,1,1,encoded,charge);
+    return charge;
+  };
+  const totalBytes=seed('chat-stage2',stage2Payload)+seed('chat-paused',earlyPausedPayload)+seed('chat-seq',earlySeqPayload);
+  db.prepare('INSERT INTO collections(consumer,records,tombstones,bytes) VALUES(?,?,0,?)').run('oracle-advisor-story',3,totalBytes);
+  db.close();
+
+  // Stage 2 v1 -> v2 auto-migration adds kind:'single' and paused:false while preserving lastEnded & arc.draft verbatim
+  const migratedStage2=await records.read(alice,'oracle-advisor-story','chat-stage2',2);
+  assert.equal(migratedStage2.schemaVersion,2);
+  assert.equal(migratedStage2.revision,2);
+  assert.equal(migratedStage2.payload.guidance.active.kind,'single');
+  assert.equal(migratedStage2.payload.guidance.active.paused,false);
+  assert.deepEqual(migratedStage2.payload.guidance.lastEnded,stage2Payload.guidance.lastEnded);
+  assert.deepEqual(migratedStage2.payload.arc,stage2Payload.arc);
+
+  // Early Stage 3 v1 paused single -> v2 preserves paused:true and adds kind:'single'
+  const migratedPaused=await records.read(alice,'oracle-advisor-story','chat-paused',2);
+  assert.equal(migratedPaused.schemaVersion,2);
+  assert.equal(migratedPaused.revision,2);
+  assert.equal(migratedPaused.payload.guidance.active.kind,'single');
+  assert.equal(migratedPaused.payload.guidance.active.paused,true);
+
+  // Early Stage 3 v1 sequence -> v2 preserves beats/cursor verbatim
+  const migratedSeq=await records.read(alice,'oracle-advisor-story','chat-seq',2);
+  assert.equal(migratedSeq.schemaVersion,2);
+  assert.equal(migratedSeq.revision,2);
+  assert.deepEqual(migratedSeq.payload.guidance.active,earlySeqPayload.guidance.active);
+
+  // Direct v2 commit with active single missing kind or paused is rejected with RECORD_INVALID
+  await assert.rejects(
+    async ()=>records.commit(alice,'oracle-advisor-story','chat-bad',{schemaVersion:2,expectedRevision:0,payload:{identity,guidance:{active:legacyGuidanceItem(),lastEnded:null}}}),
+    {code:'RECORD_INVALID'},
+  );
+
+  // Old v1 client fails closed on read and commit with RECORD_SCHEMA_INCOMPATIBLE
+  assert.throws(()=>records.read(alice,'oracle-advisor-story','chat-stage2',1),{code:'RECORD_SCHEMA_INCOMPATIBLE'});
+  assert.throws(()=>records.commit(alice,'oracle-advisor-story','chat-stage2',{schemaVersion:1,expectedRevision:2,payload:stage2Payload}),{code:'RECORD_SCHEMA_INCOMPATIBLE'});
+});
+

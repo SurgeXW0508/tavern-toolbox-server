@@ -139,11 +139,15 @@ export const oraclePersonasConsumer = Object.freeze({
     validate: validateOraclePersonas,
 });
 
-function validateSingleGuidance(v, ended = false) {
+function validateSingleGuidance(v, ended = false, { requireV2ActiveFields = true } = {}) {
+    const strictV2Active = !ended && requireV2ActiveFields;
     const required = ended
         ? 'id,title,goal,seed,why,intensity,sourceThreadId,sourceMessageId,adoptedAt,adoptedAtMessageCount,reminded,injectionOverride,outcome,endedAt'
-        : 'id,title,goal,seed,why,intensity,sourceThreadId,sourceMessageId,adoptedAt,adoptedAtMessageCount,reminded,injectionOverride';
-    keysWithOptional(v, required, 'kind,paused,remindedAt');
+        : strictV2Active
+            ? 'kind,paused,id,title,goal,seed,why,intensity,sourceThreadId,sourceMessageId,adoptedAt,adoptedAtMessageCount,reminded,injectionOverride'
+            : 'id,title,goal,seed,why,intensity,sourceThreadId,sourceMessageId,adoptedAt,adoptedAtMessageCount,reminded,injectionOverride';
+    const optional = strictV2Active ? 'remindedAt' : 'kind,paused,remindedAt';
+    keysWithOptional(v, required, optional);
     if (Object.hasOwn(v, 'kind') && v.kind !== 'single') bad();
     if (Object.hasOwn(v, 'paused')) bool(v.paused);
     for (const k of ['id', 'sourceThreadId', 'sourceMessageId']) str(v[k], 512);
@@ -208,10 +212,40 @@ function validateSequenceGuidance(v, ended = false) {
     }
 }
 
-function guidance(v, ended = false) {
+function guidance(v, ended = false, options = {}) {
     if (!obj(v)) bad();
     if (v.kind === 'sequence') validateSequenceGuidance(v, ended);
-    else validateSingleGuidance(v, ended);
+    else validateSingleGuidance(v, ended, options);
+}
+
+function validateAdvisorStoryRecord(p, options = {}) {
+    keysWithOptional(p, 'identity,guidance', 'arc');
+    validateAdvisorIdentity(p.identity);
+    keys(p.guidance, 'active,lastEnded');
+    nullable(p.guidance.active, v => guidance(v, false, options));
+    nullable(p.guidance.lastEnded, v => guidance(v, true, options));
+    // LEGACY_ARC_COMPAT
+    if (Object.hasOwn(p, 'arc')) {
+        validateLegacyArcRecord(p.arc);
+        if (p.guidance.active && p.arc.active) bad();
+    }
+    return p;
+}
+
+export function validateAdvisorStoryRecordV1(p) {
+    return validateAdvisorStoryRecord(p, { requireV2ActiveFields: false });
+}
+
+export function migrateAdvisorStoryRecordV1ToV2(p) {
+    const next = structuredClone(p);
+    if (next?.guidance?.active && next.guidance.active.kind !== 'sequence') {
+        next.guidance.active = {
+            kind: 'single',
+            ...next.guidance.active,
+            paused: Boolean(next.guidance.active.paused),
+        };
+    }
+    return next;
 }
 
 export function validateAdvisorRecord(consumer, p) {
@@ -263,16 +297,7 @@ export function validateAdvisorRecord(consumer, p) {
         }
         if (count > 8192) bad();
     } else if (consumer === 'oracle-advisor-story') {
-        keysWithOptional(p, 'identity,guidance', 'arc');
-        validateAdvisorIdentity(p.identity);
-        keys(p.guidance, 'active,lastEnded');
-        nullable(p.guidance.active, v => guidance(v));
-        nullable(p.guidance.lastEnded, v => guidance(v, true));
-        // LEGACY_ARC_COMPAT
-        if (Object.hasOwn(p, 'arc')) {
-            validateLegacyArcRecord(p.arc);
-            if (p.guidance.active && p.arc.active) bad();
-        }
+        validateAdvisorStoryRecord(p, { requireV2ActiveFields: true });
     } else if (consumer === 'oracle-advisor-arc-workspace') {
         // LEGACY_ARC_COMPAT: dormant read-only consumer for existing SQLite records
         keys(p, 'identity,draft,draftDirty');
@@ -293,15 +318,28 @@ export const advisorRecordConsumers = Object.freeze([
     'oracle-advisor-story',
     // LEGACY_ARC_COMPAT: retained dormant so existing SQLite records stay readable/valid
     'oracle-advisor-arc-workspace',
-].map(id => Object.freeze({
-    id,
-    schemaVersion: 1,
-    maxBytes: 2 * 1024 * 1024,
-    maxRecords: DELETABLE_ADVISOR_RECORDS.has(id) ? 10000 : 4000,
-    maxStorageBytes: 128 * 1024 * 1024,
-    deletable: DELETABLE_ADVISOR_RECORDS.has(id),
-    validate: p => validateAdvisorRecord(id, p),
-})));
+].map(id => {
+    const base = {
+        id,
+        schemaVersion: id === 'oracle-advisor-story' ? 2 : 1,
+        maxBytes: 2 * 1024 * 1024,
+        maxRecords: DELETABLE_ADVISOR_RECORDS.has(id) ? 10000 : 4000,
+        maxStorageBytes: 128 * 1024 * 1024,
+        deletable: DELETABLE_ADVISOR_RECORDS.has(id),
+        validate: p => validateAdvisorRecord(id, p),
+    };
+    if (id === 'oracle-advisor-story') {
+        base.migrations = Object.freeze([
+            Object.freeze({
+                fromVersion: 1,
+                toVersion: 2,
+                validateSource: validateAdvisorStoryRecordV1,
+                convert: migrateAdvisorStoryRecordV1ToV2,
+            }),
+        ]);
+    }
+    return Object.freeze(base);
+}));
 
 // LEGACY_ARC_COMPAT: isolated validators retained only for reading/accepting pre-Stage-2 records.
 function validateLegacyArcRecipe(v) {
