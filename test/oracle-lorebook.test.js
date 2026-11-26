@@ -289,7 +289,7 @@ test('Lorebook settings validator enforces v4 whitelist, protected sources, toke
         p => { p.recipe.nodes.find(n => n.source === 'safety-contract').enabled = false; },
         p => { p.recipe.nodes.find(n => n.source === 'edit-protocol').type = 'source'; },
         p => { p.recipe.nodes = p.recipe.nodes.filter(n => n.source !== 'selected-lorebooks'); },
-        p => { p.recipe.nodes.find(n => n.source === 'manager-history').options = { depth: 10 }; },
+        p => { p.recipe.nodes.find(n => n.source === 'manager-history').options = { depth: 10, foo: 1 }; },
         p => { p.promptProfiles.items = [{ id: 'p1', name: 'P', payload: { recipe: recipe() } }]; },
     ];
     for (const mutate of invalidCases) {
@@ -843,4 +843,151 @@ test('Lorebook batch, execution, step and book-lock state machines enforce freez
     };
     assert.equal(transitionLorebookExecStep(sWritingInFlight, sAbandonedMatchesBefore), true);
 });
+
+test('WP0: Lorebook v5 settings, quickCommands reconcileCommit, new recipe sources/options, operation metadata and incomplete thread flags', async t => {
+    // 1. Operation fields: role, logic, canonical string position, legacy numeric position, bounded depth
+    const validMetaBatch = batchRecord('lorebook-review-meta');
+    validMetaBatch.batch.items[0].operation = {
+        index: 1,
+        action: 'edit',
+        book: '人物',
+        uid: 1,
+        anchor: '',
+        replace: null,
+        fields: {
+            position: 'at_depth',
+            role: 'user',
+            logic: 'not_any',
+            depth: 4,
+            order: 100,
+        },
+    };
+    validateLorebookRecord('oracle-lorebook-batches', validMetaBatch);
+
+    // Historical numeric position stays valid
+    const legacyNumPosBatch = batchRecord('lorebook-review-legacy-pos');
+    legacyNumPosBatch.batch.items[0].operation = {
+        index: 1,
+        action: 'edit',
+        book: '人物',
+        uid: 1,
+        anchor: '',
+        replace: null,
+        fields: { position: 4, depth: 0 },
+    };
+    validateLorebookRecord('oracle-lorebook-batches', legacyNumPosBatch);
+
+    // Invalid operation fields rejected
+    const invalidOpFields = [
+        { role: 'narrator' },
+        { logic: 'xor' },
+        { position: 'middle' },
+        { position: NaN },
+        { depth: -1 },
+        { depth: 10001 },
+        { depth: Infinity },
+        { selectiveLogic: 1 },
+    ];
+    for (const fields of invalidOpFields) {
+        const badBatch = batchRecord('lorebook-review-bad');
+        badBatch.batch.items[0].operation = {
+            index: 1,
+            action: 'edit',
+            book: '人物',
+            uid: 1,
+            anchor: '',
+            replace: null,
+            fields,
+        };
+        assert.throws(() => validateLorebookRecord('oracle-lorebook-batches', badBatch), { code: 'DOCUMENT_INVALID' });
+    }
+
+    // 2. Recipe sources (character-card, persona, story-summary) and manager-history depth
+    const v5Recipe = recipe();
+    v5Recipe.nodes.find(n => n.source === 'manager-history').options = { depth: 10 };
+    v5Recipe.nodes.unshift(
+        { id: 'character-card', type: 'source', title: '角色卡', role: 'system', enabled: false, source: 'character-card', options: {} },
+        { id: 'persona', type: 'source', title: '用户人设', role: 'system', enabled: false, source: 'persona', options: {} },
+        { id: 'story-summary', type: 'source', title: '剧情摘要', role: 'system', enabled: false, source: 'story-summary', options: {} },
+    );
+    const v5Settings = {
+        ...settings(),
+        settingsVersion: 5,
+        recipe: v5Recipe,
+        quickCommands: [
+            { id: 'qc-1', name: '检查冲突', content: '请检查所选条目是否有设定冲突', favorite: true },
+        ],
+    };
+    validateLorebookSettings(v5Settings);
+
+    const invalidRecipeAndSettings = [
+        p => { p.recipe.nodes.find(n => n.source === 'manager-history').options = { depth: 10, foo: 1 }; },
+        p => { p.recipe.nodes.find(n => n.source === 'manager-history').options = { depth: -2 }; },
+        p => { p.recipe.nodes.find(n => n.source === 'manager-history').options = { depth: 501 }; },
+        p => { p.recipe.nodes.find(n => n.source === 'character-card').options = { depth: 1 }; },
+        p => { p.settingsVersion = 6; },
+        p => { p.quickCommands = Array.from({ length: 51 }, (_, i) => ({ id: `q-${i}`, name: `Q${i}`, content: 'body', favorite: false })); },
+        p => { p.quickCommands = [{ id: 'dup', name: 'A', content: '1', favorite: true }, { id: 'dup', name: 'B', content: '2', favorite: false }]; },
+        p => { p.quickCommands = [{ id: 'q1', name: 'A', content: '1', favorite: 'yes' }]; },
+    ];
+    for (const mutate of invalidRecipeAndSettings) {
+        const p = structuredClone(v5Settings);
+        mutate(p);
+        assert.throws(() => validateLorebookSettings(p), { code: 'DOCUMENT_INVALID' });
+    }
+
+    // 3. reconcileLorebookSettingsCommit protects v5 + quickCommands against v4 downgrade writes
+    const root = await mkdtemp(path.join(tmpdir(), 'ttb-lorebook-v5-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const user = { userRoot: path.join(root, 'user-1') };
+    const docs = createAccountDocuments(config);
+    await docs.definition.initialize();
+    t.after(() => docs.definition.shutdown());
+    await docs.commit(user, 'oracle-lorebook-settings', {
+        schemaVersion: 1,
+        expectedRevision: 0,
+        payload: v5Settings,
+    });
+    const v4Incoming = settings();
+    v4Incoming.tokenBudget = 12345;
+    const afterV4Write = await docs.commit(user, 'oracle-lorebook-settings', {
+        schemaVersion: 1,
+        expectedRevision: 1,
+        payload: v4Incoming,
+    });
+    assert.equal(afterV4Write.payload.settingsVersion, 5);
+    assert.equal(afterV4Write.payload.tokenBudget, 12345);
+    assert.deepEqual(afterV4Write.payload.quickCommands, v5Settings.quickCommands);
+
+    // 4. Thread record: assistant stopped/unconfirmed allowed as booleans; rejected on user or non-boolean
+    const validThread = {
+        identity: { ...identity },
+        thread: {
+            id: 'thread-1',
+            title: '测试对话',
+            autoTitle: false,
+            createdAt: 1000,
+            updatedAt: 1000,
+            messages: [
+                { id: 'm1', role: 'user', content: '你好' },
+                { id: 'm2', role: 'assistant', content: '部分回复', prompt: false, stopped: true, meta: '流式 · 1.0 秒 · 已停止' },
+                { id: 'm3', role: 'assistant', content: '未确认回复', prompt: false, unconfirmed: true, meta: '流式 · 1.0 秒 · 未确认完成' },
+            ],
+        },
+    };
+    validateLorebookRecord('oracle-lorebook-threads', validThread);
+
+    const invalidThreadMutations = [
+        p => { p.thread.messages[0].stopped = true; },
+        p => { p.thread.messages[0].unconfirmed = false; },
+        p => { p.thread.messages[1].stopped = 'yes'; },
+        p => { p.thread.messages[2].unconfirmed = 1; },
+    ];
+    for (const mutate of invalidThreadMutations) {
+        const p = structuredClone(validThread);
+        mutate(p);
+        assert.throws(() => validateLorebookRecord('oracle-lorebook-threads', p), { code: 'DOCUMENT_INVALID' });
+    }
+});
+
 

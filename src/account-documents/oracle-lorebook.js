@@ -12,6 +12,9 @@ export const LOREBOOK_LOCK_MIGRATION_RECORD_ID = 'lorebook-lock-migration:v1';
 const LOREBOOK_SOURCES = Object.freeze([
     'safety-contract',
     'macro-legend',
+    'character-card',
+    'persona',
+    'story-summary',
     'selected-lorebooks',
     'main-chat',
     'manager-history',
@@ -26,6 +29,19 @@ const LOREBOOK_PROTECTED_SOURCES = Object.freeze([
     'edit-protocol',
     'current-input',
 ]);
+
+const WORLDBOOK_POSITION_TYPES = Object.freeze([
+    'before_character_definition',
+    'after_character_definition',
+    'before_author_note',
+    'after_author_note',
+    'at_depth',
+    'before_example_messages',
+    'after_example_messages',
+    'outlet',
+]);
+const WORLDBOOK_ROLES = Object.freeze(['system', 'user', 'assistant']);
+const WORLDBOOK_SECONDARY_LOGIC = Object.freeze(['and_any', 'not_all', 'not_any', 'and_all']);
 
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const ACTIONS = ['create', 'edit', 'patch', 'append', 'prepend', 'delete'];
@@ -95,6 +111,15 @@ const EXEC_STATUSES = [
     'pruned',
 ];
 
+function keysWithOptional(v, requiredNames, optionalNames = '') {
+    if (!obj(v)) bad();
+    const required = requiredNames ? requiredNames.split(',') : [];
+    const optional = optionalNames ? optionalNames.split(',') : [];
+    const allowed = new Set([...required, ...optional]);
+    const actual = Object.keys(v);
+    if (actual.some(k => !allowed.has(k)) || required.some(k => !Object.hasOwn(v, k))) bad();
+}
+
 function safeDict(v, maxKeys = 128) {
     if (!obj(v)) bad();
     const entries = Object.entries(v);
@@ -144,6 +169,11 @@ export function validateLorebookRecipe(v) {
                 keys(options, 'depth,includeHidden');
                 int(options.depth, -1, 500);
                 bool(options.includeHidden);
+            } else if (source === 'manager-history') {
+                keysWithOptional(options, '', 'depth');
+                if (Object.hasOwn(options, 'depth')) {
+                    int(options.depth, -1, 500);
+                }
             } else {
                 keys(options, '');
             }
@@ -152,10 +182,20 @@ export function validateLorebookRecipe(v) {
 }
 
 export function validateLorebookSettings(p) {
-    keys(p, 'settingsVersion,connectionId,tokenBudget,recipe,promptProfiles');
-    if (p.settingsVersion !== 4) bad();
+    keysWithOptional(p, 'settingsVersion,connectionId,tokenBudget,recipe,promptProfiles', 'quickCommands');
+    if (p.settingsVersion !== 4 && p.settingsVersion !== 5) bad();
     validateCloudConnectionId(p.connectionId);
     int(p.tokenBudget, 0, 1000000);
+    if (Object.hasOwn(p, 'quickCommands')) {
+        array(p.quickCommands, 50, q => {
+            keys(q, 'id,name,content,favorite');
+            str(q.id, 90, false);
+            str(q.name, 60, false);
+            str(q.content, 8000, false);
+            bool(q.favorite);
+        });
+        unique(p.quickCommands, 'id');
+    }
     validateLorebookRecipe(p.recipe);
     validatePromptProfiles(p.promptProfiles, {
         payloadKeys: 'recipe,tokenBudget',
@@ -167,12 +207,32 @@ export function validateLorebookSettings(p) {
     return p;
 }
 
+export function reconcileLorebookSettingsCommit(incoming, currentPayload) {
+    if (!currentPayload || !incoming) return incoming;
+    const currentVer = Number(currentPayload.settingsVersion) || 0;
+    const incomingVer = Number(incoming.settingsVersion) || 0;
+    const needsVersionFloor = currentVer > incomingVer && currentVer >= 5;
+    const needsQuickCommandsProtection = incomingVer < 5
+        && !Object.hasOwn(incoming, 'quickCommands')
+        && Array.isArray(currentPayload.quickCommands);
+    if (!needsVersionFloor && !needsQuickCommandsProtection) return incoming;
+    const next = structuredClone(incoming);
+    if (needsVersionFloor) {
+        next.settingsVersion = currentVer;
+    }
+    if (needsQuickCommandsProtection) {
+        next.quickCommands = structuredClone(currentPayload.quickCommands);
+    }
+    return next;
+}
+
 export const lorebookSettingsConsumer = Object.freeze({
     id: 'oracle-lorebook-settings',
     schemaVersion: 1,
     maxBytes: 2 * 1024 * 1024,
-    limits: { maxProfiles: 100, maxRecipeNodes: 128 },
+    limits: { maxProfiles: 100, maxRecipeNodes: 128, maxQuickCommands: 50 },
     validate: validateLorebookSettings,
+    reconcileCommit: reconcileLorebookSettingsCommit,
 });
 
 function validatePreviewChange(change) {
@@ -242,14 +302,28 @@ function validateOperation(op) {
     if (!obj(op.fields)) bad();
     const allowedFields = new Set([
         'comment', 'key', 'keysecondary', 'constant', 'disable', 'selective',
-        'excludeRecursion', 'preventRecursion', 'order', 'position', 'depth', 'content',
+        'excludeRecursion', 'preventRecursion', 'order', 'position', 'depth', 'role', 'logic', 'content',
     ]);
     for (const [k, v] of Object.entries(op.fields)) {
         if (!allowedFields.has(k)) bad();
         if (['constant', 'disable', 'selective', 'excludeRecursion', 'preventRecursion'].includes(k)) {
             bool(v);
-        } else if (['order', 'position', 'depth'].includes(k)) {
+        } else if (k === 'order') {
             if (typeof v !== 'number' || !Number.isFinite(v)) bad();
+        } else if (k === 'depth') {
+            if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 10000) bad();
+        } else if (k === 'position') {
+            if (typeof v === 'number') {
+                if (!Number.isFinite(v)) bad();
+            } else if (typeof v === 'string') {
+                one(v, WORLDBOOK_POSITION_TYPES);
+            } else {
+                bad();
+            }
+        } else if (k === 'role') {
+            one(v, WORLDBOOK_ROLES);
+        } else if (k === 'logic') {
+            one(v, WORLDBOOK_SECONDARY_LOGIC);
         } else if (['key', 'keysecondary'].includes(k)) {
             array(v, 256, item => str(item, 512, false));
         } else if (k === 'comment') {
@@ -418,7 +492,7 @@ function validateThreadRecord(p) {
         if (!obj(m)) bad();
         const allowed = new Set([
             'id', 'role', 'content', 'prompt', 'failed',
-            'meta', 'lorebookPreview', 'lorebookGeneration',
+            'meta', 'stopped', 'unconfirmed', 'lorebookPreview', 'lorebookGeneration',
         ]);
         for (const k of Object.keys(m)) {
             if (!allowed.has(k)) bad();
@@ -429,6 +503,14 @@ function validateThreadRecord(p) {
         if (m.prompt !== undefined) bool(m.prompt);
         if (m.failed !== undefined) bool(m.failed);
         if (m.meta !== undefined) str(m.meta, 2000);
+        if (Object.hasOwn(m, 'stopped')) {
+            if (m.role !== 'assistant') bad();
+            bool(m.stopped);
+        }
+        if (Object.hasOwn(m, 'unconfirmed')) {
+            if (m.role !== 'assistant') bad();
+            bool(m.unconfirmed);
+        }
         if (m.lorebookPreview !== undefined) {
             if (m.role !== 'assistant') bad();
             validateMessagePreview(m.lorebookPreview);
