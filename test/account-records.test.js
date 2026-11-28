@@ -321,3 +321,232 @@ test('consumer transition hook validates state transitions against previous payl
     await assert.rejects(store.commit(alice, 'state-records', 's1', body(3, 'init')), { code: 'RECORD_TRANSITION_INVALID' });
     assert.equal((await store.read(alice, 'state-records', 's1', 1)).revision, 3);
 });
+
+test('[S3-R2-Server-1] record consumer migrations upgrade on demand with quota delta, single revision bump, tombstone upgrade, blind-write conflict and old-client gate', async t => {
+    const v1Validate = p => {
+        if (!p || Object.keys(p).join(',') !== 'text' || typeof p.text !== 'string') throw Error('bad v1');
+    };
+    const v2Validate = p => {
+        if (!p || Object.keys(p).sort().join(',') !== 'mode,text' || typeof p.text !== 'string' || !['a', 'b'].includes(p.mode)) throw Error('bad v2');
+    };
+    const v3Validate = p => {
+        if (!p || Object.keys(p).sort().join(',') !== 'mode,tag,text' || typeof p.text !== 'string' || !['a', 'b'].includes(p.mode) || p.tag !== 'v3') throw Error('bad v3');
+    };
+
+    const v1Consumer = (overrides = {}) => consumer('mig-records', {
+        schemaVersion: 1,
+        maxBytes: 120,
+        maxRecords: 4,
+        maxStorageBytes: 1600,
+        validate: v1Validate,
+        ...overrides,
+    });
+    const v2Consumer = (overrides = {}) => consumer('mig-records', {
+        schemaVersion: 2,
+        maxBytes: 120,
+        maxRecords: 4,
+        maxStorageBytes: 1600,
+        validate: v2Validate,
+        migrations: [{
+            fromVersion: 1,
+            toVersion: 2,
+            validateSource: v1Validate,
+            convert: p => ({ ...p, mode: 'a' }),
+        }],
+        ...overrides,
+    });
+    const v3Consumer = (overrides = {}) => consumer('mig-records', {
+        schemaVersion: 3,
+        maxBytes: 160,
+        maxRecords: 4,
+        maxStorageBytes: 1600,
+        validate: v3Validate,
+        migrations: [
+            { fromVersion: 1, toVersion: 2, validateSource: v1Validate, convert: p => ({ ...p, mode: 'a' }) },
+            { fromVersion: 2, toVersion: 3, validateSource: v2Validate, convert: p => ({ ...p, tag: 'v3' }) },
+        ],
+        ...overrides,
+    });
+
+    // Registration rejects malformed migration definitions and strips migrations from advertised capabilities
+    for (const badMigrations of [
+        'nope',
+        [{}],
+        [{ fromVersion: 0, toVersion: 2, validateSource: v1Validate, convert: p => p }],
+        [{ fromVersion: 2, toVersion: 2, validateSource: v1Validate, convert: p => p }],
+        [{ fromVersion: 1, toVersion: 3, validateSource: v1Validate, convert: p => p }],
+        [{ fromVersion: 1, toVersion: 2, validateSource: 'not-fn', convert: p => p }],
+        [{ fromVersion: 1, toVersion: 2, validateSource: v1Validate, convert: null }],
+        [{ fromVersion: 1, toVersion: 2, validateSource: v1Validate, convert: p => p, extra: 1 }],
+        [
+            { fromVersion: 1, toVersion: 2, validateSource: v1Validate, convert: p => p },
+            { fromVersion: 1, toVersion: 2, validateSource: v1Validate, convert: p => p },
+        ],
+    ]) {
+        assert.throws(() => createAccountRecords(config, { consumers: [v2Consumer({ migrations: badMigrations })] }), /Invalid record consumer/);
+    }
+
+    const root = await mkdtemp(path.join(tmpdir(), 'ttb-records-mig-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const alice = { userRoot: path.join(root, 'alice'), contextId: 'alice-context' };
+    const bob = { userRoot: path.join(root, 'bob'), contextId: 'bob-context' };
+    const file = path.join(alice.userRoot, 'tavern-toolbox-server/account-records-v1/records.sqlite');
+
+    let clock = 1_700_000_000_000;
+    const s1 = createAccountRecords(config, { consumers: [v1Consumer()], now: () => clock });
+    await s1.definition.initialize(); t.after(() => s1.definition.shutdown());
+
+    // Seed v1 active records ('a', 'b') and a v1 deleted tombstone ('gone')
+    const createdA = await s1.commit(alice, 'mig-records', 'a', { schemaVersion: 1, expectedRevision: 0, payload: { text: 'alpha' } });
+    assert.equal(createdA.revision, 1);
+    clock += 5000;
+    await s1.commit(alice, 'mig-records', 'b', { schemaVersion: 1, expectedRevision: 0, payload: { text: 'beta' } });
+    clock += 5000;
+    await s1.commit(alice, 'mig-records', 'gone', { schemaVersion: 1, expectedRevision: 0, payload: { text: 'bye' } });
+    clock += 5000;
+    const tombV1 = await s1.delete(alice, 'mig-records', 'gone', { schemaVersion: 1, expectedRevision: 1 });
+    assert.equal(tombV1.status, 'deleted');
+    assert.equal(tombV1.revision, 2);
+
+    const dbBefore = new DatabaseSync(file);
+    const usageBefore = { ...dbBefore.prepare('SELECT records,tombstones,bytes FROM collections WHERE consumer=?').get('mig-records') };
+    const rowABefore = { ...dbBefore.prepare('SELECT schema_version,revision,created_at,updated_at,storage_bytes FROM records WHERE consumer=? AND record_id=?').get('mig-records', 'a') };
+    dbBefore.close();
+
+    // Create two v2 stores to test advertised stripping, old-client gate, blind write, and concurrent reads
+    let convertCount = 0;
+    const countedV2 = () => v2Consumer({
+        migrations: [{
+            fromVersion: 1,
+            toVersion: 2,
+            validateSource: v1Validate,
+            convert: p => { convertCount += 1; return { ...p, mode: 'a' }; },
+        }],
+    });
+    const s2a = createAccountRecords(config, { consumers: [countedV2()], now: () => clock + 99999 });
+    const s2b = createAccountRecords(config, { consumers: [countedV2()], now: () => clock + 99999 });
+    await s2a.definition.initialize(); t.after(() => s2a.definition.shutdown());
+    await s2b.definition.initialize(); t.after(() => s2b.definition.shutdown());
+
+    const advertised = s2a.definition.capabilities[0].constraints.consumers.find(c => c.id === 'mig-records');
+    assert.equal(advertised.schemaVersion, 2);
+    assert.equal('migrations' in advertised, false, 'advertised consumer descriptor must strip internal migrations');
+
+    // Old client (schemaVersion: 1) fails closed immediately on read and commit
+    assert.throws(() => s2a.read(alice, 'mig-records', 'a', 1), { code: 'RECORD_SCHEMA_INCOMPATIBLE' });
+    assert.throws(() => s2a.commit(alice, 'mig-records', 'a', { schemaVersion: 1, expectedRevision: 1, payload: { text: 'old' } }), { code: 'RECORD_SCHEMA_INCOMPATIBLE' });
+
+    // Unmigrated blind commit/delete from v2 client fails with REVISION_CONFLICT without mutating v1 row
+    await assert.rejects(s2a.commit(alice, 'mig-records', 'a', { schemaVersion: 2, expectedRevision: 1, payload: { text: 'blind', mode: 'b' } }), { code: 'REVISION_CONFLICT' });
+    await assert.rejects(s2a.commit(alice, 'mig-records', 'a', { schemaVersion: 2, expectedRevision: 2, payload: { text: 'blind', mode: 'b' } }), { code: 'REVISION_CONFLICT' });
+    await assert.rejects(s2a.delete(alice, 'mig-records', 'a', { schemaVersion: 2, expectedRevision: 1 }), { code: 'REVISION_CONFLICT' });
+    const dbAfterBlind = new DatabaseSync(file);
+    assert.equal(dbAfterBlind.prepare('SELECT schema_version FROM records WHERE consumer=? AND record_id=?').get('mig-records', 'a').schema_version, 1);
+    assert.equal(dbAfterBlind.prepare('SELECT revision FROM records WHERE consumer=? AND record_id=?').get('mig-records', 'a').revision, 1);
+    dbAfterBlind.close();
+
+    // Concurrent reads upgrade v1 -> v2 once with single revision bump, exact collections.bytes delta, and preserved timestamps
+    convertCount = 0;
+    const [r1, r2] = await Promise.all([
+        s2a.read(alice, 'mig-records', 'a', 2),
+        s2b.read(alice, 'mig-records', 'a', 2),
+    ]);
+    assert.equal(convertCount, 1);
+    assert.equal(r1.schemaVersion, 2);
+    assert.equal(r2.schemaVersion, 2);
+    assert.equal(r1.revision, 2);
+    assert.equal(r2.revision, 2);
+    assert.deepEqual(r1.payload, { text: 'alpha', mode: 'a' });
+    assert.deepEqual(r2.payload, { text: 'alpha', mode: 'a' });
+    assert.equal(r1.createdAt, rowABefore.created_at);
+    assert.equal(r1.updatedAt, rowABefore.updated_at);
+
+    const expectedNewCharge = 256 + Buffer.byteLength('a', 'utf8') + Buffer.byteLength(JSON.stringify({ text: 'alpha', mode: 'a' }), 'utf8');
+    const dbAfterMig = new DatabaseSync(file);
+    const usageAfterMig = { ...dbAfterMig.prepare('SELECT records,tombstones,bytes FROM collections WHERE consumer=?').get('mig-records') };
+    const rowAAfter = { ...dbAfterMig.prepare('SELECT schema_version,revision,storage_bytes FROM records WHERE consumer=? AND record_id=?').get('mig-records', 'a') };
+    dbAfterMig.close();
+    assert.equal(rowAAfter.schema_version, 2);
+    assert.equal(rowAAfter.revision, 2);
+    assert.equal(rowAAfter.storage_bytes, expectedNewCharge);
+    assert.deepEqual(usageAfterMig, {
+        records: usageBefore.records,
+        tombstones: usageBefore.tombstones,
+        bytes: usageBefore.bytes - rowABefore.storage_bytes + expectedNewCharge,
+    });
+
+    // Subsequent v2 commit at revision 2 succeeds; downgraded v1 store fails closed on v2 row
+    const committedA = await s2a.commit(alice, 'mig-records', 'a', { schemaVersion: 2, expectedRevision: 2, payload: { text: 'alpha', mode: 'b' } });
+    assert.equal(committedA.revision, 3);
+    await assert.rejects(s1.read(alice, 'mig-records', 'a', 1), { code: 'RECORD_SCHEMA_INCOMPATIBLE' });
+
+    // v1 deleted tombstone upgrades to v2 tombstone with revision + 1 and unchanged collections counters/bytes
+    const dbBeforeTomb = new DatabaseSync(file);
+    const usageBeforeTomb = { ...dbBeforeTomb.prepare('SELECT records,tombstones,bytes FROM collections WHERE consumer=?').get('mig-records') };
+    dbBeforeTomb.close();
+    const tombV2 = await s2a.read(alice, 'mig-records', 'gone', 2);
+    assert.equal(tombV2.schemaVersion, 2);
+    assert.equal(tombV2.revision, 3);
+    assert.equal(tombV2.status, 'deleted');
+    assert.equal(tombV2.deleted, true);
+    assert.equal(tombV2.payload, null);
+    const dbAfterTomb = new DatabaseSync(file);
+    const usageAfterTomb = { ...dbAfterTomb.prepare('SELECT records,tombstones,bytes FROM collections WHERE consumer=?').get('mig-records') };
+    const tombRowAfter = { ...dbAfterTomb.prepare('SELECT schema_version,revision,payload FROM records WHERE consumer=? AND record_id=?').get('mig-records', 'gone') };
+    dbAfterTomb.close();
+    assert.deepEqual(usageAfterTomb, usageBeforeTomb);
+    assert.equal(tombRowAfter.schema_version, 2);
+    assert.equal(tombRowAfter.revision, 3);
+    assert.equal(tombRowAfter.payload, null);
+
+    // Quota exhaustion during migration fails with RECORD_COLLECTION_FULL and rolls back SQLite cleanly
+    const dbForTight = new DatabaseSync(file);
+    const tightLimit = dbForTight.prepare('SELECT bytes FROM collections WHERE consumer=?').get('mig-records').bytes + 2;
+    dbForTight.close();
+    const tightQuotaV2 = createAccountRecords(config, { consumers: [v2Consumer({ maxStorageBytes: tightLimit })] });
+    await tightQuotaV2.definition.initialize(); t.after(() => tightQuotaV2.definition.shutdown());
+    await assert.rejects(tightQuotaV2.read(alice, 'mig-records', 'b', 2), { code: 'RECORD_COLLECTION_FULL' });
+    const dbAfterQuotaFail = new DatabaseSync(file);
+    assert.equal(dbAfterQuotaFail.prepare('SELECT schema_version,revision FROM records WHERE consumer=? AND record_id=?').get('mig-records', 'b').schema_version, 1);
+    assert.equal(dbAfterQuotaFail.prepare('SELECT bytes FROM collections WHERE consumer=?').get('mig-records').bytes, usageAfterTomb.bytes);
+    dbAfterQuotaFail.close();
+
+    // Converted payload exceeding maxBytes fails with RECORD_TOO_LARGE and rolls back cleanly
+    const tightBytesV2 = createAccountRecords(config, {
+        consumers: [v2Consumer({
+            maxBytes: 20,
+            migrations: [{ fromVersion: 1, toVersion: 2, validateSource: v1Validate, convert: p => ({ text: p.text + 'x'.repeat(20), mode: 'a' }) }],
+        })],
+    });
+    await tightBytesV2.definition.initialize(); t.after(() => tightBytesV2.definition.shutdown());
+    await assert.rejects(tightBytesV2.read(alice, 'mig-records', 'b', 2), { code: 'RECORD_TOO_LARGE' });
+    const dbAfterBytesFail = new DatabaseSync(file);
+    assert.equal(dbAfterBytesFail.prepare('SELECT schema_version FROM records WHERE consumer=? AND record_id=?').get('mig-records', 'b').schema_version, 1);
+    dbAfterBytesFail.close();
+
+    // Corrupt v1 row fails closed with RECORD_DATA_INVALID on both read and blind commit without mutating DB
+    const dbCorrupt = new DatabaseSync(file);
+    dbCorrupt.prepare('UPDATE records SET payload=? WHERE consumer=? AND record_id=?').run(JSON.stringify({ text: 123 }), 'mig-records', 'b');
+    dbCorrupt.close();
+    await assert.rejects(s2a.read(alice, 'mig-records', 'b', 2), { code: 'RECORD_DATA_INVALID' });
+    await assert.rejects(s2a.commit(alice, 'mig-records', 'b', { schemaVersion: 2, expectedRevision: 1, payload: { text: 'fix', mode: 'a' } }), { code: 'RECORD_DATA_INVALID' });
+    const dbCheckCorrupt = new DatabaseSync(file);
+    assert.equal(dbCheckCorrupt.prepare('SELECT schema_version,revision FROM records WHERE consumer=? AND record_id=?').get('mig-records', 'b').schema_version, 1);
+    dbCheckCorrupt.close();
+
+    // Multi-step v1 -> v2 -> v3 migration works in a single revision bump; missing step fails closed
+    await s1.commit(bob, 'mig-records', 'chain', { schemaVersion: 1, expectedRevision: 0, payload: { text: 'gamma' } });
+    const gapV3 = createAccountRecords(config, {
+        consumers: [v3Consumer({ migrations: [v3Consumer().migrations[1]] })],
+    });
+    await gapV3.definition.initialize(); t.after(() => gapV3.definition.shutdown());
+    await assert.rejects(gapV3.read(bob, 'mig-records', 'chain', 3), { code: 'RECORD_SCHEMA_INCOMPATIBLE' });
+
+    const s3 = createAccountRecords(config, { consumers: [v3Consumer()] });
+    await s3.definition.initialize(); t.after(() => s3.definition.shutdown());
+    const migratedV3 = await s3.read(bob, 'mig-records', 'chain', 3);
+    assert.equal(migratedV3.schemaVersion, 3);
+    assert.equal(migratedV3.revision, 2);
+    assert.deepEqual(migratedV3.payload, { text: 'gamma', mode: 'a', tag: 'v3' });
+});
+

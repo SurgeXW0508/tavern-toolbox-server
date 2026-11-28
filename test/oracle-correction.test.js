@@ -8,6 +8,7 @@ import { createAccountRecords } from '../src/account-records/store.js';
 import { advisorRecordConsumers } from '../src/account-documents/oracle-advisor.js';
 import { diagnosisRecordConsumers } from '../src/account-documents/oracle-diagnosis.js';
 import {
+    correctionSettingsConsumer,
     correctionRecordConsumers,
     correctionCandidateRecordId,
     correctionApplicationRecordId,
@@ -165,6 +166,13 @@ test('Correction settings validator enforces v4 whitelist, full+selection recipe
     };
     validateCorrectionSettings(custom);
 
+    for (const mode of ['st', 'char', 'all', 'off']) {
+        const s = settings();
+        s.recipes.full.nodes.find(n => n.source === 'world-info').options.mode = mode;
+        s.recipes.selection.nodes.find(n => n.source === 'world-info').options.mode = mode;
+        validateCorrectionSettings(s);
+    }
+
     const invalid = [
         p => { p.settingsVersion = 3; },
         p => { p.connectionId = 'local-id'; },
@@ -174,7 +182,7 @@ test('Correction settings validator enforces v4 whitelist, full+selection recipe
         p => { p.quickCommands.push(p.quickCommands[0]); },
         p => { p.recipes.full.nodes.find(n => n.source === 'current-target').enabled = false; },
         p => { p.recipes.selection.nodes.find(n => n.source === 'selected-span').type = 'source'; },
-        p => { p.recipes.full.nodes.find(n => n.source === 'world-info').options.mode = 'all'; },
+        p => { p.recipes.full.nodes.find(n => n.source === 'world-info').options.mode = 'unknown'; },
         p => { p.recipes.full.nodes.find(n => n.source === 'main-chat').options.depth = 101; },
         p => { p.promptProfiles.items = [{ id: 'p1', name: 'bad', payload: { recipe: recipe('full') } }]; },
     ];
@@ -624,3 +632,153 @@ test('Correction production consumers enforce CAS, transition hook, and non-dele
         { code: 'CORRECTION_CANDIDATE_UNAVAILABLE' },
     );
 });
+
+const candidateBodyV3 = (id = 'correction-cand_v3') => ({
+    identity: { ...identity },
+    candidate: {
+        id,
+        chatKey: 'chat-1',
+        targetLock: {
+            schema: 3,
+            chatKey: 'chat-1',
+            messageId: 4,
+            role: 'assistant',
+            name: 'Alice',
+            swipeId: 0,
+            content: '原始第一段。\n\n原始第二段。',
+            hostScope: 'char:Alice.png:chat-1',
+            swipeDataDigest: hex('e'),
+            swipeInfoDigest: hex('f'),
+        },
+        mode: 'full',
+        selection: null,
+        instruction: '修改第二段对白',
+        replacement: '原始第一段。\n\n修改后第二段。',
+        fullText: '原始第一段。\n\n修改后第二段。',
+        rawOutput: '<FixedReply>原始第一段。\n\n修改后第二段。</FixedReply>',
+        protectedBlocks: 0,
+        staleReason: '',
+        manualRecovery: false,
+        metrics: { streamRequested: true, resolvedMs: 420, completionSource: 'return' },
+        createdAt: 1000,
+        lockDigest: hex('a'),
+        versionKey: hex('b'),
+        basedOnCandidateId: '',
+    },
+});
+
+test('Stage 2 U1: targetLock v3 contract, cross-version rejection, optional notes/manualEdited, and unchanged schemaVersion', () => {
+    assert.equal(correctionSettingsConsumer.schemaVersion, 1);
+    for (const consumer of correctionRecordConsumers) {
+        assert.equal(consumer.schemaVersion, 1);
+    }
+
+    // Valid v3 full + selection
+    validateCorrectionRecord('oracle-correction-candidates', candidateBodyV3());
+    const v3Selection = candidateBodyV3('correction-cand_v3_sel');
+    v3Selection.candidate.mode = 'selection';
+    v3Selection.candidate.selection = { start: 0, end: 5 };
+    validateCorrectionRecord('oracle-correction-candidates', v3Selection);
+
+    // Optional notes & manualEdited accepted on both v2 and v3
+    for (const make of [candidateBody, candidateBodyV3]) {
+        const withBoth = make();
+        withBoth.candidate.notes = '保留这个版本作为备选';
+        withBoth.candidate.manualEdited = true;
+        validateCorrectionRecord('oracle-correction-candidates', withBoth);
+
+        const withEmptyNotes = make();
+        withEmptyNotes.candidate.notes = '';
+        validateCorrectionRecord('oracle-correction-candidates', withEmptyNotes);
+
+        const withManualFalse = make();
+        withManualFalse.candidate.manualEdited = false;
+        validateCorrectionRecord('oracle-correction-candidates', withManualFalse);
+    }
+
+    // Reject cross-version fields, bad schemas, bad v3 fields, bad optional fields
+    const invalidBodies = [
+        // v3 with v2 fields
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.swipeCount = 1; return b; },
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.currentSwipeData = '{}'; return b; },
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.currentSwipeInfo = '{}'; return b; },
+        // v2 with v3 fields
+        () => { const b = candidateBody(); b.candidate.targetLock.hostScope = 'char:Alice.png:chat-1'; return b; },
+        () => { const b = candidateBody(); b.candidate.targetLock.swipeDataDigest = hex('e'); return b; },
+        () => { const b = candidateBody(); b.candidate.targetLock.swipeInfoDigest = hex('f'); return b; },
+        // unknown schema
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.schema = 4; return b; },
+        () => { const b = candidateBody(); b.candidate.targetLock.schema = 1; return b; },
+        // v3 field bounds
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.hostScope = ''; return b; },
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.hostScope = '   '; return b; },
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.hostScope = 'x'.repeat(513); return b; },
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.swipeDataDigest = 'not-hex64'; return b; },
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.swipeInfoDigest = hex('A'); return b; },
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.role = 'user'; return b; },
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.chatKey = 'chat-other'; return b; },
+        () => { const b = candidateBodyV3(); b.candidate.targetLock.content = ''; return b; },
+        () => {
+            const b = candidateBodyV3();
+            b.candidate.mode = 'selection';
+            b.candidate.selection = { start: 0, end: b.candidate.targetLock.content.length + 1 };
+            return b;
+        },
+        // optional field bounds & unknown keys
+        () => { const b = candidateBodyV3(); b.candidate.notes = 'a'.repeat(4001); return b; },
+        () => { const b = candidateBodyV3(); b.candidate.notes = 123; return b; },
+        () => { const b = candidateBodyV3(); b.candidate.manualEdited = 'yes'; return b; },
+        () => { const b = candidateBodyV3(); b.candidate.extraField = true; return b; },
+    ];
+    for (const makeInvalid of invalidBodies) {
+        assert.throws(
+            () => validateCorrectionRecord('oracle-correction-candidates', makeInvalid()),
+            { code: 'DOCUMENT_INVALID' },
+        );
+    }
+});
+
+test('Stage 2 U1: SQLite account-records & account-documents roundtrip v3 candidate, optional fields, and world-info modes', async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ttb-corr-u1-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const docs = createAccountDocuments(config);
+    const records = createAccountRecords(config, {
+        consumers: [...advisorRecordConsumers, ...diagnosisRecordConsumers, ...correctionRecordConsumers],
+    });
+    await docs.definition.initialize();
+    await records.definition.initialize();
+    t.after(() => {
+        docs.definition.shutdown();
+        records.definition.shutdown();
+    });
+
+    const user = { userRoot: path.join(root, 'alice'), contextId: 'alice-u1' };
+    const v3Body = candidateBodyV3('correction-cand_u1_rt');
+    v3Body.candidate.notes = '人工备注：微调了收尾语气';
+    v3Body.candidate.manualEdited = true;
+    const recordId = correctionCandidateRecordId(identity, v3Body.candidate.id);
+    await records.commit(user, 'oracle-correction-candidates', recordId, {
+        schemaVersion: 1,
+        expectedRevision: 0,
+        payload: v3Body,
+    });
+    const readBack = await records.read(user, 'oracle-correction-candidates', recordId, 1);
+    assert.equal(readBack.status, 'active');
+    assert.deepEqual(readBack.payload, v3Body);
+
+    let rev = 0;
+    for (const mode of ['st', 'char', 'all', 'off']) {
+        const s = settings();
+        s.recipes.full.nodes.find(n => n.source === 'world-info').options.mode = mode;
+        s.recipes.selection.nodes.find(n => n.source === 'world-info').options.mode = mode;
+        const committed = await docs.commit(user, 'oracle-correction-settings', {
+            schemaVersion: 1,
+            expectedRevision: rev,
+            payload: s,
+        });
+        rev = committed.revision;
+        assert.equal(committed.payload.recipes.full.nodes.find(n => n.source === 'world-info').options.mode, mode);
+        assert.equal(committed.payload.recipes.selection.nodes.find(n => n.source === 'world-info').options.mode, mode);
+    }
+});
+

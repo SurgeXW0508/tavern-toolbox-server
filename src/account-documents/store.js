@@ -11,6 +11,32 @@ import { lorebookSettingsConsumer } from './oracle-lorebook.js';
 export { DocumentFailure } from './validation.js';
 const fail = code => { throw new DocumentFailure(code); };
 
+const MIGRATION_NEEDED = Symbol('MIGRATION_NEEDED');
+
+function migrationChain(consumer, fromVersion) {
+    if (!Number.isSafeInteger(fromVersion) || fromVersion >= consumer.schemaVersion
+        || !Array.isArray(consumer.migrations) || !consumer.migrations.length) {
+        return null;
+    }
+    const steps = [];
+    let current = fromVersion;
+    while (current < consumer.schemaVersion) {
+        const step = consumer.migrations.find(
+            entry => entry
+                && entry.fromVersion === current
+                && Number.isSafeInteger(entry.toVersion)
+                && entry.toVersion > current
+                && entry.toVersion <= consumer.schemaVersion
+                && typeof entry.validateSource === 'function'
+                && typeof entry.convert === 'function',
+        );
+        if (!step) return null;
+        steps.push(step);
+        current = step.toVersion;
+    }
+    return steps;
+}
+
 // Trusted composition only; no client-controlled registration or storage paths.
 export function createAccountDocuments(config, { consumers = [outfitSettingsConsumer, discoverySettingsConsumer, discoveryPromptsConsumer, advisorSettingsConsumer, oraclePersonasConsumer, diagnosisSettingsConsumer, correctionSettingsConsumer, lorebookSettingsConsumer] } = {}) {
     const registered = new Map(consumers.map(consumer => [consumer.id, consumer]));
@@ -61,16 +87,56 @@ export function createAccountDocuments(config, { consumers = [outfitSettingsCons
         } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
         finally { db.close(); }
     }
-    function snapshot(db, consumer) {
-        const row = db.prepare('SELECT schema_version, revision, payload FROM documents WHERE id=?').get(consumer.id);
-        if (!row) return { documentId: consumer.id, schemaVersion: consumer.schemaVersion, revision: 0, payload: null };
-        if (row.schema_version !== consumer.schemaVersion) fail('DOCUMENT_SCHEMA_INCOMPATIBLE');
+    function parseRow(row, consumer) {
         if (!Number.isSafeInteger(row.revision) || row.revision < 1 || Buffer.byteLength(row.payload) > consumer.maxBytes)
             fail('DOCUMENT_DATA_INVALID');
         let payload;
         try { payload = validate(consumer, JSON.parse(row.payload)); }
         catch { fail('DOCUMENT_DATA_INVALID'); }
         return { documentId: consumer.id, schemaVersion: row.schema_version, revision: row.revision, payload };
+    }
+    function snapshot(db, consumer) {
+        const row = db.prepare('SELECT schema_version, revision, payload FROM documents WHERE id=?').get(consumer.id);
+        if (!row) return { documentId: consumer.id, schemaVersion: consumer.schemaVersion, revision: 0, payload: null };
+        if (row.schema_version !== consumer.schemaVersion) fail('DOCUMENT_SCHEMA_INCOMPATIBLE');
+        return parseRow(row, consumer);
+    }
+    function migrateRow(db, consumer) {
+        const row = db.prepare('SELECT schema_version, revision, payload FROM documents WHERE id=?').get(consumer.id);
+        if (!row) return { snapshot: { documentId: consumer.id, schemaVersion: consumer.schemaVersion, revision: 0, payload: null }, migrated: false };
+        if (row.schema_version === consumer.schemaVersion) return { snapshot: parseRow(row, consumer), migrated: false };
+        const chain = migrationChain(consumer, row.schema_version);
+        if (!chain) fail('DOCUMENT_SCHEMA_INCOMPATIBLE');
+        if (!Number.isSafeInteger(row.revision) || row.revision < 1 || row.revision >= Number.MAX_SAFE_INTEGER
+            || Buffer.byteLength(row.payload) > consumer.maxBytes) {
+            fail('DOCUMENT_DATA_INVALID');
+        }
+        let payload;
+        try {
+            payload = JSON.parse(row.payload);
+            for (const step of chain) {
+                step.validateSource(payload);
+                payload = step.convert(payload);
+            }
+        } catch {
+            fail('DOCUMENT_DATA_INVALID');
+        }
+        let encoded;
+        try {
+            payload = consumer.validate(payload);
+            encoded = JSON.stringify(payload);
+        } catch {
+            fail('DOCUMENT_DATA_INVALID');
+        }
+        if (typeof encoded !== 'string') fail('DOCUMENT_DATA_INVALID');
+        if (Buffer.byteLength(encoded) > consumer.maxBytes) fail('DOCUMENT_TOO_LARGE');
+        const nextRevision = row.revision + 1;
+        db.prepare('UPDATE documents SET schema_version=?, revision=?, payload=? WHERE id=?')
+            .run(consumer.schemaVersion, nextRevision, encoded, consumer.id);
+        return {
+            snapshot: { documentId: consumer.id, schemaVersion: consumer.schemaVersion, revision: nextRevision, payload: JSON.parse(encoded) },
+            migrated: true,
+        };
     }
     return {
         consumers: registered,
@@ -90,7 +156,15 @@ export function createAccountDocuments(config, { consumers = [outfitSettingsCons
         },
         read(context, id, version) {
             const consumer = consumerFor(id, version);
-            return use(context, db => snapshot(db, consumer));
+            return use(context, db => {
+                const row = db.prepare('SELECT schema_version, revision, payload FROM documents WHERE id=?').get(consumer.id);
+                if (!row) return { documentId: consumer.id, schemaVersion: consumer.schemaVersion, revision: 0, payload: null };
+                if (row.schema_version === consumer.schemaVersion) return parseRow(row, consumer);
+                if (!migrationChain(consumer, row.schema_version)) fail('DOCUMENT_SCHEMA_INCOMPATIBLE');
+                return MIGRATION_NEEDED;
+            }).then(result => result === MIGRATION_NEEDED
+                ? use(context, db => migrateRow(db, consumer).snapshot, { write: true })
+                : result);
         },
         commit(context, id, body) {
             if (!body || Array.isArray(body) || Object.keys(body).sort().join(',') !== 'expectedRevision,payload,schemaVersion'
@@ -100,11 +174,19 @@ export function createAccountDocuments(config, { consumers = [outfitSettingsCons
             // Serialize before yielding: caller mutation can never bypass validation.
             const encoded = JSON.stringify(body.payload), expectedRevision = body.expectedRevision;
             return use(context, db => {
-                const current = snapshot(db, consumer);
-                if (current.revision !== expectedRevision) fail('REVISION_CONFLICT');
+                const { snapshot: current, migrated } = migrateRow(db, consumer);
+                if (migrated || current.revision !== expectedRevision) fail('REVISION_CONFLICT');
                 if (current.revision >= Number.MAX_SAFE_INTEGER) fail('DOCUMENT_DATA_INVALID');
+                let nextEncoded = encoded;
+                if (typeof consumer.reconcileCommit === 'function') {
+                    const finalPayload = consumer.reconcileCommit(JSON.parse(encoded), current.payload);
+                    const validated = validate(consumer, finalPayload);
+                    nextEncoded = JSON.stringify(validated);
+                    if (typeof nextEncoded !== 'string') fail('DOCUMENT_DATA_INVALID');
+                    if (Buffer.byteLength(nextEncoded) > consumer.maxBytes) fail('DOCUMENT_TOO_LARGE');
+                }
                 db.prepare('INSERT INTO documents VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET schema_version=excluded.schema_version, revision=excluded.revision, payload=excluded.payload')
-                    .run(id, consumer.schemaVersion, current.revision + 1, encoded);
+                    .run(id, consumer.schemaVersion, current.revision + 1, nextEncoded);
                 return snapshot(db, consumer);
             }, { write: true });
         },

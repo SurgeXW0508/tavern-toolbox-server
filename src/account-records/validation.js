@@ -14,6 +14,32 @@ export const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v
 export const MIN_TOMBSTONE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
+function validateMigrations(migrations, schemaVersion) {
+    if (migrations === undefined || migrations === null) return null;
+    if (!Array.isArray(migrations)) throw TypeError('Invalid record consumer');
+    const seenFrom = new Set();
+    const frozen = [];
+    for (const step of migrations) {
+        if (!exact(step, ['fromVersion', 'toVersion', 'validateSource', 'convert'])
+            || !integer(step.fromVersion, 1)
+            || !integer(step.toVersion, step.fromVersion + 1)
+            || step.toVersion > schemaVersion
+            || typeof step.validateSource !== 'function'
+            || typeof step.convert !== 'function'
+            || seenFrom.has(step.fromVersion)) {
+            throw TypeError('Invalid record consumer');
+        }
+        seenFrom.add(step.fromVersion);
+        frozen.push(Object.freeze({
+            fromVersion: step.fromVersion,
+            toVersion: step.toVersion,
+            validateSource: step.validateSource,
+            convert: step.convert,
+        }));
+    }
+    return Object.freeze(frozen);
+}
+
 // Only trusted composition may register consumers; production starts empty.
 export function registerConsumers(consumers) {
     if (!Array.isArray(consumers) || consumers.length > 32) throw TypeError('Invalid record consumers');
@@ -37,6 +63,7 @@ export function registerConsumers(consumers) {
             || (!deletable && maxTombstones !== 0)
             || !integer(tombstoneRetentionMs, MIN_TOMBSTONE_RETENTION_MS)
             || !integer(c.maxStorageBytes, 1) || c.maxStorageBytes > 512 * 1024 * 1024) throw TypeError('Invalid record consumer');
+        const migrations = validateMigrations(c.migrations, c.schemaVersion);
         registered.set(c.id, Object.freeze({
             id: c.id,
             schemaVersion: c.schemaVersion,
@@ -44,6 +71,7 @@ export function registerConsumers(consumers) {
             transition,
             beforeDelete,
             projectRead,
+            migrations,
             maxBytes: c.maxBytes,
             maxRecords: c.maxRecords,
             maxStorageBytes: c.maxStorageBytes,
